@@ -12,6 +12,7 @@ from src.agentic.aggregate import aggregate_verdicts
 from src.agentic.contracts import ROLE_NAMES
 from src.agentic.council import CouncilRunner
 from src.agentic.provider import CompatibleLLM, LLMConfig
+from src.agentic.prerank import select_uncertain_document_ids
 from src.agentic.redaction import REDACTION_VERSION, redact_filing
 from src.agentic.storage import CouncilStore
 from src.config import llm_config
@@ -20,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "data" / "raw" / "8k_20150101_20260831_identified.parquet"
 STORE_PATH = ROOT / "data" / "scoring" / "council_scores.db"
 OUTPUT = ROOT / "output" / "council_features.parquet"
+FINBERT_SCORES = ROOT / "output" / "finbert_scores.parquet"
 PROMPT_VERSION = "council-v3"
 AVAILABILITY_POLICY = (
     "All filings dated in calendar month t are aggregated at month-end t and are used only "
@@ -78,6 +80,16 @@ def main() -> None:
     group.add_argument("--month", help="YYYY-MM")
     group.add_argument("--year", help="YYYY")
     parser.add_argument("--sample", type=int)
+    parser.add_argument(
+        "--top-uncertain",
+        type=int,
+        help="pre-rank FinBERT filing scores and analyze only the top N uncertain filings",
+    )
+    parser.add_argument(
+        "--finbert-scores",
+        default=str(FINBERT_SCORES),
+        help="Parquet produced by src.finbert used for the cheap pre-ranking stage",
+    )
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument(
         "--retry-failed",
@@ -90,6 +102,9 @@ def main() -> None:
         raise ValueError("--data is not supported yet; use the supplied filing Parquet")
 
     cfg = llm_config()
+    use_tools = cfg["tool_calling"]
+    if use_tools:
+        print("bounded local filing tool-calling: enabled")
     secret = os.getenv("REDACTION_HMAC_KEY", "").strip()
     if not secret:
         raise RuntimeError("REDACTION_HMAC_KEY must be set for stable strict pseudonymization")
@@ -113,9 +128,19 @@ def main() -> None:
     elif args.year:
         months = pd.period_range(f"{args.year}-01", f"{args.year}-12", freq="M")
 
+    selected_ids = None
+    if args.top_uncertain:
+        selected_ids = set(select_uncertain_document_ids(args.finbert_scores, args.top_uncertain))
+        print(f"pre-ranked uncertain filings: {len(selected_ids):,}")
+
     store = CouncilStore(STORE_PATH)
     processed = 0
-    for record in iter_filings(months, args.sample):
+    iterator_limit = args.sample if selected_ids is None else None
+    for record in iter_filings(months, iterator_limit):
+        if selected_ids is not None and record["document_id"] not in selected_ids:
+            continue
+        if args.sample and processed >= args.sample:
+            break
         record["eom"] = filing_month_eom(str(record["filing_date"]))
         filing = redact_filing(record, secret)
         store.save_identity(filing.document_id, filing.opaque_id, filing.permno, filing.filing_date, filing.eom)
@@ -128,7 +153,7 @@ def main() -> None:
         )
         missing_roles = tuple(role for role in ROLE_NAMES if role not in cached)
         if missing_roles:
-            result = CouncilRunner(llm, roles=missing_roles).score_filing(filing)
+            result = CouncilRunner(llm, roles=missing_roles, use_tools=use_tools).score_filing(filing)
             for verdict in result.verdicts:
                 store.save_verdict(
                     filing.document_id,

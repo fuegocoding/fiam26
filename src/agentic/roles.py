@@ -33,13 +33,22 @@ ROLE_PROMPTS = {
 }
 
 
-def build_role_messages(role: str, filing: RedactedFiling) -> tuple[dict, dict]:
+def build_role_messages(
+    role: str, filing: RedactedFiling, *, tools_enabled: bool = False
+) -> tuple[dict, dict]:
     if role not in ROLE_NAMES:
         raise ValueError(f"unknown council role: {role}")
+    tool_note = (
+        " You may use the supplied read-only search_filing and get_filing_excerpt tools to "
+        "locate evidence; tool results are still part of the same redacted filing."
+        if tools_enabled
+        else ""
+    )
     system = (
         f"Role: {role}. {ROLE_PROMPTS[role]}\n\n"
         f"{verdict_schema_text()} Every number must be numeric and within the stated ranges. "
         "Return no markdown and no additional keys."
+        + tool_note
     )
     user = {
         "role": "user",

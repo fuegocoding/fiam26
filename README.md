@@ -164,6 +164,16 @@ LLM_API_KEY=...
 LLM_BASE_URL=https://provider.example/v1
 LLM_MODEL=provider-model-name
 REDACTION_HMAC_KEY=a-local-secret-for-stable-opaque-ids
+LLM_TOOL_CALLING=0
+```
+
+For a bounded pilot, set `LLM_TOOL_CALLING=1`. Agents can then call only the local
+`search_filing` and `get_filing_excerpt` tools against the already-redacted filing,
+with at most four calls per role. Use the cheap FinBERT uncertainty pre-ranking to
+control inference cost:
+
+```bash
+python -m src.agentic.run_council --top-uncertain 5000
 ```
 
 Run a small pilot before a full scoring job:

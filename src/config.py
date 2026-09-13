@@ -61,4 +61,6 @@ def llm_config():
         "temperature": float(os.getenv("LLM_TEMPERATURE", "0.0")),
         "max_output_tokens": int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1600")),
         "response_format": os.getenv("LLM_RESPONSE_FORMAT", "none").strip().lower(),
+        "tool_calling": os.getenv("LLM_TOOL_CALLING", "0").strip().lower()
+        in {"1", "true", "yes", "on"},
     }

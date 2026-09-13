@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from types import SimpleNamespace
@@ -101,6 +102,70 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(len(completions.calls), 2)
         self.assertIn("response_format", completions.calls[0])
         self.assertNotIn("response_format", completions.calls[1])
+
+    def test_bounded_tool_calling_returns_final_json_and_appends_tool_result(self):
+        tool_call = SimpleNamespace(
+            id="call-1",
+            function=SimpleNamespace(
+                name="search_filing", arguments='{"query": "revenue", "max_results": 1}'
+            ),
+        )
+
+        class ToolCompletions:
+            def __init__(self):
+                self.calls = []
+
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    return SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                message=SimpleNamespace(content=None, tool_calls=[tool_call])
+                            )
+                        ],
+                        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=2),
+                    )
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=json.dumps({"event_category": "other"}), tool_calls=[]
+                            )
+                        )
+                    ],
+                    usage=SimpleNamespace(prompt_tokens=12, completion_tokens=3),
+                    request_id="req-tools",
+                )
+
+        completions = ToolCompletions()
+        llm = CompatibleLLM(
+            LLMConfig(
+                base_url="https://local.example/v1", api_key="key", model="model"
+            ),
+            client=FakeClient(completions),
+        )
+        dispatched = []
+        result = llm.complete_json_with_tools(
+            "system",
+            "user",
+            request_id="trace-tools",
+            tools=[{"type": "function", "function": {"name": "search_filing"}}],
+            dispatch=lambda name, args: dispatched.append((name, args)) or {"matches": []},
+            max_tool_calls=1,
+        )
+
+        self.assertEqual(result.content, '{"event_category": "other"}')
+        self.assertEqual(result.prompt_tokens, 22)
+        self.assertEqual(result.completion_tokens, 5)
+        self.assertEqual(dispatched[0][0], "search_filing")
+        self.assertEqual(len(completions.calls), 2)
+        self.assertEqual(completions.calls[0]["tool_choice"], "auto")
+        self.assertEqual(
+            [message["role"] for message in completions.calls[1]["messages"]],
+            ["system", "user", "assistant", "tool"],
+        )
+        self.assertEqual(completions.calls[1]["messages"][-1]["tool_call_id"], "call-1")
 
 
 if __name__ == "__main__":

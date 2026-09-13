@@ -23,6 +23,21 @@ Add an opt-in agentic feature factory beside the existing 8-K scorer, TimesFM br
   -> optional merge into XGBoost feature table
 ```
 
+### Cost-controlled pre-ranking
+
+The council runner supports an optional cheap pre-ranking stage using the
+already-generated local FinBERT scores. It ranks filings by normalized
+three-class entropy plus a small chunk-disagreement term, then passes only the
+top N document IDs to the redaction/council stage:
+
+```bash
+python -m src.agentic.run_council --top-uncertain 5000
+```
+
+This stage uses no future-return labels and makes no LLM calls. It is a budget
+control and coverage decision, not a learned trading signal. The full filing
+universe remains available for later coverage and ablation checks.
+
 ## Strict identity firewall
 
 The system uses reversible pseudonymization rather than irreversible anonymity. The local identity map contains the original `document_id`, `permno`, `permco`, filing date, and join metadata. It is never included in a prompt.
@@ -80,6 +95,7 @@ LLM_TIMEOUT_SECONDS
 LLM_MAX_CONCURRENCY
 LLM_TEMPERATURE
 LLM_RESPONSE_FORMAT
+LLM_TOOL_CALLING
 ```
 
 `LLM_RESPONSE_FORMAT=none` must work everywhere. `json_object` is optional and falls back to plain prompting if the endpoint rejects the parameter. Provider-specific request bodies are not required. Usage, request IDs, errors, and model configuration are logged locally when returned by the endpoint.
@@ -91,7 +107,10 @@ LLM_RESPONSE_FORMAT
 - Failed roles are cached and skipped on reruns unless `--retry-failed` is explicitly supplied.
 - Network/rate-limit errors use bounded retries with backoff.
 - SQLite caching makes reruns idempotent and avoids repeated calls for unchanged inputs.
-- No web, file-search, browsing, or external data tools are available to council roles.
+- Tool calling is off by default. When enabled with `LLM_TOOL_CALLING=1`, roles can
+  use only the bounded local `search_filing` and `get_filing_excerpt` tools over
+  the same already-redacted filing; web, browsing, filesystem, and external-data
+  tools remain unavailable.
 
 ## Evaluation
 
