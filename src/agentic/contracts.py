@@ -77,7 +77,7 @@ class RedactedFiling:
     eom: str
     text: str
     visible_metadata: Mapping[str, Any]
-    redaction_version: str = "redaction-v1"
+    redaction_version: str = "redaction-v2"
 
     def prompt_payload(self) -> dict[str, Any]:
         """Return only data permitted to cross the identity firewall."""
