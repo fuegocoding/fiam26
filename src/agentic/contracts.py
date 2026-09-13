@@ -29,6 +29,13 @@ EVENT_CATEGORIES = (
     "unreadable",
 )
 
+EVENT_CATEGORY_ALIASES = {
+    "financing": "financing_credit",
+    "credit_agreement": "financing_credit",
+    "credit_facility": "financing_credit",
+    "debt_financing": "financing_credit",
+}
+
 ROLE_NAMES = (
     "event_classifier",
     "materiality_analyst",
@@ -129,6 +136,7 @@ def verdict_schema_text() -> str:
         "event_category, direction, materiality, surprise, forward_looking, "
         "distress_signal, cash_flow_impact, confidence, contradiction_score, "
         "evidence_quality, abstain, evidence_count, summary. "
+        f"event_category must be one of: {', '.join(EVENT_CATEGORIES)}. "
         "direction and cash_flow_impact are in [-1.0, 1.0]; "
         "materiality, surprise, forward_looking, distress_signal, confidence, "
         "contradiction_score, and evidence_quality are in [0.0, 1.0]; "
@@ -171,7 +179,8 @@ def validate_verdict(raw: str | Mapping[str, Any], role: str = "unknown") -> Age
         raise ValueError(f"verdict keys mismatch; missing={missing}, extra={extra}")
     if role not in ROLE_NAMES and role != "unknown":
         raise ValueError(f"unknown role: {role}")
-    event_category = str(obj["event_category"])
+    event_category = str(obj["event_category"]).strip().lower().replace("-", "_").replace(" ", "_")
+    event_category = EVENT_CATEGORY_ALIASES.get(event_category, event_category)
     if event_category not in EVENT_CATEGORIES:
         raise ValueError(f"unknown event category: {event_category}")
     abstain = obj["abstain"]

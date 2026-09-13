@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "data" / "raw" / "8k_20150101_20260831_identified.parquet"
 STORE_PATH = ROOT / "data" / "scoring" / "council_scores.db"
 OUTPUT = ROOT / "output" / "council_features.parquet"
-PROMPT_VERSION = "council-v2"
+PROMPT_VERSION = "council-v3"
 AVAILABILITY_POLICY = (
     "All filings dated in calendar month t are aggregated at month-end t and are used only "
     "for the next-month target t+1; no intramonth trading claim is made."

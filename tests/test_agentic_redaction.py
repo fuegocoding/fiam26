@@ -133,6 +133,27 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_verdict(json.dumps(payload))
 
+    def test_known_financing_category_aliases_are_canonicalized(self):
+        payload = {
+            "event_category": "credit_agreement",
+            "direction": 0.0,
+            "materiality": 0.5,
+            "surprise": 0.0,
+            "forward_looking": 0.5,
+            "distress_signal": 0.0,
+            "cash_flow_impact": 0.0,
+            "confidence": 0.5,
+            "contradiction_score": 0.0,
+            "evidence_quality": 0.5,
+            "abstain": 0,
+            "evidence_count": 1,
+            "summary": "The filing discloses a credit agreement.",
+        }
+
+        verdict = validate_verdict(payload)
+
+        self.assertEqual(verdict.event_category, "financing_credit")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -93,7 +93,7 @@ class CouncilTests(unittest.TestCase):
 
     def test_cache_versions_are_bumped_after_firewall_and_prompt_changes(self):
         self.assertEqual(REDACTION_VERSION, "redaction-v2")
-        self.assertEqual(PROMPT_VERSION, "council-v2")
+        self.assertEqual(PROMPT_VERSION, "council-v3")
 
 
 if __name__ == "__main__":
