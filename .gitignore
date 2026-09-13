@@ -1,4 +1,6 @@
 data/raw/*.parquet
+data/scoring/council_scores.db
+data/scoring/council_scores.db-*
 .env
 src/__pycache__/
 __pycache__/

@@ -18,9 +18,8 @@ from pathlib import Path
 
 import pandas as pd
 import pyarrow.parquet as pq
-from openai import OpenAI
-
 from src.config import llm_config
+from src.agentic.provider import CompatibleLLM, LLMConfig
 from src.prompts import EVENT_CATEGORIES, SYSTEM_PROMPT, build_user_message, validate_response
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -61,38 +60,27 @@ def cached_ids(con) -> set[str]:
     return {r[0] for r in rows}
 
 
-def _parse_or_repair(client, cfg, messages, resp):
-    raw = resp.choices[0].message.content or ""
+def _parse_or_repair(client, messages, result, request_id):
+    raw = result.content or ""
     try:
-        return validate_response(raw), raw
+        return validate_response(raw), raw, result
     except ValueError as first_err:
-        repair = [
-            *messages,
-            {"role": "assistant", "content": raw[:2_000]},
-            {
-                "role": "user",
-                "content": (
-                    "Your previous output was not valid. Return ONLY the JSON object again, "
-                    "correcting this problem: "
-                    + str(first_err)
-                    + ". event_category must be spelled exactly as one of: "
-                    + ", ".join(EVENT_CATEGORIES)
-                ),
-            },
-        ]
-        r2 = client.chat.completions.create(
-            model=cfg["model"],
-            messages=repair,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            temperature=0.0,
-            extra_body={"reasoning": {"effort": "low", "exclude": True}},
-            timeout=cfg["timeout_s"],
+        repair_user = (
+            messages[1]["content"]
+            + "\n\nYour previous output was not valid. Return ONLY the JSON object again, "
+            "correcting this problem: "
+            + str(first_err)
+            + ". event_category must be spelled exactly as one of: "
+            + ", ".join(EVENT_CATEGORIES)
         )
-        raw2 = r2.choices[0].message.content or ""
-        return validate_response(raw2), raw2
+        r2 = client.complete_json(
+            messages[0]["content"], repair_user, request_id=request_id + "-repair"
+        )
+        raw2 = r2.content or ""
+        return validate_response(raw2), raw2, r2
 
 
-def score_one(client, cfg, filing: dict) -> dict:
+def score_one(client: CompatibleLLM, cfg: dict, filing: dict) -> dict:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -114,20 +102,21 @@ def score_one(client, cfg, filing: dict) -> dict:
         if delay:
             time.sleep(delay)
         try:
-            resp = client.chat.completions.create(
-                model=cfg["model"],
-                messages=messages,
-                max_tokens=MAX_OUTPUT_TOKENS,
-                temperature=0.0,
-                extra_body={"reasoning": {"effort": "low", "exclude": True}},
-                timeout=cfg["timeout_s"],
+            result = client.complete_json(
+                messages[0]["content"],
+                messages[1]["content"],
+                request_id=f"text-score-{filing['document_id']}",
             )
-            payload, raw = _parse_or_repair(client, cfg, messages, resp)
-            usage = resp.usage
+            payload, raw, final_result = _parse_or_repair(
+                client,
+                messages,
+                result,
+                request_id=f"text-score-{filing['document_id']}",
+            )
             return {
                 "payload": payload,
-                "prompt_tokens": usage.prompt_tokens if usage else None,
-                "completion_tokens": usage.completion_tokens if usage else None,
+                "prompt_tokens": final_result.prompt_tokens,
+                "completion_tokens": final_result.completion_tokens,
                 "error": None,
                 "parsed": 1,
             }
@@ -213,7 +202,17 @@ def main():
     done = cached_ids(con)
     print(f"provider={cfg['provider']} model={cfg['model']} cached={len(done):,}")
 
-    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"])
+    client = CompatibleLLM(
+        LLMConfig(
+            base_url=cfg["base_url"],
+            api_key=cfg["api_key"],
+            model=cfg["model"],
+            timeout_s=cfg["timeout_s"],
+            temperature=cfg["temperature"],
+            max_output_tokens=min(MAX_OUTPUT_TOKENS, cfg["max_output_tokens"]),
+            response_format=cfg["response_format"],
+        )
+    )
     todo = []
     for record in iter_filing_batches(months, args.sample):
         if record["document_id"] in done:

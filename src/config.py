@@ -1,8 +1,12 @@
-"""Environment and LLM configuration loader for the text scoring engine."""
+"""Environment and LLM configuration shared by text scoring and council calls."""
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # Keep read-only config tests usable in minimal environments.
+    def load_dotenv(*args, **kwargs):
+        return False
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -12,29 +16,35 @@ class MissingAPIKeyError(RuntimeError):
     pass
 
 
-PROVIDERS = ("openrouter", "openai", "anthropic")
-
-
 def llm_config():
-    provider = os.getenv("LLM_PROVIDER", "openrouter").lower()
-    if provider not in PROVIDERS:
-        raise ValueError(f"unsupported LLM_PROVIDER: {provider!r}")
-    if provider == "openrouter":
-        key = os.getenv("OPENROUTER_API_KEY", "").strip()
-        model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip()
-        base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
-    elif provider == "openai":
-        key = os.getenv("OPENAI_API_KEY", "").strip()
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
-        base_url = None
-    else:
-        key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5").strip()
-        base_url = None
+    """Return provider-neutral settings with legacy aliases still supported."""
+    provider = os.getenv("LLM_PROVIDER", "openrouter").lower().strip()
+    legacy = {
+        "openrouter": {
+            "key": os.getenv("OPENROUTER_API_KEY", ""),
+            "model": os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+            "base_url": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        },
+        "openai": {
+            "key": os.getenv("OPENAI_API_KEY", ""),
+            "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        },
+        "anthropic": {
+            "key": os.getenv("ANTHROPIC_API_KEY", ""),
+            "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+            "base_url": os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"),
+        },
+    }
+    if provider not in legacy:
+        raise ValueError(f"unsupported legacy provider alias: {provider!r}")
+    fallback = legacy[provider]
+    key = os.getenv("LLM_API_KEY", fallback["key"]).strip()
+    model = os.getenv("LLM_MODEL", fallback["model"]).strip()
+    base_url = os.getenv("LLM_BASE_URL", fallback["base_url"]).strip()
     if not key:
         raise MissingAPIKeyError(
-            f"no API key set for provider {provider!r}: fill OPENROUTER_API_KEY, "
-            "OPENAI_API_KEY or ANTHROPIC_API_KEY in .env"
+            "no LLM API key set: fill LLM_API_KEY or the selected legacy provider key in .env"
         )
     return {
         "provider": provider,
@@ -43,4 +53,7 @@ def llm_config():
         "base_url": base_url,
         "timeout_s": int(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
         "max_concurrency": int(os.getenv("LLM_MAX_CONCURRENCY", "8")),
+        "temperature": float(os.getenv("LLM_TEMPERATURE", "0.0")),
+        "max_output_tokens": int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1600")),
+        "response_format": os.getenv("LLM_RESPONSE_FORMAT", "none").strip().lower(),
     }

@@ -148,3 +148,27 @@ Local data and rules should take precedence over generic examples. Useful extern
 - [SEC EDGAR FAQ](https://www.sec.gov/about/webmaster-frequently-asked-questions)
 - [FRED 3-Month Treasury Bill series (TB3MS)](https://fred.stlouisfed.org/series/TB3MS)
 - [8-K text-based strategy research](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3910451)
+
+## Opt-in strict pseudonymized council
+
+The repository now includes a separate council feature factory under `src/agentic/`. It scores one filing at a time after a strict identity firewall removes issuer names, tickers, identifiers, URLs, sector/industry labels, and exact date cues. A stable keyed local identity map preserves the ability to join results back to `(permno, eom)`; the map and original identifiers are never sent to the model.
+
+Four independent roles receive the same redacted filing: event classifier, materiality analyst, Devil's Advocate, and evidence/audit checker. Their validated numeric verdicts are cached in `data/scoring/council_scores.db`, aggregated deterministically to `output/council_features.parquet`, and can be evaluated through the opt-in `src/xgb_agentic.py` branch. The council is a feature and audit layer, not a portfolio decision-maker.
+
+The LLM transport accepts any OpenAI-compatible Chat Completions endpoint:
+
+```text
+LLM_API_KEY=...
+LLM_BASE_URL=https://provider.example/v1
+LLM_MODEL=provider-model-name
+REDACTION_HMAC_KEY=a-local-secret-for-stable-opaque-ids
+```
+
+Run a small pilot before a full scoring job:
+
+```bash
+python -m src.agentic.run_council --month 2021-01 --sample 20
+python src/xgb_agentic.py
+```
+
+The existing TimesFM, FinBERT, text-scoring, and baseline branches remain available independently. Compare characteristics-only, deterministic filing features, one council role, and the full council using the existing expanding time splits before retaining the council.
