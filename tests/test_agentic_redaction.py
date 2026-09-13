@@ -73,6 +73,16 @@ class RedactionTests(unittest.TestCase):
 
         self.assertNotIn("Apple", result.text)
 
+    def test_numpy_items_are_normalized_without_truth_value_error(self):
+        import numpy as np
+
+        filing = dict(self.filing)
+        filing["items"] = np.array(["2.02", "9.01"])
+
+        result = redact_filing(filing, secret="test-secret")
+
+        self.assertEqual(result.visible_metadata["items"], ["2.02", "9.01"])
+
     def test_empty_secret_is_rejected(self):
         with self.assertRaises(ValueError):
             stable_opaque_id("doc-123", "")

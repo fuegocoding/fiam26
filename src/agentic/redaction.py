@@ -140,9 +140,16 @@ def _mask_patterns(text: str) -> str:
 
 
 def _visible_metadata(filing: Mapping[str, Any]) -> dict[str, Any]:
-    items = filing.get("items") or []
-    if not isinstance(items, (list, tuple)):
-        items = [str(items)]
+    items = filing.get("items")
+    if items is None:
+        items = []
+    if isinstance(items, (str, bytes)):
+        items = [items]
+    elif not isinstance(items, (list, tuple)):
+        try:
+            items = list(items)
+        except TypeError:
+            items = [items]
     metadata: dict[str, Any] = {
         "form_type": str(filing.get("form_type") or "unknown"),
         "items": [str(item) for item in items],
