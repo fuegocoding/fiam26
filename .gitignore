@@ -7,3 +7,8 @@ output/preds_xgb_agentic.csv
 .env
 src/__pycache__/
 __pycache__/
+
+# Local agent tooling and RunPod configuration
+.agents/
+skills-lock.json
+.runpod/
