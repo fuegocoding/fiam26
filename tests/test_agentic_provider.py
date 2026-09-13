@@ -48,6 +48,21 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(cfg["max_concurrency"], 3)
         self.assertEqual(cfg["temperature"], 0.2)
 
+    def test_blank_generic_values_fall_back_to_legacy_aliases(self):
+        env = {
+            "LLM_API_KEY": " ",
+            "LLM_BASE_URL": " ",
+            "LLM_MODEL": " ",
+            "OPENROUTER_API_KEY": "legacy-key",
+            "OPENROUTER_BASE_URL": "https://legacy.example/v1",
+            "OPENROUTER_MODEL": "legacy-model",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            cfg = llm_config()
+        self.assertEqual(cfg["api_key"], "legacy-key")
+        self.assertEqual(cfg["base_url"], "https://legacy.example/v1")
+        self.assertEqual(cfg["model"], "legacy-model")
+
     def test_client_uses_only_compatible_chat_arguments(self):
         completions = FakeCompletions()
         llm = CompatibleLLM(

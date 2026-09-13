@@ -73,6 +73,11 @@ def aggregate_verdicts(verdict_rows: Iterable[Mapping[str, Any]]) -> pd.DataFram
         }
         for field in NUMERIC_FIELDS:
             result[field] = float(group[field].median())
+        category_counts = group["event_category"].value_counts()
+        result["primary_category"] = min(
+            (category for category, count in category_counts.items() if count == category_counts.max()),
+            key=EVENT_CATEGORIES.index,
+        )
         filing_rows.append(result)
     filings = pd.DataFrame(filing_rows)
 
@@ -95,12 +100,7 @@ def aggregate_verdicts(verdict_rows: Iterable[Mapping[str, Any]]) -> pd.DataFram
             out[f"council_{field}_median"] = float(month[field].median())
         for category in EVENT_CATEGORIES:
             out[f"council_event_{category}"] = int(
-                frame.loc[
-                    frame["document_id"].isin(month["document_id"])
-                    & (frame["permno"] == permno)
-                    & (frame["eom"] == eom)
-                    & (frame["event_category"] == category)
-                ].shape[0]
+                (month["primary_category"] == category).sum()
             )
         output_rows.append(out)
     result = pd.DataFrame(output_rows)

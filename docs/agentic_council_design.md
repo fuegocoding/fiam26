@@ -64,9 +64,9 @@ summary              short redacted explanation
 
 The numeric contract is the feature interface. Summaries are retained only for audit and are never used as model features.
 
-## Stock-month aggregation
+## Stock-month aggregation and availability
 
-Aggregate by `(permno, eom)` where `eom` is the calendar month-end of the provider `filing_date`. Preserve filing counts and missingness. Use deterministic medians or trimmed means for role scores, median absolute deviation for disagreement, and rates for contradiction and abstention. Include category counts and materiality-weighted direction. Do not hand-code a final trading score; XGBoost learns whether the features add value.
+Aggregate by `(permno, eom)` where `eom` is the calendar month-end of the provider `filing_date`. Under the repository's monthly target convention, evidence in month `t` predicts the return target in month `t+1`; this is an end-of-month availability convention, not an intramonth execution claim. Preserve filing counts and missingness. Use deterministic medians or trimmed means for role scores, median absolute deviation for disagreement, and rates for contradiction and abstention. Include filing-level majority category counts and materiality-weighted direction. Do not hand-code a final trading score; XGBoost learns whether the features add value.
 
 ## Provider portability
 
@@ -88,6 +88,7 @@ LLM_RESPONSE_FORMAT
 
 - Invalid JSON is repaired once using the same role prompt and then marked failed if still invalid.
 - A failed role does not discard the other role outputs; aggregation records role coverage and missingness.
+- Failed roles are cached and skipped on reruns unless `--retry-failed` is explicitly supplied.
 - Network/rate-limit errors use bounded retries with backoff.
 - SQLite caching makes reruns idempotent and avoids repeated calls for unchanged inputs.
 - No web, file-search, browsing, or external data tools are available to council roles.

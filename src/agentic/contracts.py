@@ -128,7 +128,11 @@ def verdict_schema_text() -> str:
         "Return one JSON object with exactly these keys: "
         "event_category, direction, materiality, surprise, forward_looking, "
         "distress_signal, cash_flow_impact, confidence, contradiction_score, "
-        "evidence_quality, abstain, evidence_count, summary."
+        "evidence_quality, abstain, evidence_count, summary. "
+        "direction and cash_flow_impact are in [-1.0, 1.0]; "
+        "materiality, surprise, forward_looking, distress_signal, confidence, "
+        "contradiction_score, and evidence_quality are in [0.0, 1.0]; "
+        "abstain is 0 or 1 and evidence_count is a non-negative integer."
     )
 
 

@@ -3,9 +3,14 @@ import unittest
 import pandas as pd
 
 from src.agentic.features import merge_council_features
+from src.agentic.run_council import filing_month_eom
 
 
 class FeatureJoinTests(unittest.TestCase):
+    def test_filing_month_cutoff_is_the_month_end_before_next_month_target(self):
+        self.assertEqual(filing_month_eom("2021-01-17"), "2021-01-31")
+        self.assertEqual(filing_month_eom("2021-02-01"), "2021-02-28")
+
     def test_left_join_preserves_panel_and_excludes_target_columns(self):
         table = pd.DataFrame(
             {

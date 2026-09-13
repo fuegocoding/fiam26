@@ -21,6 +21,10 @@ RAW = ROOT / "data" / "raw" / "8k_20150101_20260831_identified.parquet"
 STORE_PATH = ROOT / "data" / "scoring" / "council_scores.db"
 OUTPUT = ROOT / "output" / "council_features.parquet"
 PROMPT_VERSION = "council-v1"
+AVAILABILITY_POLICY = (
+    "All filings dated in calendar month t are aggregated at month-end t and are used only "
+    "for the next-month target t+1; no intramonth trading claim is made."
+)
 
 REDACTION_COLUMNS = [
     "document_id",
@@ -64,7 +68,7 @@ def iter_filings(months: pd.PeriodIndex | None, limit: int | None):
                 return
 
 
-def _eom(filing_date: str) -> str:
+def filing_month_eom(filing_date: str) -> str:
     return str(pd.Timestamp(filing_date) + pd.offsets.MonthEnd(0))[:10]
 
 
@@ -75,6 +79,11 @@ def main() -> None:
     group.add_argument("--year", help="YYYY")
     parser.add_argument("--sample", type=int)
     parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="retry roles previously cached as failures",
+    )
     parser.add_argument("--data", default=None, help="reserved for a future alternate filing source")
     args = parser.parse_args()
     if args.data:
@@ -107,11 +116,15 @@ def main() -> None:
     store = CouncilStore(STORE_PATH)
     processed = 0
     for record in iter_filings(months, args.sample):
-        record["eom"] = _eom(str(record["filing_date"]))
+        record["eom"] = filing_month_eom(str(record["filing_date"]))
         filing = redact_filing(record, secret)
         store.save_identity(filing.document_id, filing.opaque_id, filing.permno, filing.filing_date, filing.eom)
         cached = store.cached_roles(
-            filing.document_id, model_key, PROMPT_VERSION, filing.redaction_version
+            filing.document_id,
+            model_key,
+            PROMPT_VERSION,
+            filing.redaction_version,
+            retry_failed=args.retry_failed,
         )
         missing_roles = tuple(role for role in ROLE_NAMES if role not in cached)
         if missing_roles:

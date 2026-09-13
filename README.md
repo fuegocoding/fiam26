@@ -155,6 +155,8 @@ The repository now includes a separate council feature factory under `src/agenti
 
 Four independent roles receive the same redacted filing: event classifier, materiality analyst, Devil's Advocate, and evidence/audit checker. Their validated numeric verdicts are cached in `data/scoring/council_scores.db`, aggregated deterministically to `output/council_features.parquet`, and can be evaluated through the opt-in `src/xgb_agentic.py` branch. The council is a feature and audit layer, not a portfolio decision-maker.
 
+Availability follows the repository's monthly convention: filings dated in month `t` are aggregated at month-end `t` and predict the next-month target `t+1`. The council does not claim to support intramonth execution.
+
 The LLM transport accepts any OpenAI-compatible Chat Completions endpoint:
 
 ```text

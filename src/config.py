@@ -16,6 +16,11 @@ class MissingAPIKeyError(RuntimeError):
     pass
 
 
+def _configured(name: str, fallback: str) -> str:
+    value = os.getenv(name, "").strip()
+    return value or fallback.strip()
+
+
 def llm_config():
     """Return provider-neutral settings with legacy aliases still supported."""
     provider = os.getenv("LLM_PROVIDER", "openrouter").lower().strip()
@@ -39,9 +44,9 @@ def llm_config():
     if provider not in legacy:
         raise ValueError(f"unsupported legacy provider alias: {provider!r}")
     fallback = legacy[provider]
-    key = os.getenv("LLM_API_KEY", fallback["key"]).strip()
-    model = os.getenv("LLM_MODEL", fallback["model"]).strip()
-    base_url = os.getenv("LLM_BASE_URL", fallback["base_url"]).strip()
+    key = _configured("LLM_API_KEY", fallback["key"])
+    model = _configured("LLM_MODEL", fallback["model"])
+    base_url = _configured("LLM_BASE_URL", fallback["base_url"])
     if not key:
         raise MissingAPIKeyError(
             "no LLM API key set: fill LLM_API_KEY or the selected legacy provider key in .env"

@@ -70,7 +70,12 @@ class CouncilStore:
         self.con.commit()
 
     def cached_roles(
-        self, document_id: str, model_key: str, prompt_version: str, redaction_version: str
+        self,
+        document_id: str,
+        model_key: str,
+        prompt_version: str,
+        redaction_version: str,
+        retry_failed: bool = False,
     ) -> set[str]:
         rows = self.con.execute(
             """
@@ -79,7 +84,17 @@ class CouncilStore:
             """,
             (document_id, model_key, prompt_version, redaction_version),
         ).fetchall()
-        return {row[0] for row in rows}
+        roles = {row[0] for row in rows}
+        if not retry_failed:
+            failed = self.con.execute(
+                """
+                SELECT role FROM failures
+                WHERE document_id = ? AND model_key = ? AND prompt_version = ? AND redaction_version = ?
+                """,
+                (document_id, model_key, prompt_version, redaction_version),
+            ).fetchall()
+            roles.update(row[0] for row in failed)
+        return roles
 
     def save_verdict(
         self,

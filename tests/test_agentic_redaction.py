@@ -25,9 +25,10 @@ class RedactionTests(unittest.TestCase):
             "form_type": "8-K",
             "items": ["2.02"],
             "is_amendment": False,
-            "text": (
-                "Acme Holdings Inc. (NASDAQ: ACME) reported revenue of $125.4 million "
-                "on March 17, 2021. The company entered a $50 million facility."
+                "text": (
+                "Acme Holdings (NASDAQ: ACME) reported revenue of $125.4 million "
+                "on March 17, 2021. The company entered a $50 million facility. "
+                "The filing references 20210317 and 03.17.2021."
             ),
         }
 
@@ -38,6 +39,9 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("ACME", result.text)
         self.assertNotIn("123456789", result.text)
         self.assertNotIn("March 17, 2021", result.text)
+        self.assertNotIn("20210317", result.text)
+        self.assertNotIn("03.17.2021", result.text)
+        self.assertNotIn("NASDAQ: ACME", result.text)
         self.assertNotIn("example.com", result.text)
         self.assertIn("$125.4 million", result.text)
         self.assertIn("$50 million", result.text)

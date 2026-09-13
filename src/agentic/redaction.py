@@ -13,9 +13,19 @@ REDACTION_VERSION = "redaction-v1"
 
 _URL_RE = re.compile(r"\bhttps?://[^\s)]+", re.IGNORECASE)
 _ACCESSION_RE = re.compile(r"\b\d{10}-\d{2}-\d{6}\b")
+_EXCHANGE_TICKER_RE = re.compile(
+    r"\b(?:NASDAQ|NYSE|AMEX|OTC|TSX|LSE|ASX)\s*[:/]\s*[A-Z][A-Z0-9.-]{1,9}\b",
+    re.IGNORECASE,
+)
+_LABELED_IDENTIFIER_RE = re.compile(
+    r"\b(?:CIK|CUSIP|ISIN|FIGI|LEI|GVKEY|PERMNO|PERMCO)\s*[:#]?\s*[A-Z0-9-]{5,}\b",
+    re.IGNORECASE,
+)
 _DATE_RES = (
     re.compile(r"\b(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}\b"),
-    re.compile(r"\b\d{1,2}[-/]\d{1,2}[-/](?:19|20)\d{2}\b"),
+    re.compile(r"\b(?:19|20)\d{2}[.]\d{1,2}[.]\d{1,2}\b"),
+    re.compile(r"\b\d{1,2}[-/.]\d{1,2}[-/.](?:19|20)\d{2}\b"),
+    re.compile(r"\b(?:19|20)\d{6}\b"),
     re.compile(
         r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
         r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
@@ -86,6 +96,27 @@ def _replacement_values(filing: Mapping[str, Any]) -> list[str]:
         text = str(value).strip()
         if len(text) >= 2:
             values.append(text)
+            if key in {"company_name", "content_company_name", "provider_company_name"}:
+                tokens = re.findall(r"[A-Za-z0-9&'-]+", text)
+                suffixes = {
+                    "inc",
+                    "incorporated",
+                    "corp",
+                    "corporation",
+                    "co",
+                    "company",
+                    "limited",
+                    "ltd",
+                    "llc",
+                    "lp",
+                    "plc",
+                    "sa",
+                    "nv",
+                }
+                while len(tokens) > 2 and tokens[-1].lower().rstrip(".") in suffixes:
+                    tokens.pop()
+                if len(tokens) >= 2:
+                    values.append(" ".join(tokens))
     return sorted(set(values), key=lambda value: (-len(value), value.lower()))
 
 
@@ -99,6 +130,8 @@ def _mask_known_values(text: str, values: list[str]) -> str:
 def _mask_patterns(text: str) -> str:
     text = _URL_RE.sub("<URL>", text)
     text = _ACCESSION_RE.sub("<ACCESSION>", text)
+    text = _EXCHANGE_TICKER_RE.sub("<TICKER>", text)
+    text = _LABELED_IDENTIFIER_RE.sub("<IDENTIFIER>", text)
     for pattern in _DATE_RES:
         text = pattern.sub("<DATE>", text)
     return text

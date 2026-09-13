@@ -62,6 +62,7 @@ class CouncilTests(unittest.TestCase):
         devil_system = messages[2][0]["content"]
         self.assertIn("disconfirm", devil_system.lower())
         self.assertIn("abstain", devil_system.lower())
+        self.assertIn("direction and cash_flow_impact are in [-1.0, 1.0]", devil_system)
 
     def test_failed_role_does_not_discard_valid_verdicts(self):
         llm = FakeLLM(failing_role="devils_advocate")

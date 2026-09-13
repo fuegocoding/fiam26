@@ -43,7 +43,7 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(result["council_n_filings"], 2)
         self.assertAlmostEqual(result["council_role_coverage"], 0.5)
         self.assertAlmostEqual(result["council_direction_median"], -0.25)
-        self.assertEqual(result["council_event_guidance_update"], 2)
+        self.assertEqual(result["council_event_guidance_update"], 1)
         self.assertEqual(result["council_event_auditor_change"], 1)
         self.assertGreater(result["council_direction_disagreement"], 0.0)
 
@@ -79,6 +79,24 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual(cached, {"event_classifier"})
             self.assertEqual(other_prompt, set())
+            store.save_failure(
+                "doc-a",
+                "devils_advocate",
+                "model-a",
+                "prompt-1",
+                "redaction-v1",
+                "provider unavailable",
+            )
+            self.assertIn(
+                "devils_advocate",
+                store.cached_roles("doc-a", "model-a", "prompt-1", "redaction-v1"),
+            )
+            self.assertNotIn(
+                "devils_advocate",
+                store.cached_roles(
+                    "doc-a", "model-a", "prompt-1", "redaction-v1", retry_failed=True
+                ),
+            )
             store.close()
 
 
