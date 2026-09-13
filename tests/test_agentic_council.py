@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from src.agentic.contracts import ROLE_NAMES, RedactedFiling
 from src.agentic.council import CouncilRunner
 from src.agentic.roles import build_role_messages
+from src.agentic.run_council import PROMPT_VERSION
+from src.agentic.redaction import REDACTION_VERSION
 
 
 def verdict_payload(category="other"):
@@ -88,6 +90,10 @@ class CouncilTests(unittest.TestCase):
 
         self.assertEqual(len(result.verdicts), 1)
         self.assertEqual(len(result.failures), 0)
+
+    def test_cache_versions_are_bumped_after_firewall_and_prompt_changes(self):
+        self.assertEqual(REDACTION_VERSION, "redaction-v2")
+        self.assertEqual(PROMPT_VERSION, "council-v2")
 
 
 if __name__ == "__main__":

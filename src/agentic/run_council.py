@@ -12,7 +12,7 @@ from src.agentic.aggregate import aggregate_verdicts
 from src.agentic.contracts import ROLE_NAMES
 from src.agentic.council import CouncilRunner
 from src.agentic.provider import CompatibleLLM, LLMConfig
-from src.agentic.redaction import redact_filing
+from src.agentic.redaction import REDACTION_VERSION, redact_filing
 from src.agentic.storage import CouncilStore
 from src.config import llm_config
 
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "data" / "raw" / "8k_20150101_20260831_identified.parquet"
 STORE_PATH = ROOT / "data" / "scoring" / "council_scores.db"
 OUTPUT = ROOT / "output" / "council_features.parquet"
-PROMPT_VERSION = "council-v1"
+PROMPT_VERSION = "council-v2"
 AVAILABILITY_POLICY = (
     "All filings dated in calendar month t are aggregated at month-end t and are used only "
     "for the next-month target t+1; no intramonth trading claim is made."
@@ -154,7 +154,7 @@ def main() -> None:
             print(f"processed filings: {processed:,}")
 
     features = aggregate_verdicts(
-        store.iter_verdicts(model_key, PROMPT_VERSION, "redaction-v1")
+        store.iter_verdicts(model_key, PROMPT_VERSION, REDACTION_VERSION)
     )
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     features.to_parquet(OUTPUT, index=False)

@@ -37,6 +37,28 @@ class FeatureJoinTests(unittest.TestCase):
         self.assertTrue(pd.isna(merged.loc[1, "council_direction_median"]))
         self.assertEqual(list(merged.columns).count("ret_exc_lead1m"), 1)
 
+    def test_january_filing_features_join_to_february_target_row(self):
+        table = pd.DataFrame(
+            {
+                "permno": [1],
+                "eom": ["2021-01-31"],
+                "target_month": ["2021-02-28"],
+                "ret_exc_lead1m": [0.1],
+            }
+        )
+        council = pd.DataFrame(
+            {
+                "permno": [1],
+                "eom": ["2021-01-31"],
+                "council_direction_median": [0.7],
+            }
+        )
+
+        merged, _ = merge_council_features(table, council)
+
+        self.assertEqual(merged.loc[0, "target_month"], "2021-02-28")
+        self.assertEqual(merged.loc[0, "council_direction_median"], 0.7)
+
     def test_duplicate_council_keys_are_rejected(self):
         table = pd.DataFrame({"permno": [1], "eom": ["2021-01-31"]})
         council = pd.DataFrame(

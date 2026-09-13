@@ -9,16 +9,18 @@ from typing import Any
 
 from .contracts import RedactedFiling
 
-REDACTION_VERSION = "redaction-v1"
+REDACTION_VERSION = "redaction-v2"
 
 _URL_RE = re.compile(r"\bhttps?://[^\s)]+", re.IGNORECASE)
 _ACCESSION_RE = re.compile(r"\b\d{10}-\d{2}-\d{6}\b")
 _EXCHANGE_TICKER_RE = re.compile(
-    r"\b(?:NASDAQ|NYSE|AMEX|OTC|TSX|LSE|ASX)\s*[:/]\s*[A-Z][A-Z0-9.-]{1,9}\b",
+    r"\b(?:NASDAQ|NYSE(?:\s+American)?|AMEX|OTC|TSX|LSE|ASX)\s*"
+    r"(?::|/|\(|\b)\s*[A-Z][A-Z0-9.-]{1,9}\)?\b",
     re.IGNORECASE,
 )
 _LABELED_IDENTIFIER_RE = re.compile(
-    r"\b(?:CIK|CUSIP|ISIN|FIGI|LEI|GVKEY|PERMNO|PERMCO)\s*[:#]?\s*[A-Z0-9-]{5,}\b",
+    r"\b(?:CIK|CUSIP|ISIN|FIGI|LEI|GVKEY|PERMNO|PERMCO)\s*"
+    r"(?:No\.?|Number)?\s*(?:[:=#]\s*)?[A-Z0-9-]{5,}\b",
     re.IGNORECASE,
 )
 _DATE_RES = (
@@ -113,9 +115,9 @@ def _replacement_values(filing: Mapping[str, Any]) -> list[str]:
                     "sa",
                     "nv",
                 }
-                while len(tokens) > 2 and tokens[-1].lower().rstrip(".") in suffixes:
+                while len(tokens) > 1 and tokens[-1].lower().rstrip(".") in suffixes:
                     tokens.pop()
-                if len(tokens) >= 2:
+                if tokens and tokens[0].lower() not in {"the", "a", "an"}:
                     values.append(" ".join(tokens))
     return sorted(set(values), key=lambda value: (-len(value), value.lower()))
 

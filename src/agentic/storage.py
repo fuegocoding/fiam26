@@ -124,6 +124,14 @@ class CouncilStore:
                 time.strftime("%Y-%m-%dT%H:%M:%S"),
             ),
         )
+        self.con.execute(
+            """
+            DELETE FROM failures
+            WHERE document_id = ? AND role = ? AND model_key = ?
+              AND prompt_version = ? AND redaction_version = ?
+            """,
+            (document_id, role, model_key, prompt_version, redaction_version),
+        )
         self.con.commit()
 
     def save_failure(

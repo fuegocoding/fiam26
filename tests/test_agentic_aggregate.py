@@ -97,6 +97,22 @@ class StorageTests(unittest.TestCase):
                     "doc-a", "model-a", "prompt-1", "redaction-v1", retry_failed=True
                 ),
             )
+            store.save_verdict(
+                "doc-a",
+                10,
+                "2021-01-31",
+                "devils_advocate",
+                "model-a",
+                "prompt-1",
+                "redaction-v1",
+                {"direction": -1.0},
+            )
+            self.assertIn(
+                "devils_advocate",
+                store.cached_roles(
+                    "doc-a", "model-a", "prompt-1", "redaction-v1", retry_failed=True
+                ),
+            )
             store.close()
 
 

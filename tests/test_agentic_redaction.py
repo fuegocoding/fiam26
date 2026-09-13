@@ -25,10 +25,11 @@ class RedactionTests(unittest.TestCase):
             "form_type": "8-K",
             "items": ["2.02"],
             "is_amendment": False,
-                "text": (
+            "text": (
                 "Acme Holdings (NASDAQ: ACME) reported revenue of $125.4 million "
                 "on March 17, 2021. The company entered a $50 million facility. "
-                "The filing references 20210317 and 03.17.2021."
+                "The filing references 20210317 and 03.17.2021. "
+                "It lists NASDAQ (HIDDEN) and CIK No. 0000123456, CUSIP=123456789."
             ),
         }
 
@@ -42,6 +43,10 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("20210317", result.text)
         self.assertNotIn("03.17.2021", result.text)
         self.assertNotIn("NASDAQ: ACME", result.text)
+        self.assertNotIn("Acme Holdings", result.text)
+        self.assertNotIn("NASDAQ (HIDDEN)", result.text)
+        self.assertNotIn("CIK No. 0000123456", result.text)
+        self.assertNotIn("CUSIP=123456789", result.text)
         self.assertNotIn("example.com", result.text)
         self.assertIn("$125.4 million", result.text)
         self.assertIn("$50 million", result.text)
@@ -58,6 +63,15 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertNotEqual(first, other)
         self.assertTrue(first.startswith("DOC_"))
+
+    def test_corporate_suffixes_produce_single_token_aliases(self):
+        filing = dict(self.filing)
+        filing["company_name"] = "Apple Inc."
+        filing["text"] = "Apple announced revenue of $10 million."
+
+        result = redact_filing(filing, secret="test-secret")
+
+        self.assertNotIn("Apple", result.text)
 
     def test_empty_secret_is_rejected(self):
         with self.assertRaises(ValueError):
