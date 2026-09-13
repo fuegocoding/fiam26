@@ -1,4 +1,5 @@
 data/raw/*.parquet
+data/scrubbed/*.parquet
 data/scoring/council_scores.db
 data/scoring/council_scores.db-*
 .env
