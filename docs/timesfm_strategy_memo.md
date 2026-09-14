@@ -161,3 +161,61 @@ The ratchet cuts max drawdown by a quarter (−64.5% → −40.9%), improves Sha
 - Base evaluation: `src/timesfm_portfolio.py` (buffer/ratchet variants to be folded in)
 - Combined XGBoost+TimesFM model: `src/xgb_timesfm.py` (reported separately; Sharpe 1.74 in 2021-26)
 - Data: `data/raw/chars_final_with_names.parquet`, 8-K corpus `data/raw/8k_20150101_20260831_identified.parquet`, FinBERT scores `output/finbert_scores.parquet`
+
+
+## 8. Final competition configuration: beta-neutral overlay
+
+After the analysis above, the submitted configuration adds two rule-compliant layers to the buffered book:
+
+1. **Beta overlay**: the book is run at 1x gross (100 long / 100 short) instead of 2x, and 0.5x of capital is held in an S&P 500 position. Rationale: the raw book is dollar-neutral but has beta −0.37 (long leg +1.18, short leg +1.55) — precisely the "disguised directional position" the competition mandate warns against. The SPX overlay brings realized beta to **+0.14**, satisfying the beta-neutrality intent. Gross exposure: 150% (limit 200%). Net exposure: +50% (edge of the −50%/+50% band, deliberate and explained).
+2. **Ratchet sizing** (as §5.4): start 0.5x, scale up +0.1 on new equity highs, scale down with drawdown depth beyond 10% (floor 0.3x).
+
+### Final performance, 2016-10 → 2026-08 (119 months; SPX data starts 2016-09)
+
+| Metric | Full window | 2016-2020 | 2021-2026 |
+|---|---:|---:|---:|
+| Ann. return | **+21.8%** | +16.7% | +25.7% |
+| Sharpe | **1.62** | 1.24 | 1.90 |
+| Max drawdown | **−24.1%** | −21.2% | −6.5% |
+| Realized beta | +0.14 | | |
+| Gross / net exposure | 150% / +50% | | compliant |
+
+Yearly detail:
+
+| Year | Ann. return | Sharpe |
+|---|---:|---:|
+| 2016 (3m of overlay) | +20.0% | — |
+| 2017 | +24.1% | 1.63 |
+| 2018 | +38.2% | 3.22 |
+| 2019 | +19.8% | 1.57 |
+| 2020 | −16.1% | −1.27 |
+| 2021 | +7.9% | 0.59 |
+| 2022 | +15.9% | 1.04 |
+| 2023 | +32.3% | 2.09 |
+| 2024 | +34.8% | 2.61 |
+| 2025 | +30.0% | 2.81 |
+| 2026 (8m) | +37.1% | 2.82 |
+
+72 of 119 months positive; worst single month −8.9% (2021-01); only 4 months worse than −5% in 11 years. Cumulative growth 7.8x.
+
+![Final equity curve](../output/timesfm_final_equity_curve.png)
+
+*Top: growth of $1 (log scale) for the final configuration vs the book-only ratchet, the raw buffered book, S&P 500 excess, and the T-bill+4% benchmark. Bottom: drawdown of the final configuration — the 2020-2021 regime is contained at −24% versus −65% unprotected.*
+
+### Why the overlay works where timing filters failed
+
+The SPX overlay is a **constant beta hedge**, not a market-timing rule. It cushions every crash month (2020-04: −24.5% → −18.1%; 2019-01: −16.0% → −12.1%; 2023-01: −18.0% → −14.9%) because the crashes are market *rallies* against our short book — a permanent long market position is exactly the missing other side. EMA/momentum filters failed (§5.3) because they de-gross in market *downturns*, when the strategy earns; the overlay is always on.
+
+### Rule compliance
+
+- Positions: 200 names (100/leg) + 1 index instrument — within the 100-500 count.
+- Gross exposure: 150% average (≤200% cap).
+- Net exposure: +50% (inside the band; explained as the deliberate low-beta long sleeve against the high-beta short book).
+- Realized beta: +0.14 (target ≈ 0 per the mandate's beta-neutrality definition).
+- Rebalancing: monthly.
+
+### Caveats specific to this configuration
+
+- The 0.5x SPX weight was selected on the full window; the family 0.25x-1.0x all improve Sharpe (1.37-1.62), so the choice is not knife-edge, but it is one more in-sample decision.
+- The overlay adds ~7%/yr of market exposure cost/benefit: in bull years it lifts returns, in bear years (2022) it drags — the +15.9% in 2022 is achieved *despite* the overlay, from the book itself.
+- The book at 1x gross earns roughly half the raw spread; the Sharpe improvement comes from the variance reduction being larger than the return reduction.
