@@ -152,76 +152,111 @@ The ratchet cuts max drawdown by a quarter (−64.5% → −40.9%), improves Sha
 
 1. **Discovery overlap.** The specification (buffer width, ratchet parameters) was tuned on the same 2016-26 window it is evaluated on. The structural findings (buffer helps everywhere; ratchet cuts DD everywhere; alpha is in micro-cap tails) replicated across every parameter choice and are trustworthy; the headline magnitudes are development estimates and should be expected to degrade on truly unseen data.
 2. **Short-book realism.** 95% of the short book is micro/nano. Real borrow costs, short availability, and buy-in risk will erode the headline numbers; the competition's scoring of short-book quality should be reviewed against this concentration.
-3. **The risk cannot be diversified away.** Every tested filter (size caps, universe exclusions, 8-K vetos, market-timing) either fails to reduce crash losses or destroys the alpha, because the crash mechanism (cohort-wide small-cap repricing) is inseparable from the return mechanism. The drawdown-responsive ratchet is the only protection that improved risk-adjusted performance in both halves of the sample.
+3. **The risk cannot be diversified away within a book — but it can across engines.** Every tested within-book filter (size caps, universe exclusions, 8-K vetos, market-timing) either fails to reduce crash losses or destroys the alpha, because the crash mechanism (cohort-wide small-cap repricing) is inseparable from the TimesFM return mechanism. The drawdown-responsive ratchet was the only within-book protection that improved risk-adjusted performance in both halves of the sample. However, the 2020 crash turns out to be largely engine-specific: an independently constructed XGBoost book (corr 0.31 with the TimesFM book) was *positive* in 2020 (+7.1% vs −50.5%), and blending the two engines at 50/50 halves the worst cascade months without any reactive rule (§8 v2).
 4. **TimesFM licensing**: v3.0 weights are non-commercial (acceptable for the hackathon); TimesFM 2.5-200m (Apache-2.0) is the fallback.
 
 ## 7. Reproducibility
 
 - Forecast generation: `src/timesfm_forecast.py` (GPU; artifacts committed under `output/`)
-- **Reproduction scripts (§2/§3, §5.4, §8)**: `src/repro/`
+- **Reproduction of §2/§3, §5.4, §8**: `src/repro/`
   - `repro_lib.py` — shared primitives: rank-buffer book, ratchet sizing, FRED market data, metrics
   - `repro_01_base_and_buffer.py` — base k=100 and buffer k=1500 (§2, §3)
   - `repro_02_buffer_ratchet.py` — buffer + ratchet (§5.4)
-  - `repro_03_final_config.py` — final configuration + equity curve (§8); artifacts under `output/repro/`
-  - All memo tables reproduce exactly from these scripts (forecasts from `output/preds_timesfm_all.parquet`; SPX/TB3MS from `data/external/`). The reproduction pinned two previously unstated conventions: the ratchet de-gross mapping `exposure = max(0.3, 1 − 2×drawdown)` with month 1 at 0.5x, and the SPX sleeve earning the SPX price return with the ratchet scaling both sleeves together. One figure could **not** be reproduced: the §8 beta, corrected above to +0.27 (se 0.08) full window, +0.44 OOS 21-26 (the original ad-hoc script was never committed).
-- Combined XGBoost+TimesFM model: `src/xgb_timesfm.py` (reported separately; Sharpe 1.74 in 2021-26)
+  - `repro_03_final_config.py` — §8 final config v2 (blend) + superseded v1 + equity curve; artifacts under `output/repro/`
+- XGBoost+TimesFM backcast folds 2018-2020 (§8 v2 extension): `src/xgb_timesfm_backcast.py` → `output/preds_xgb_timesfm_backcast.csv` (2018 thin-train, 2019-20 quasi-OOS; 2016-17 not foldable)
+- The reproduction pinned three previously unstated conventions: the ratchet de-gross mapping `exposure = max(0.3, 1 − 2×drawdown)` with month 1 at 0.5x; the SPX sleeve earning the SPX price return; the v1 ratchet scaling both sleeves. All §2-§5.4 and both §8 configs reproduce exactly from committed code, except the original §8 beta (+0.14, corrected to +0.27/+0.44 in the v1 record).
+- Combined XGBoost+TimesFM model (OOS folds): `src/xgb_timesfm.py` (Sharpe 1.74 in 2021-26)
 - Data: `data/raw/chars_final_with_names.parquet`, 8-K corpus `data/raw/8k_20150101_20260831_identified.parquet`, FinBERT scores `output/finbert_scores.parquet`
 
 
-## 8. Final competition configuration: beta-neutral overlay
+## 8. Final competition configuration v2: two-engine blend, beta-neutral SPX sleeve
 
-After the analysis above, the submitted configuration adds two rule-compliant layers to the buffered book:
+The submitted configuration (supersedes the single-engine v1, kept below):
 
-1. **Beta overlay**: the book is run at 1x gross (100 long / 100 short) instead of 2x, and 0.5x of capital is held in an S&P 500 position. Rationale: the raw book is dollar-neutral but has beta −0.37 (long leg +1.18, short leg +1.55) — precisely the "disguised directional position" the competition mandate warns against. The SPX overlay brings realized beta down, toward the beta-neutrality intent. Conventions (pinned by reproduction, §7): the SPX sleeve earns the SPX *price* return (FRED SP500 month-end, un-excessed); the book legs are excess over the pipeline RF; the ratchet scales the combined book+SPX return (both sleeves together). Gross exposure: nominal 150% (limit 200%); realized average 139%, max 150% (the ratchet de-grosses in drawdowns). Net exposure: +50% (edge of the −50%/+50% band, deliberate and explained).
-2. **Ratchet sizing** (as §5.4): start 0.5x, scale up +0.1 on new equity highs, scale down with drawdown depth beyond 10% (floor 0.3x).
+1. **Alpha book at 1.2x gross, two engines blended 50/50**:
+   - TimesFM 3.0 book with the k=1500 rank buffer, at 0.6x gross (legs 0.3/0.3);
+   - XGBoost (147 characteristics + TimesFM forecast features, default hyperparameters) raw book at 0.6x gross (legs 0.3/0.3) — **no buffer**: tree ranks lack TimesFM's persistence and the buffer destroys the tree book (Sharpe 1.74 → 0.77 in 2021-26);
+   - the two books correlate only **0.31** monthly: ~389 positions (372-400), ~11-name overlap. The DD reduction comes from engine diversification, not sizing.
+2. **SPX sleeve at 0.25x of capital**: a structural beta anchor, not timing. Both books' 1x beta ≈ 0 (TimesFM buffered +0.02, XGB raw −0.03), so the sleeve alone sets realized beta; the weight is picked by the rule "beta ≈ 0", not by return maximization.
+3. **No ratchet**: in the blend the drawdown-responsive ratchet is inert — Sharpe 1.80-1.84 and maxDD −16.1% to −17.4% across every ratchet setting *including off* — because the 2020 cascade is absorbed by diversification: the XGB book was **positive in 2020 (+7.1%)** while the TimesFM book lost −50.5%. Dropping it removes 5 parameters and the mandate's time-varying-exposure disclosure obligation: exposures are static (gross 145%, net +25%) except the monthly rebalance.
 
-### Final performance, 2016-10 → 2026-08 (119 months; SPX data starts 2016-09)
+### Performance, 2018-01 → 2026-08 (104 months; XGBoost backcast starts 2018)
 
-| Metric | Full window | 2016-2020 | 2021-2026 |
-|---|---:|---:|---:|
-| Ann. return | **+21.8%** | +16.7% | +25.7% |
-| Sharpe | **1.62** | 1.24 | 1.90 |
-| Max drawdown | **−24.1%** | −21.2% | −6.5% |
-| Realized beta | **+0.27** (se 0.08) | | +0.44 in OOS 21-26 |
-| Gross / net exposure | 139% avg, 150% max / +50% | | compliant |
+| Metric | Full window | OOS 2021-26 |
+|---|---:|---:|
+| Ann. return (arith) | **+21.8%** | +27.3% |
+| CAGR | **+23.3%** (6.1x) | +30.1% |
+| Sharpe | **1.82** | — |
+| IR vs TB3MS+4% | 1.27 | 1.61 |
+| Max drawdown | **−17.4%** | **−5.3%** |
+| Realized beta | +0.09 (se 0.08) | +0.24 (se 0.11) |
+| Worst month / months < −5% | −7.8% (2021-01) / 3 | |
+| Hit rate | 70% | |
 
-Yearly detail:
+Yearly detail (ann. return / Sharpe):
 
 | Year | Ann. return | Sharpe |
 |---|---:|---:|
-| 2016 (3m of overlay) | +20.0% | — |
-| 2017 | +24.1% | 1.63 |
-| 2018 | +38.2% | 3.22 |
-| 2019 | +19.8% | 1.57 |
-| 2020 | −16.1% | −1.27 |
-| 2021 | +7.9% | 0.59 |
-| 2022 | +15.9% | 1.04 |
-| 2023 | +32.3% | 2.09 |
-| 2024 | +34.8% | 2.61 |
-| 2025 | +30.0% | 2.81 |
-| 2026 (8m) | +37.1% | 2.82 |
+| 2018 | +28.5% | 3.50 |
+| 2019 | +14.4% | 1.26 |
+| 2020 | −8.5% | −0.84 |
+| 2021 | +16.9% | 0.98 |
+| 2022 | +33.4% | 2.05 |
+| 2023 | +18.4% | 1.96 |
+| 2024 | +30.2% | 2.71 |
+| 2025 | +26.2% | 2.56 |
+| 2026 (8m) | +44.7% | 6.49 |
 
-83 of 119 months positive; worst single month −8.9% (2021-01); 8 months worse than −5% in 11 years. Cumulative growth 7.8x.
+![Final equity curve v2](../output/repro/timesfm_final_equity_curve_repro.png)
 
-![Final equity curve](../output/timesfm_final_equity_curve.png)
+*Top: growth of $1 (log) for the v2 blend vs the superseded v1 single-engine config, the raw 1x blend book, S&P 500, and the T-bill+4% benchmark. Bottom: v2 drawdown — 2020 contained at −17.4% with static exposures.*
 
-*Top: growth of $1 (log scale) for the final configuration vs the book-only ratchet, the raw buffered book, S&P 500 excess, and the T-bill+4% benchmark. Bottom: drawdown of the final configuration — the 2020-2021 regime is contained at −24% versus −65% unprotected.*
+### Like-for-like vs the superseded v1 (both on 2018-2026)
 
-### Why the overlay works where timing filters failed
+| Config | CAGR | Sharpe | IR | maxDD (OOS) | beta (OOS) | Worst | Months < −5% |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **v2 blend 1.2x + 0.25x SPX** | +23.3% | 1.82 | 1.27 | **−17.4%** (−5.3%) | +0.09 (+0.24) | −7.8% | 3 |
+| v1 TFM-only 1.0x + 0.5x SPX + ratchet | +22.8% | 1.59 | 1.11 | −24.1% (−6.5%) | +0.27 (+0.44) | −8.9% | 6 |
 
-The SPX overlay is a **constant beta hedge**, not a market-timing rule. It cushions every crash month because the crashes are market *rallies* against our short book — a permanent long market position is exactly the missing other side. Reproduced, like-for-like (buffered book → final config): 2020-04: −24.5% → −4.6%; 2019-01: −16.0% → −4.1%; 2023-01: −18.0% → −5.2%; worst month overall 2021-01: −25.2% → −8.9%. EMA/momentum filters failed (§5.3) because they de-gross in market *downturns*, when the strategy earns; the overlay is always on.
+v1 native-window (2016-10 → 2026-08) numbers as previously reported in this section: ann +21.8%, Sharpe 1.62, maxDD −24.1%, beta +0.27/+0.44, cumulative 7.8x. Reproducible via `src/repro/repro_03_final_config.py`.
+
+### Why the blend works where the single book could not be protected
+
+§5.3's conclusion — "the risk cannot be diversified away" — was true **within one book** and is false **across engines**. The TimesFM crash is engine-specific: in 2020-04 / 2020-06 / 2021-01 the TimesFM short book lost −24.5% / −22.7% / −25.2% while the XGBoost book returned −4.6% / **+12.7%** / +0.3% (calendar 2020: XGB +7.1% vs TimesFM −50.5%). The drawdown mechanism (§5.1) is a TimesFM-signal-specific small-cap squeeze, not a property of the data. Engine diversification (corr 0.31) delivers what the ratchet delivered reactively — without time-varying exposure and without its return cost. The SPX sleeve cushions what remains: it is a constant beta hedge, always on (the EMA/momentum filters of §5.3 failed exactly because they de-grossed in market downturns).
+
+### Parameter-optimization disclosure (multiple-testing discipline)
+
+| Item | v1 (superseded) | v2 (final) |
+|---|---|---|
+| Tunable scalars | ~8 (buffer k; ratchet start/step/gate/floor/depth; SPX weight; book gross) | **2** (buffer k; book gross) |
+| Structural rules (not tuned) | — | engines 50/50 (symmetry); SPX weight = the beta≈0 anchor; ratchet dropped (ablation); no buffer on XGB (measured: hurts) |
+| Rejected experiments disclosed | size caps ×4, exclusions, 8-K veto, EMA ×3, SPX family ×4-5 | same, plus buffer-k grid ×6 and the ratio grids used in sizing |
+
+Sensitivity evidence (reproducible; all plateau-shaped except where noted):
+
+- **Buffer k (TimesFM book)**: Sharpe by k = 100→0.70, 500→0.85, 1000→0.88, **1500→1.02**, 2000→0.89, 2500→0.68. The earlier claim of robustness "across every parameter choice" does not hold — k=1500 is the in-sample argmax. Disclosed; its influence is halved inside the blend and the blend's dominance does not depend on it.
+- **Ratchet ablation (blend)**: Sharpe 1.80-1.84, maxDD −16.1% to −17.4% across start/step/gate/floor/depth settings and with the ratchet off → dropped.
+- **Blend weight** (at 1.2x book): 0.3 → Sh 1.87 / −12.0%; 0.5 → 1.83 / −16.8%; 0.7 → 1.68 / −23.1% — Sharpe plateau over 0.3-0.5; 0.5 picked by symmetry.
+- **Book gross**: monotone IR/DD trade-off, no interior peak — a stated policy pick, not an optimization.
+
+§6.1's discovery overlap still applies to the specification itself (chosen after seeing 2016-26 data). Mitigations: the blend's dominance replicates out-of-design-window (2018-20 quasi-OOS: blend Sharpe 0.99 vs 0.60 TFM-only / 0.86 XGB), all surviving knobs sit on plateaus, and this disclosure. Expect OOS degradation regardless.
 
 ### Rule compliance
 
-- Positions: 200 names (100/leg) + 1 index instrument — within the 100-500 count.
-- Gross exposure: nominal 150% design; realized average 139%, max 150% (≤200% cap).
-- Net exposure: +50% at every date (inside the band; explained as the deliberate low-beta long sleeve against the high-beta short book). Note the band edge month after month — the mandate warns this pattern itself can read as directional; see caveat below.
-- Realized beta: **+0.27 full window (se 0.08); +0.44 over the graded OOS 2021-26**. The earlier +0.14 figure could not be reproduced after the original ad-hoc script was lost (never committed); the reproducible number is the one above. A beta this far from zero is a material mandate risk: the organizers estimate realized beta themselves and treat materially-nonzero OOS beta as directional regardless of description.
-- Rebalancing: monthly.
+- Positions: ~389 names (372-400; two 100/leg books, ~11-name overlap) + 1 index instrument — within the 100-500 count.
+- Gross exposure: 145% constant (1.2x book + 0.25x SPX; static — no time-varying exposure to explain or predict).
+- Net exposure: +25% at every date — inside the band, off the edge.
+- Realized beta: **+0.09 full window (se 0.08); +0.24 OOS 21-26 (se 0.11)** — materially closer to zero than v1's +0.27/+0.44; the residual OOS beta is the deliberate low-beta long sleeve and is explained as such.
+- Rebalancing: monthly. Turnover/leg: TimesFM 22%/11%, XGB 56%/52% (blended ~39%/31%).
+- Conventions (pinned by reproduction, §7): the SPX sleeve earns the SPX price return; book legs are excess over the pipeline RF.
 
 ### Caveats specific to this configuration
 
-- The 0.5x SPX weight was selected on the full window; the family 0.25x-1.0x all improve Sharpe (1.37-1.62), so the choice is not knife-edge, but it is one more in-sample decision.
-- The overlay adds ~7%/yr of market exposure cost/benefit: in bull years it lifts returns, in bear years (2022) it drags — the +15.9% in 2022 is achieved *despite* the overlay, from the book itself.
-- The book at 1x gross earns roughly half the raw spread; the Sharpe improvement comes from the variance reduction being larger than the return reduction.
-- **Realized beta is materially positive (+0.27 full window, +0.44 OOS 21-26)** — the SPX sleeve does not fully offset the short book's high-beta short leg under the ratchet's time-varying scale. Before submission this needs either a re-balanced overlay weight (higher SPX, lower net) or an explicit explanation; as-is it is the single largest rule-compliance risk in the submission.
+1. **2016-17 coverage gap**: XGBoost cannot be backcast before 2018 (panel data starts 2015-02; the first foldable test year under the spec's structure is 2018). The 2016-10..2017-12 segment of the narrative remains TimesFM-only (§2-§5); the blend window is 2018-2026.
+2. **Backcast labeling**: the 2018 XGB fold trains on 11 target-months (thin); the 2019-20 folds are proper but those periods later serve as validation for the 2021-26 folds. The blend's dominance replicates in that segment (Sharpe 0.99 vs 0.60/0.86), but it is not OOS-pure on par with 2021-26.
+3. **In-sample decisions**: buffer k (a measured in-sample peak — disclosed above), book gross (policy pick), the SPX weight family, and the blend design itself. Expect OOS degradation (§6.1).
+4. The XGB short-leg composition (small-cap heavy) and its higher turnover (56%/52%) carry the same short-book realism scrutiny as §6.2.
+
+### Superseded v1 configuration (single-engine, for the record)
+
+TimesFM buffered book at 1x gross + 0.5x SPX (price return) + ratchet, 2016-10 → 2026-08: ann +21.8%, Sharpe 1.62, maxDD −24.1% (−21.2% in 2016-20; −6.5% in 2021-26), realized beta +0.27 (se 0.08) / +0.44 OOS, 83/119 months positive, worst month −8.9% (2021-01), cumulative 7.8x. Retired in favor of v2 on every metric — including the compliance-critical beta — with like-for-like numbers in the table above.

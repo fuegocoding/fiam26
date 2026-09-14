@@ -118,8 +118,10 @@ def monthly_sets(preds, buffer_k=None):
             long_sets[month] = set(names[:N_SIDE])
             short_sets[month] = set(names[n - N_SIDE:])
         else:
-            long_keep = [p for p in prev_long if pos.get(p, n) < buffer_k]
-            short_keep = [p for p in prev_short if n - 1 - pos.get(p, -1) < buffer_k]
+            long_keep = [p for p in prev_long if p in pos and pos[p] < buffer_k]
+            short_keep = [p for p in prev_short if p in pos and n - 1 - pos[p] < buffer_k]
+            long_keep = sorted(long_keep, key=lambda p: pos[p])[:N_SIDE]
+            short_keep = sorted(short_keep, key=lambda p: pos[p])[-N_SIDE:]
             fills_long = [p for p in names if p not in long_keep]
             fills_short = [p for p in reversed(names) if p not in short_keep]
             long_sets[month] = set(long_keep + fills_long[: N_SIDE - len(long_keep)])
