@@ -1,5 +1,21 @@
 # McGill FIAM Asset Management Hackathon 2026
 
+## Economic graph research (`src/graph/`, `docs/graph/`)
+
+All findings from the economic-graph, I/B/E/S expectation-gap, surprise-model, monthly-strategy and
+valuation experiments (September 2026) are summarized in [`docs/graph/research_log.md`](docs/graph/research_log.md),
+including what was rejected and why. Every model must follow the challenge walk-forward schedule in
+[`src/graph/walk_forward.py`](src/graph/walk_forward.py) (expanding training, rolling two-year validation, annual refit).
+
+```bash
+# Monthly point-in-time economic graph (config: configs/economic_graph.json)
+OPENBLAS_NUM_THREADS=1 python -m src.graph.business_text_profiles
+OPENBLAS_NUM_THREADS=1 python -m src.graph.economic_graph --config configs/economic_graph.json --save-candidates
+
+# I/B/E/S expectation state, analyst-error history, graph peer surprises and the walk-forward surprise model
+PYTHONPATH=.deps OPENBLAS_NUM_THREADS=4 python -m src.graph.expectations
+```
+
 ## Strategy memo
 
 This repository contains the starter data and reference scripts for the 2026 McGill FIAM Asset Management Hackathon. The recommendation below is a strategy design, not a reported backtest result. No performance numbers are invented here; they must be produced by the final reproducible pipeline.

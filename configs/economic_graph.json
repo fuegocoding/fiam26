@@ -1,0 +1,19 @@
+{
+  "weights": {"industry": 0.20, "business": 0.42, "fundamentals": 0.33, "events": 0.04, "returns": 0.01},
+  "n_neighbors": 15,
+  "return_window": 36,
+  "min_return_overlap": 12,
+  "min_fundamental_overlap": 3,
+  "fundamental_bandwidth": 1.0,
+  "winsor_quantile": 0.01,
+  "min_sector_observations": 20,
+  "characteristic_lag_months": 0,
+  "business_lookback_months": 60,
+  "event_lookback_months": 3,
+  "business_hash_dimensions": 512,
+  "event_hash_dimensions": 256,
+  "softmax_temperature": 0.08,
+  "candidate_pool_size": 75,
+  "component_candidate_pool_size": 25,
+  "block_size": 256
+}
