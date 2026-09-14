@@ -1,8 +1,10 @@
 """REPRO SCRIPT 3/3 - memo section 8: final competition configuration.
 
 FINAL CONFIG (v2, blend):
-  - Alpha book 1.2x gross = TimesFM buffered book (k=1500) at 0.6x gross
-    + XGBoost+TimesFM raw book at 0.6x gross (50/50 engine blend, corr 0.31)
+  - Alpha book 0.8x gross = TimesFM buffered book (k=1500) at 0.4x gross
+    (monthly rebalance) + XGBoost+TimesFM raw book at 0.4x gross in 3
+    staggered tranches (each tranche reconstituted every 3rd month from raw
+    ranks; every name held ~3 months -> ~15%/mo NAV turnover, industry range)
   - S&P 500 sleeve at 0.25x (structural beta anchor: both books' 1x beta ~ 0)
   - NO ratchet (ablation shows it is inert for the blend; static exposure)
   - Window 2018-01 .. 2026-08 (104 months). The XGBoost sleeve uses the
@@ -18,9 +20,9 @@ SPX (price return) + ratchet, 2016-10..2026-08. Printed for continuity; it
 matches the memo's previous section 8 exactly (ann +21.8%, Sharpe 1.62,
 maxDD -24.1%, worst 2021-01 -8.9%).
 
-Memo reference values for the v2 final (2018-2026, no ratchet):
-  ann +21.8%, CAGR +23.3%, Sharpe 1.82, IR 1.27, maxDD -17.4% (OOS -5.3%)
-  beta +0.09 full / +0.24 OOS | worst month 2021-01 -7.8%; 3 months < -5%; cum 6.1x.
+Memo reference values for the v2 final (2018-2026, no ratchet, T=3 tranches):
+  ann +21.8%-> see printed output; CAGR, Sharpe, IR, maxDD, beta, worst month
+  are recomputed with the tranche structure and must match the memo section 8.
 
 Artifacts: output/repro/final_config_monthly.csv, timesfm_final_equity_curve_repro.png
 """
@@ -35,8 +37,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from repro_lib import (book_returns, load_preds, max_drawdown, monthly_market,
-                       monthly_sets, perf_stats, ratchet_scales, turnover_per_leg,
-                       yearly_table)
+                       monthly_sets, ratchet_scales, staggered_sets,
+                       turnover_per_leg, yearly_table)
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "output"
@@ -106,8 +108,12 @@ def main():
     tfm = load_preds()
     xgb = load_xgb_full()
 
-    (rl_t, rs_t), lt, st = engine_legs(tfm, buffer_k=1500)      # TimesFM buffered
-    (rl_x, rs_x), lx, sx = engine_legs(xgb, buffer_k=None)     # XGB+TFM raw
+    (rl_t, rs_t), lt, st = engine_legs(tfm, buffer_k=1500)      # TimesFM buffered, monthly
+    lx, sx = staggered_sets(xgb, T=3)                          # XGB raw, 3 staggered tranches
+    port_x = book_returns(xgb, lx, sx)
+    idx_x = pd.PeriodIndex(port_x["target_month"], freq="M")
+    rl_x = pd.Series(port_x["ret_long"].values, index=idx_x)
+    rs_x = pd.Series(port_x["ret_short"].values, index=idx_x)
     ls_t = rl_t - rs_t
     ls_x = rl_x - rs_x
 
@@ -122,10 +128,10 @@ def main():
     ls_blend = 0.5 * (ls_t + ls_x)
     print(f"window {common[0]}..{common[-1]}: {len(common)} months\n")
 
-    # --- FINAL v2: blend 1.2x gross (0.6x per engine) + 0.25x SPX, no ratchet ---
-    ret_v2 = 0.6 * ls_blend + 0.25 * spx
+    # --- FINAL v2: blend 0.8x gross (0.4x per engine, XGB in 3 staggered tranches) + 0.25x SPX, no ratchet ---
+    ret_v2 = 0.4 * ls_blend + 0.25 * spx
     m2 = metrics(ret_v2, bench, mkt_rf)
-    print("--- FINAL v2: blend book 1.2x gross + 0.25x SPX, no ratchet ---")
+    print("--- FINAL v2: blend book 0.8x gross (T=3 XGB tranches) + 0.25x SPX, no ratchet ---")
     fmt("full window 2018-2026", m2)
     print(f"    memo v2 targets  : ann {MEMO_V2['ann']:+.1%} CAGR {MEMO_V2['cagr']:+.1%} "
           f"Sh {MEMO_V2['sharpe']:.2f} IR {MEMO_V2['ir']:.2f} mdd {MEMO_V2['maxdd']:.1%} "
@@ -151,7 +157,7 @@ def main():
     # same-window comparison for the memo
     m1_same = metrics(ret_v1.reindex(common).dropna(), bench, mkt_rf)
     print("\n--- like-for-like, both configs on 2018-2026 ---")
-    fmt("v2 blend 1.2x + 0.25x SPX", m2)
+    fmt("v2 blend 0.8x + 0.25x SPX", m2)
     fmt("v1 TFM-only 1.0x + 0.5x SPX", m1_same)
 
     yt = yearly_table(ret_v2, ret_v2.index)
@@ -166,7 +172,7 @@ def main():
     print(f"\ncompliance: positions avg {np.mean(total_names):.0f} (min {min(total_names)}, max {max(total_names)}), "
           f"engine overlap {np.mean(overlap):.0f}")
     print(f"turnover/leg: TimesFM buffered {to_tl:.0%}/{to_ts:.0%}, XGB raw {to_xl:.0%}/{to_xs:.0%}")
-    print("exposures: gross 145% constant (1.2x book + 0.25x SPX, static), net +25%, monthly rebalance")
+    print("exposures: gross 105% constant (0.8x book + 0.25x SPX, static), net +25%, monthly rebalance")
 
     out = pd.DataFrame({
         "ret_final_v2": ret_v2, "ls_tfm_buffered": ls_t, "ls_xgb_raw": ls_x,
@@ -196,7 +202,7 @@ def make_chart(ret_v1, ret_v2, ls_blend, mkt, common):
         2, 1, figsize=(14, 9), sharex=True,
         gridspec_kw={"height_ratios": [2, 1]})
     ax1.plot(x, v2, color="#1f77b4", lw=2.8,
-             label=f"FINAL v2: blend 1.2x gross + 0.25x SPX (Sh {metrics(ret_v2, mkt['benchmark'].reindex(common), mkt['mkt_rf'].reindex(common))['sharpe']:.2f}, maxDD {metrics(ret_v2, mkt['benchmark'].reindex(common), mkt['mkt_rf'].reindex(common))['maxdd']:.0%})")
+             label=f"FINAL v2: blend 0.8x gross (T=3) + 0.25x SPX (Sh {metrics(ret_v2, mkt['benchmark'].reindex(common), mkt['mkt_rf'].reindex(common))['sharpe']:.2f}, maxDD {metrics(ret_v2, mkt['benchmark'].reindex(common), mkt['mkt_rf'].reindex(common))['maxdd']:.0%})")
     ax1.plot(x, v1, color="#7f7f7f", lw=1.4,
              label="Superseded v1: TFM-only 1x gross + 0.5x SPX + ratchet")
     ax1.plot(x, raw, color="#7f7f7f", lw=0.9, ls="--", label="Blend book 1x gross (no overlay)")

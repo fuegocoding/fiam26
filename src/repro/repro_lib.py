@@ -154,6 +154,28 @@ def book_returns(preds, long_sets, short_sets):
     return port
 
 
+def staggered_sets(preds, T):
+    """Staggered-tranche book: 100 names per leg total, split into T tranches;
+    tranche c refreshes from raw ranks every T-th month, so each name is held
+    ~T months and only ~1/T of the book trades per month. Position count and
+    the 100-name-per-leg structure are unchanged."""
+    months = sorted(preds["target_month"].unique())
+    state = {c: (set(), set()) for c in range(T)}
+    long_sets, short_sets = {}, {}
+    per = N_SIDE // T
+    extra = N_SIDE - per * T
+    for i, month in enumerate(months):
+        g = preds[preds["target_month"] == month].sort_values("tfm_forecast", ascending=False)
+        names = list(g["permno"])
+        n = len(names)
+        c = i % T
+        k_leg = per + (1 if c < extra else 0)
+        state[c] = (set(names[:k_leg]), set(names[n - k_leg:]))
+        long_sets[month] = set().union(*[state[cc][0] for cc in range(T)])
+        short_sets[month] = set().union(*[state[cc][1] for cc in range(T)])
+    return long_sets, short_sets
+
+
 def turnover_per_leg(long_sets, short_sets):
     def rate(sets):
         months = sorted(sets)
