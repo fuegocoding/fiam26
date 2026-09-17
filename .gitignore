@@ -4,7 +4,12 @@ data/scoring/council_scores.db
 data/scoring/council_scores.db-*
 output/council_features.parquet
 output/preds_xgb_agentic.csv
+output/economic_graph_refined/
+output/business_text_evidence.parquet
+output/expectations/
+local/
 .env
+.deps/
 src/__pycache__/
 __pycache__/
 
