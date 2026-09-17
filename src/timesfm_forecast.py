@@ -3,14 +3,16 @@
 For every target month t in 2021-01..2026-08 we take the feature row at eom = t-1
 (the row whose ret_exc_lead1m IS the month-t return) and forecast it with
 TimesFM using only each stock's realized monthly excess-return history through
-month t-1. A realized return of month m lives in the row at eom = m-1, so the
-context for target month t is ret_exc_lead1m over rows with eom <= t-2. The
-future target never enters the context.
+month t-1. The current-month ret_exc is observed at that row's month-end;
+ret_exc_lead1m is the following month's outcome. Context uses a contiguous
+ret_exc history through t-1. The future target never enters context or determines
+forecast eligibility.
 
 Output: one row per (permno, eom) feature row with the TimesFM median forecast
 and the p10/p90 quantiles, joinable to the XGBoost predictions on (permno, eom).
 """
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -20,9 +22,8 @@ import pyarrow.parquet as pq
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
-OUT = ROOT / "output"
+OUT = ROOT / "output" / "timesfm_safe"
 PARTS = OUT / "timesfm_parts"
-PARTS.mkdir(parents=True, exist_ok=True)
 
 FIRST_TARGET = pd.Timestamp("2021-01-31")
 LAST_TARGET = pd.Timestamp("2026-08-31")
@@ -37,10 +38,16 @@ def load_returns(path=None):
     else:
         table = pq.read_table(
             RAW / "chars_final_with_names.parquet",
-            columns=["permno", "eom", "ret_exc_lead1m"],
+            columns=["permno", "eom", "ret_exc", "ret_exc_lead1m"],
         ).to_pandas()
     table["eom"] = pd.to_datetime(table["eom"])
-    return table.dropna(subset=["ret_exc_lead1m"])
+    if "ret_exc" not in table:
+        raise ValueError("Safe forecasting requires ret_exc (realized current-month returns) and the full formation universe; the old target-filtered returns_panel is unsuitable.")
+    if table.duplicated(["permno", "eom"]).any():
+        raise ValueError("Duplicate stock-months")
+    if "ret_exc_lead1m" not in table:
+        table["ret_exc_lead1m"] = np.nan
+    return table
 
 
 def target_months(returns, start, end):
@@ -57,15 +64,23 @@ def build_contexts(returns, feat_month, sample_permnos=None):
     feat = returns[returns["eom"] == feat_month]
     if sample_permnos is not None:
         feat = feat[feat["permno"].isin(sample_permnos)]
-    hist = returns[(returns["eom"] <= feat_month - pd.offsets.MonthEnd(1))]
+    hist = returns[returns["eom"] <= feat_month]
     hist = hist[hist["permno"].isin(set(feat["permno"]))].sort_values("eom")
-    grouped = {p: g for p, g in hist.groupby("permno", sort=False)["ret_exc_lead1m"]}
+    grouped = {p: g for p, g in hist.groupby("permno", sort=False)}
     contexts, keep = [], []
     for permno in feat["permno"].values:
-        series = grouped.get(permno)
-        if series is None or len(series) < MIN_CONTEXT:
+        stock = grouped.get(permno)
+        if stock is None:
             continue
-        contexts.append(series.to_numpy(dtype=np.float32))
+        calendar = pd.date_range(stock.eom.min(), feat_month, freq="ME")
+        series = stock.set_index("eom").ret_exc.reindex(calendar).to_numpy(dtype=np.float32)
+        # Forecast a regular contiguous suffix rather than compressing calendar gaps.
+        gaps = np.flatnonzero(~np.isfinite(series))
+        if len(gaps):
+            series = series[gaps[-1] + 1:]
+        if len(series) < MIN_CONTEXT:
+            continue
+        contexts.append(series)
         keep.append(permno)
     return feat[feat["permno"].isin(keep)], contexts
 
@@ -96,12 +111,27 @@ def main():
     ap.add_argument("--start", default=str(FIRST_TARGET.date()))
     ap.add_argument("--end", default=str(LAST_TARGET.date()))
     ap.add_argument("--batch", type=int, default=BATCH_SIZE)
-    ap.add_argument("--data", default=None, help="optional returns parquet (permno, eom, ret_exc_lead1m)")
+    ap.add_argument("--data", default=None, help="optional FULL returns parquet (permno, eom, ret_exc, optional ret_exc_lead1m)")
+    ap.add_argument("--output-dir", type=Path, default=OUT, help="Separate directory for forecasts with safe universe/calendar handling")
     args = ap.parse_args()
+    global PARTS
+    PARTS = args.output_dir / "timesfm_parts"
+    PARTS.mkdir(parents=True, exist_ok=True)
 
     start = pd.Timestamp(args.start)
     end = pd.Timestamp(args.end)
     returns = load_returns(args.data)
+    source = Path(args.data) if args.data else RAW / "chars_final_with_names.parquet"
+    policy = {"availability_version": 2, "source": str(source.resolve()),
+              "source_size": source.stat().st_size, "source_mtime_ns": source.stat().st_mtime_ns,
+              "checkpoint": CHECKPOINT, "sample": args.sample, "start": args.start, "end": args.end,
+              "future_target_independent_universe": True, "calendar_policy": "contiguous_realized_suffix"}
+    manifest = args.output_dir / "forecast_manifest.json"
+    if manifest.exists() and json.loads(manifest.read_text()) != policy:
+        raise ValueError("Forecast inputs/settings changed; use a new --output-dir rather than mixing cached parts.")
+    if not manifest.exists() and any(PARTS.glob("*.parquet")):
+        raise ValueError("Existing forecast parts have no safe availability manifest; use a new --output-dir.")
+    manifest.write_text(json.dumps(policy, indent=2) + "\n")
     print(
         f"returns panel: {len(returns):,} rows, {returns['permno'].nunique():,} permnos"
     )
@@ -144,7 +174,7 @@ def main():
     if all_parts:
         full = pd.concat(all_parts, ignore_index=True)
         suffix = "_sample" if args.sample else ""
-        path = OUT / f"preds_timesfm{suffix}.parquet"
+        path = args.output_dir / f"preds_timesfm{suffix}.parquet"
         full.to_parquet(path, index=False)
         print(f"saved {len(full):,} rows -> {path}")
 
