@@ -1,5 +1,20 @@
 # McGill FIAM Asset Management Hackathon 2026
 
+## Time-series experiment batch
+
+The [40-hypothesis menu](docs/research/time_series_search.md) implements resumable tests of return,
+fundamental, analyst and peer-information paths, risk sizing, and information-based exits.
+The [research interpretation](docs/research/time_series_results.md) connects them to the challenge and
+the team's prior findings. Combined numerical results are written to `output/time_series_batch/summary.md`.
+
+```bash
+OPENBLAS_NUM_THREADS=4 OMP_NUM_THREADS=4 python -u -m src.time_series_overnight --full-characteristics
+```
+
+This runs the 40-idea menu at three costs, nonlinear and full-147-characteristic controls, predictive
+attribution, and independent saved-holdings reconciliation. Stages run sequentially to limit memory.
+Cached TimesFM tests remain diagnostics until forecasts are regenerated with corrected universe timing.
+
 ## Economic graph research (`src/graph/`, `docs/graph/`)
 
 All findings from the economic-graph, I/B/E/S expectation-gap, surprise-model, monthly-strategy and

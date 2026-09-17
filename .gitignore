@@ -17,3 +17,8 @@ __pycache__/
 .agents/
 skills-lock.json
 .runpod/
+
+# Local time-series experiment caches and backtest outputs
+output/time_series_*/
+output/time_series_search
+output/timesfm_safe/
