@@ -89,10 +89,10 @@ diagnosed and structurally excluded in the final config (memo §8 data note).
 
 | Strategy | Ann. L/S | Sharpe | IR vs TB3MS+4% | Max DD | Beta | Alpha ann. (t) | Hit rate |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| XGBoost baseline (chars only) | +21.5% | 0.70 | 0.57 | −40.3% | +0.20 | +12.2% (1.09) | 66% |
+| XGBoost baseline (chars only, $1 floor) | +24.6% | 1.00 | 1.00 | −9.6% | +0.29 | +21.5% (2.57) | 57% |
 | TimesFM standalone, equal weight ($1 floor) | +22.1% | 0.96 | 0.79 | −22.0% | — | — | — |
 | TimesFM standalone, vol-scaled ($1 floor) | +19.0% | 0.82 | 0.65 | −21.6% | — | — | — |
-| **XGBoost + TimesFM features** | **+25.5%** | **0.72** | **0.61** | **−59.7%** | **−0.21** | **+20.5% (1.28)** | 63% |
+| **XGBoost + TimesFM features** (pre-floor) | **+25.5%** | **0.72** | **0.61** | **−59.7%** | **−0.21** | **+20.5% (1.28)** | 63% |
 
 Supporting detail (regenerated values):
 
