@@ -41,15 +41,17 @@ def build_portfolio(
         if spread_scaled:
             wl = 1.0 / top["tfm_spread"].clip(lower=1e-4)
             ws = 1.0 / bottom["tfm_spread"].clip(lower=1e-4)
-            ret_long = float(np.dot(wl / wl.sum(), top["ret_exc_lead1m"]))
-            ret_short = float(np.dot(ws / ws.sum(), bottom["ret_exc_lead1m"]))
+            ret_long = float(np.dot(wl / wl.sum(), top["ret_exc_lead1m"].fillna(0.0)))
+            ret_short = float(np.dot(ws / ws.sum(), bottom["ret_exc_lead1m"].fillna(0.0)))
         else:
-            ret_long = float(top["ret_exc_lead1m"].mean())
-            ret_short = float(bottom["ret_exc_lead1m"].mean())
+            ret_long = float(top["ret_exc_lead1m"].fillna(0.0).mean())
+            ret_short = float(bottom["ret_exc_lead1m"].fillna(0.0).mean())
         rows.append({
             "target_month": month,
             "n_long": len(top),
             "n_short": len(bottom),
+            "n_long_missing": int(top["ret_exc_lead1m"].isna().sum()),
+            "n_short_missing": int(bottom["ret_exc_lead1m"].isna().sum()),
             "ret_long": ret_long,
             "ret_short": ret_short,
         })
@@ -119,6 +121,8 @@ def main():
 
     y = oos["ret_exc_lead1m"].values
     yhat = oos["tfm_forecast"].values
+    has_y = ~np.isnan(y)
+    y, yhat = y[has_y], yhat[has_y]
     r2 = 1.0 - np.sum((y - yhat) ** 2) / np.sum(y ** 2)
     corr = np.corrcoef(y, yhat)[0, 1]
     print(f"OOS R2 (TimesFM zero-shot, zero benchmark): {r2:.5f}   corr: {corr:.5f}")

@@ -66,8 +66,10 @@ def main():
     all_features = features + TFM_FEATURES
     all_preds = []
     for i, (train_hi, val_lo, val_hi, test_lo, test_hi) in enumerate(backcast_folds(table)):
-        train = table[table["target_month"] <= train_hi]
-        val = table[(table["target_month"] >= val_lo) & (table["target_month"] <= val_hi)]
+        train = table[table["target_month"] <= train_hi].dropna(subset=["ret_exc_lead1m"])
+        val = table[(table["target_month"] >= val_lo) & (table["target_month"] <= val_hi)].dropna(
+            subset=["ret_exc_lead1m"]
+        )
         test = table[(table["target_month"] >= test_lo) & (table["target_month"] <= test_hi)]
         print(f"backcast fold {i}: train<={train_hi.date()} ({len(train):,}) "
               f"val {val_lo.date()}..{val_hi.date()} ({len(val):,}) "
@@ -78,8 +80,9 @@ def main():
         all_preds.append(out)
     preds = pd.concat(all_preds, ignore_index=True)
 
-    y = preds["ret_exc_lead1m"].values
-    yhat = preds["pred_xgb_tfm"].values
+    evaluated = preds.dropna(subset=["ret_exc_lead1m"])
+    y = evaluated["ret_exc_lead1m"].values
+    yhat = evaluated["pred_xgb_tfm"].values
     r2 = 1.0 - np.sum((y - yhat) ** 2) / np.sum(y ** 2)
     print(f"\nbackcast R2 (2018-2020, thin-train caveat): {r2:.5f}")
 

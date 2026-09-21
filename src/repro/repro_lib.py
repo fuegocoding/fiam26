@@ -133,7 +133,14 @@ def monthly_sets(preds, buffer_k=None):
 
 
 def book_returns(preds, long_sets, short_sets):
-    """Equal-weight leg returns per month from the chosen sets."""
+    """Equal-weight leg returns per month from the chosen sets.
+
+    Held names without a recorded forward return (delisting-bound; the panel
+    carries no delisting returns) are credited 0 excess return - the money
+    sits in cash - and counted in n_long/n_short. This keeps the prediction
+    universe independent of future outcomes while the P&L accounting stays
+    conservative and explicit.
+    """
     ret_by_month = {}
     for month, g in preds.groupby("target_month"):
         ret_by_month[month] = g.set_index("permno")["ret_exc_lead1m"]
@@ -144,10 +151,12 @@ def book_returns(preds, long_sets, short_sets):
         short_leg = r.reindex(sorted(short_sets[month]))
         rows.append({
             "target_month": month,
-            "n_long": long_leg.notna().sum(),
-            "n_short": short_leg.notna().sum(),
-            "ret_long": float(long_leg.mean()),
-            "ret_short": float(short_leg.mean()),
+            "n_long": len(long_sets[month]),
+            "n_short": len(short_sets[month]),
+            "n_long_missing": int(long_leg.isna().sum()),
+            "n_short_missing": int(short_leg.isna().sum()),
+            "ret_long": float(long_leg.fillna(0.0).mean()),
+            "ret_short": float(short_leg.fillna(0.0).mean()),
         })
     port = pd.DataFrame(rows)
     port["ret_ls"] = port["ret_long"] - port["ret_short"]

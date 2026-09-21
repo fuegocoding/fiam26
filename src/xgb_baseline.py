@@ -4,8 +4,14 @@ Spec: expanding window by TARGET month (ret_exc_lead1m). Train targets [Feb2015,
 validation [Jan(Y-2), Dec(Y-1)], test year Y for Y in 2021..2026 (last fold clipped to 08/2026).
 Features: the 147 characteristics from factor_char_list.csv, cross-sectionally rank-transformed
 to [-1, 1] within each characteristic month (NaN left as NaN; XGBoost handles missing natively).
+Universe policy (brief: target availability must not define the prediction universe): every row
+with characteristics is scored and is eligible for the book, regardless of whether the future
+target exists; train/validation folds use rows with targets only. Held names without a recorded
+forward return are credited 0 excess return (delisting returns are absent from the panel); a
+-30% haircut on those holdings is reported as a sensitivity.
 Portfolio: long top-100 / short bottom-100 by prediction, equal weights, dollar-neutral,
-monthly rebalanced; metrics per the competition definitions (IR vs TB3MS+4%).
+monthly rebalanced; metrics per the competition brief (IR on active returns =
+excess spread - 4%/12, collateral convention per src/comp_metrics.py).
 """
 from pathlib import Path
 
@@ -34,7 +40,7 @@ def load_model_table():
     cols = ["permno", "eom", "ret_exc_lead1m"] + features
     table = pq.read_table(chars_path, columns=cols).to_pandas()
     table["eom"] = pd.to_datetime(table["eom"])
-    table = table.dropna(subset=["ret_exc_lead1m"]).reset_index(drop=True)
+    table = table.reset_index(drop=True)
     table["target_month"] = table["eom"] + pd.offsets.MonthEnd(1)
     return table, features
 
@@ -116,7 +122,10 @@ def monthly_benchmark_rf():
     return tb[["month", "tb3ms_dec"]]
 
 
-def build_portfolio(preds):
+def build_portfolio(preds, missing_value=0.0):
+    """Equal-weight long/short book. Held names without a recorded forward return
+    are credited `missing_value` excess return (0.0 primary; -0.30 haircut
+    sensitivity). Missing counts are reported per month."""
     preds = preds.sort_values(["target_month", "permno"])
     rows = []
     long_sets = {}
@@ -133,8 +142,10 @@ def build_portfolio(preds):
             "target_month": month,
             "n_long": len(top),
             "n_short": len(bottom),
-            "ret_long": top["ret_exc_lead1m"].mean(),
-            "ret_short": bottom["ret_exc_lead1m"].mean(),
+            "n_long_missing": int(top["ret_exc_lead1m"].isna().sum()),
+            "n_short_missing": int(bottom["ret_exc_lead1m"].isna().sum()),
+            "ret_long": top["ret_exc_lead1m"].fillna(missing_value).mean(),
+            "ret_short": bottom["ret_exc_lead1m"].fillna(missing_value).mean(),
         })
         g2 = g.copy()
         try:
@@ -192,7 +203,9 @@ def evaluate(port, long_sets, short_sets):
     try:
         tb = monthly_benchmark()
         port = port.merge(tb[["month", "benchmark"]], on="month", how="left")
-        active = port["ret_ls"] - port["benchmark"]
+        # Brief convention: total return = excess spread + collateral at TB3MS;
+        # active = R_total - (TB3MS + 4%/12) = spread - 4%/12 (cash cancels).
+        active = port["ret_ls"] - 0.04 / 12.0
         res["ir_benchmark"] = (
             np.sqrt(12) * active.mean() / active.std(ddof=1)
         )
@@ -237,8 +250,10 @@ def main():
     folds = expanding_folds(table)
     all_preds = []
     for i, (train_hi, val_lo, val_hi, test_lo, test_hi) in enumerate(folds):
-        train = table[table["target_month"] <= train_hi]
-        val = table[(table["target_month"] >= val_lo) & (table["target_month"] <= val_hi)]
+        train = table[(table["target_month"] <= train_hi)].dropna(subset=["ret_exc_lead1m"])
+        val = table[(table["target_month"] >= val_lo) & (table["target_month"] <= val_hi)].dropna(
+            subset=["ret_exc_lead1m"]
+        )
         test = table[(table["target_month"] >= test_lo) & (table["target_month"] <= test_hi)]
         print(f"fold {i}: train<={train_hi.date()} ({len(train):,}) "
               f"val {val_lo.date()}..{val_hi.date()} ({len(val):,}) "
@@ -249,24 +264,31 @@ def main():
         all_preds.append(out)
     preds = pd.concat(all_preds, ignore_index=True)
 
-    y = preds["ret_exc_lead1m"].values
-    yhat = preds["pred_xgb"].values
+    evaluated = preds.dropna(subset=["ret_exc_lead1m"])
+    y = evaluated["ret_exc_lead1m"].values
+    yhat = evaluated["pred_xgb"].values
     r2 = 1.0 - np.sum((y - yhat) ** 2) / np.sum(y ** 2)
-    print(f"\nOOS R2 (XGBoost defaults, zero benchmark): {r2:.5f}")
-    preds["year"] = preds["target_month"].dt.year
-    for yr, g in preds.groupby("year"):
+    print(f"\nOOS R2 (XGBoost defaults, zero benchmark; {len(evaluated):,} scored rows with targets): {r2:.5f}")
+    evaluated["year"] = evaluated["target_month"].dt.year
+    for yr, g in evaluated.groupby("year"):
         gy, gyh = g["ret_exc_lead1m"].values, g["pred_xgb"].values
         r2y = 1.0 - np.sum((gy - gyh) ** 2) / np.sum(gy ** 2)
         print(f"  {yr}: R2 {r2y:.5f}  (n={len(g):,})")
 
     port, long_sets, short_sets = build_portfolio(preds)
     metrics = evaluate(port, long_sets, short_sets)
-    print("\n--- portfolio metrics (long top-100 / short bottom-100, equal weight) ---")
+    print("\n--- portfolio metrics (long top-100 / short bottom-100, equal weight, missing returns credited 0) ---")
     for k, v in metrics.items():
         if k in ("best_month", "worst_month"):
             print(f"{k}: {v['target_month'].date()} ret={v['ret_ls']:.4f}")
         else:
             print(f"{k}: {v}")
+
+    port_h, _, _ = build_portfolio(preds, missing_value=-0.30)
+    metrics_h = evaluate(port_h, long_sets, short_sets)
+    print("\n--- sensitivity: missing returns credited -30% (delisting haircut) ---")
+    for k in ("avg_monthly_ls", "ann_ls", "sharpe_ls", "ir_benchmark", "max_drawdown", "avg_turnover_long", "avg_turnover_short"):
+        print(f"{k}: {metrics_h[k]}")
 
     preds_out = preds[["permno", "eom", "target_month", "ret_exc_lead1m", "pred_xgb"]]
     preds_out.to_csv(OUT / "preds_xgb_default.csv", index=False)

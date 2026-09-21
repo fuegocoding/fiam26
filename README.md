@@ -13,7 +13,10 @@ OPENBLAS_NUM_THREADS=4 OMP_NUM_THREADS=4 python -u -m src.time_series_overnight 
 
 This runs the 40-idea menu at three costs, nonlinear and full-147-characteristic controls, predictive
 attribution, and independent saved-holdings reconciliation. Stages run sequentially to limit memory.
-Cached TimesFM tests remain diagnostics until forecasts are regenerated with corrected universe timing.
+TimesFM forecasts were regenerated on 2026-09 with the safe availability policy (full formation
+universe, independent of future targets): `output/preds_timesfm_all.parquet`, manifest and per-month
+parts under `output/timesfm_safe_v2/`. Tests that consumed the pre-regeneration cache must be
+re-scored before being cited as clean evidence.
 
 ## Economic graph research (`src/graph/`, `docs/graph/`)
 

@@ -170,44 +170,66 @@ The ratchet cuts max drawdown by a quarter (−64.5% → −40.9%), improves Sha
 - Data: `data/raw/chars_final_with_names.parquet`, 8-K corpus `data/raw/8k_20150101_20260831_identified.parquet`, FinBERT scores `output/finbert_scores.parquet`
 
 
-## 8. Final competition configuration v2: two-engine blend, beta-neutral SPX sleeve
+## 8. Final competition configuration v3: uniform-tranche two-engine blend, beta-neutral SPX sleeve
 
-The submitted configuration (supersedes the single-engine v1, kept below):
+The submitted configuration (re-frozen 2026-09-21 on the unconditioned pipeline; supersedes the
+buffered v2, whose k=1500 rank buffer remains disclosed below):
 
-1. **Alpha book at 0.8x gross, two engines blended 50/50**:
-   - TimesFM 3.0 book with the k=1500 rank buffer, at 0.4x gross (legs 0.2/0.2), rebalanced monthly;
-   - XGBoost (147 characteristics + TimesFM forecast features, default hyperparameters) raw book at 0.4x gross (legs 0.2/0.2) — no buffer (hysteresis hurts the tree book, see the disclosure below) — **split into 3 staggered tranches**: each tranche (~33 names/leg) is reconstituted from raw ranks every 3rd month, so every name is held ~3 months and only ~1/3 of the book trades in any month. The tranche cadence is the turnover control: portfolio turnover ~15%/month of NAV (one-sided), inside industry range, with no CAGR cost (T=1/2/3 comparison below).
-   - the two books correlate only **0.31** monthly; positions average 333 (267-387; tranche refreshes can temporarily overlap, explained in compliance). The DD reduction comes from engine diversification, not sizing.
-2. **SPX sleeve at 0.25x of capital**: a structural beta anchor, not timing. Both books' 1x beta ≈ 0 (TimesFM buffered +0.02, XGB raw −0.03), so the sleeve alone sets realized beta; the weight is picked by the rule "beta ≈ 0", not by return maximization.
-3. **No ratchet**: in the blend the drawdown-responsive ratchet is inert — with it, Sharpe 1.72 → 1.69 and maxDD unchanged (−7.7%); the blended book's drawdown never crosses the 10% gate, so the rule only costs the 0.5x-start ramp (−0.6pp CAGR) — because the 2020 cascade is absorbed by diversification: the XGB book was **positive in 2020 (+7.1%)** while the TimesFM book lost −50.5%. Dropping it removes 5 parameters and the mandate's time-varying-exposure disclosure obligation: exposures are static (gross 105%, net +25%) except the monthly rebalance. The book is deliberately sized at 0.8x: at equal Sharpe, larger gross only buys CAGR that an asset-management committee reads as implausible; 0.8x keeps every metric in institutional territory.
+1. **Alpha book at 0.8x gross, two engines blended 50/50, one shared turnover guard**:
+   - TimesFM 3.0 book at 0.4x gross (legs 0.2/0.2) in **3 staggered tranches**: each tranche (~33 names/leg) is reconstituted from raw ranks every 3rd month, so every name is held ~3 months and only ~1/3 of the book trades in any month;
+   - XGBoost (147 characteristics + TimesFM forecast features, default hyperparameters) raw book at 0.4x gross (legs 0.2/0.2), same T=3 cadence.
+   - **Uniform treatment (v3 change)**: both engines refresh in the same cadence, deleting the buffer-k parameter (an in-sample argmax, disclosed) and one mechanism class. Fresh evidence (sensitivity T4): performance-equivalent to the buffered v2 (blend IR 0.80 vs 0.79, OOS IR 1.02 vs 0.97, maxDD −12.4% vs −11.8%, both worst months = the disclosed 2026-08 anomaly); the adoption basis is the a-priori simplicity criterion, not OOS performance.
+   - the two books correlate **−0.07** monthly; positions average 284 (220-348; tranche refreshes can temporarily overlap, explained in compliance). The DD reduction comes from engine diversification and the tranche cadence, not sizing.
+2. **SPX sleeve at 0.25x of capital**: a structural beta anchor, not timing. Both books' 1x beta ≈ 0 (TimesFM tranches −0.03, XGB raw −0.03), so the sleeve alone sets realized beta; the weight is picked by the rule "beta ≈ 0", not by return maximization. **Rulebook basis for holding the index directly** (competition brief, p.17): *"Beyond the exposure limits above, you have no trading restrictions except rebalancing your portfolio"*, and external data is permitted with documentation (p.10: source description, cleaning code, dated joins). The sleeve is one instrument line on top of the ~284-name book — inside the 100-500 position count whether or not a judge counts it as a name. Accounting note: the FRED `SP500` series is a *price* index; a real holding (ETF/futures) earns total return ≈ price + ~1.5%/yr dividends, so the backtest is conservative on the sleeve. Source: FRED SP500, cached at `data/external/SP500.csv`, joined by month. Fallback if panel-only holdings are demanded: the `top100_cw` replica (`docs/spx_replication_audit.md`) — union count 412 avg / 463 max (compliant), corr 0.983 vs SPX, TE 3.0%/yr.
+3. **No ratchet**: in the blend the drawdown-responsive ratchet is inert — with it, Sharpe (raw) 1.49 → 1.48 and maxDD unchanged (−12.4%); the blended drawdown never crosses the 10% gate except the disclosed 2026-08 anomaly month, so the rule only costs the 0.5x-start ramp (~0.4pp CAGR) — the 2020 squeeze cascade is absorbed by the tranche cadence plus engine diversification (2020: TimesFM tranches −5.9%, XGB +52.8%; v2 buffered variant: TFM −42.4%, XGB +51.5%). Dropping it removes 5 parameters and the mandate's time-varying-exposure disclosure obligation: exposures are static (gross 105%, net +25%) except the monthly rebalance. The book is deliberately sized at 0.8x: at equal Sharpe, larger gross only buys CAGR that an asset-management committee reads as implausible; 0.8x keeps every metric in institutional territory.
+
+Reporting conventions (competition brief p.8-9): signed weights longs = shorts + 0.25 SPX on $1 capital
+(gross 105%, net +25%, both static and inside the limits); **stated cash/collateral convention: idle
+and short-collateral cash earns nothing** (conservative), so portfolio total return = 0.4x blend + 0.25x
+SPX; active return = total − (TB3MS + 4%/12); Sharpe is computed on portfolio returns in excess of
+TB3MS, per the brief, and never credits the risk-free leg.
 
 ### Performance, 2018-01 → 2026-08 (104 months; XGBoost backcast starts 2018)
 
+**Pipeline status 2026-09-21 — fully unconditioned, uniform tranches.** TimesFM forecasts regenerated
+from the full formation universe (§2.1 of `docs/timesfm_analysis.md`); the XGB engines retrained under
+the same rule: every row with characteristics is scored and book-eligible; train/validation use target
+rows only; held names without a recorded forward return are credited 0 excess (the panel carries no
+delisting returns).
+
 | Metric | Full window | OOS 2021-26 |
 |---|---:|---:|
-| Ann. return (arith) | **+15.7%** | +18.3% |
-| CAGR | **+16.5%** (3.7x) | +19.3% |
-| Sharpe | **1.72** | 1.85 |
-| IR vs TB3MS+4% | 0.99 | 1.11 |
-| Max drawdown | **−7.7%** | **−4.7%** |
-| Realized beta | +0.15 (se 0.05) | +0.27 (se 0.07) |
-| Regression alpha | +11.4%/yr (t 3.80) | +12.1%/yr |
-| Worst month / months < −5% | −4.9% (2019-03) / **0** | |
-| Hit rate | 68% | |
+| Ann. return (arith) | **+14.4%** | +17.9% |
+| CAGR | **+14.8%** (3.3x) | +18.8% |
+| Sharpe | **1.21** (excess of TB3MS) | 1.40 |
+| IR vs TB3MS+4% | 0.80 | 1.02 |
+| Max drawdown | **−12.4%** | **−12.4%** |
+| Realized beta | +0.18 (se 0.05) | +0.27 (se 0.05) |
+| Regression alpha | +12.4%/yr (t 3.89) | +15.1%/yr (t 3.56) |
+| Worst month / months < −5% | −11.9% (2026-08) / **2** (2022-06, 2026-08) | |
+| Hit rate | 74% | |
 
-Yearly detail (ann. return / Sharpe) — **every calendar year positive, including 2020 (+6.7%)**:
+**⚠ 2026-08 data anomaly (disclosed, not excluded).** The worst month is driven by a reversal
+melt-up in the smallest names in the final panel month: nano caps average **+15.0%** in
+target-month 2026-08 (7.3% of nano rows return >+50%) after averaging −14.1% the prior month,
+coinciding with the 2026 return-sourcing switch to Compustat noted in the data documentation. It
+whipsaws any junk-heavy short book (the raw XGB book −62.6% that month; the TimesFM tranche book
+−1.5%). Sensitivity excluding that month (67 OOS months): ann **+20.3%**, IR **1.42**, maxDD
+**−5.6%**, alpha +17.4%/yr (t 5.04). No earlier month is removed anywhere in this memo.
+
+Yearly detail (ann. return / Sharpe) — **every calendar year 2018-2025 positive, including 2020 (+13.8%)**:
 
 | Year | Ann. return | Sharpe |
 |---|---:|---:|
-| 2018 | +18.9% | 2.57 |
-| 2019 | +7.1% | 0.81 |
-| 2020 | +6.7% | 1.03 |
-| 2021 | +23.3% | 1.80 |
-| 2022 | +15.5% | 1.21 |
-| 2023 | +14.1% | 2.01 |
-| 2024 | +24.8% | 2.80 |
-| 2025 | +17.7% | 2.49 |
-| 2026 (8m) | +12.5% | 1.01 |
+| 2018 | +6.5% | 0.86 |
+| 2019 | +2.6% | 0.32 |
+| 2020 | +13.8% | 1.78 |
+| 2021 | +16.5% | 1.46 |
+| 2022 | +12.6% | 1.26 |
+| 2023 | +14.3% | 1.85 |
+| 2024 | +32.2% | 3.43 |
+| 2025 | +26.4% | 3.46 |
+| 2026 (8m) | −0.5% | −0.03 |
 
 ![Final equity curve v2](../output/repro/timesfm_final_equity_curve_repro.png)
 
@@ -234,26 +256,26 @@ v1 native-window (2016-10 → 2026-08) numbers as previously reported in this se
 | Structural rules (not tuned) | — | engines 50/50 (symmetry); SPX weight = the beta≈0 anchor; ratchet dropped (ablation); no buffer on XGB (measured: hurts); XGB tranche cadence T=3 (rule: lowest turnover with no CAGR loss) |
 | Rejected experiments disclosed | size caps ×4, exclusions, 8-K veto, EMA ×3, SPX family ×4-5 | same, plus buffer-k grid ×6, XGB-buffer grid ×7, ratio grids used in sizing, TFM cadence swap ×2 |
 
-Sensitivity evidence (reproducible; all plateau-shaped except where noted):
+Sensitivity evidence (regenerated 2026-09-21 on the fully unconditioned pipeline, `output/repro/repro_05_sensitivity_output.txt`; every row includes the disclosed 2026-08 anomaly month):
 
-- **Buffer k (TimesFM book)**: Sharpe by k = 100→0.70, 500→0.85, 1000→0.88, **1500→1.02**, 2000→0.89, 2500→0.68. The earlier claim of robustness "across every parameter choice" does not hold — k=1500 is the in-sample argmax. Disclosed; its influence is halved inside the blend and the blend's dominance does not depend on it.
-- **Buffer on the XGBoost book: tested, rejected.** Any k in 150-1000 costs the tree book Sharpe (1.37 → 1.28-1.30) and *worsens* its drawdown (−18.8% → −21.8% at k=300, −34% at k=600) because hysteresis holds stale losers; average turnover falls (56% → 41% at k=300) but max-month turnover is unchanged (~97-100%) — the tree signal wholesale-refreshes in spike months regardless of hysteresis. At the blended-portfolio level: IR 1.10 → 1.03, Sharpe 1.89 → 1.77, maxDD −11.0% → −12.6%, with the max-month churn untouched. Rejected: pays performance for an average-turnover reduction while leaving the max unchanged.
-- **XGB tranche cadence T (the turnover control)**: NAV turnover / CAGR / IR / Sharpe / maxDD by T = 1: 27%/mo, +16.5%, 1.10, 1.89, −11.0% · 2: 18%/mo, +16.1%, 0.95, 1.66, −7.6% · **3: 15%/mo, +16.5%, 0.99, 1.72, −7.7%**. T=3 is picked by the stated rule "lowest turnover with no CAGR loss"; it also improves the drawdown, at the disclosed IR cost (−0.11) vs monthly reconstitution. Turnover of the final book: ~15%/mo NAV one-sided (~1.8x/yr), max month ~28% — inside industry range for a monthly-rebalanced quant market-neutral book.
-- **TimesFM cadence swap (uniform-tranche treatment): tested, rejected — with one caveat worth recording.** Replacing the TFM rank buffer with the same T=3 staggered tranches used on the XGB book would give *uniform* implementation across both engines (one cadence rule, no buffer parameter — a structurally simpler, more symmetric story). The blend would earn CAGR +17.9% (vs +16.5%), IR 1.03 (vs 0.99), and a better graded window (OOS +22.2% / IR 1.29 vs +19.3% / 1.11). It was still rejected on the risk lens: maxDD −11.1% vs −7.7% and Sharpe 1.68 vs 1.72, because the two mechanisms match the two signal behaviors — TimesFM ranks are persistent, so hysteresis (hold winners through the squeeze cascade) is the right medicine, and forcing the book to partially re-enter fresh ranks mid-cascade deepens the TFM standalone maxDD (−64.5% → −71.1%). Uniformity was traded away deliberately for drawdown control; the two-engine design is explained as such rather than forced into symmetry.
-- **Ratchet ablation (blend, at the final config)**: no ratchet → Sh 1.72 / mdd −7.7%; with the ratchet (any variant: depth 1.5-2.5, gate 0.05-0.10, floor 0.3-0.5) → Sh 1.67-1.69 / mdd −7.7% (identical — the blended drawdown never crosses the 10% gate); the only effect is the 0.5x-start ramp costing ~0.6pp CAGR → dropped.
-- **Blend weight** (0.8x book, XGB T=3): 0.3 → Sh 1.59 / IR 0.90 / −8.9%; 0.5 → 1.72 / 0.99 / −7.7%; 0.7 → 1.66 / 0.98 / −9.9% — IR plateau over 0.5-0.7, best DD at 0.5; picked by symmetry.
-- **Book gross** (XGB T=3): 0.6x → CAGR +13.1% / IR 0.83 / −5.1% · 0.8x → +16.5% / 0.99 / −7.7% · 1.0x → +19.8% / 1.09 / −10.3% · 1.2x → +23.2% / 1.15 / −12.9% — monotone IR/DD trade-off, no interior peak — a stated policy pick, not an optimization.
+- **Buffer k (TimesFM standalone, 2016-2026)**: Sharpe raw→0.65, 500→0.75, 1000→0.99, **1500→1.04**, 2000→1.01, 2500→0.82 (maxDD −75.6% raw → −63.9% at k=1500; legs TO 69/48% → 22/10%). k=1500 is the in-sample argmax, disclosed; its influence is halved inside the blend.
+- **Buffer on the XGBoost book: no longer clearly harmful, still not adopted.** In the fixed pipeline the buffer grid is flat (raw Sh 0.55/−59.7%; k=150 → 0.56, 300 → 0.55, 600 → 0.34, 1000 → 0.60, 1500 → 0.49) — hysteresis neither reliably helps nor deepens the tree book's maxDD (the 2026-08 anomaly dominates it). It is still rejected: it does not improve Sharpe or drawdown while the max-month turnover stays ~95-98% until k=1500; the staggered tranches reduce the max-month churn instead.
+- **XGB tranche cadence T (the turnover control)**: NAV turnover / CAGR / IR / maxDD by T = 1: 27%/mo, +14.2%, 0.74, −10.4% · 2: 19%/mo, +14.7%, 0.77, −13.6% · **3: 15%/mo, +14.4%, 0.79, −11.8%**. T=3 is picked by the stated rule "lowest turnover with no CAGR loss"; max month ~29% — inside industry range.
+- **TimesFM cadence swap (uniform-tranche treatment): the old rejection does not replicate — adopted in v3.** With the fixed pipeline, giving both engines the same T=3 staggered tranches (one cadence rule, no buffer parameter) is performance-equivalent to the buffer: blend CAGR +14.8% (vs +14.4%), IR 0.80 (vs 0.79), OOS IR **1.02** (vs 0.97), maxDD −12.4% (vs −11.8% — both worst months are the same 2026-08 anomaly). Standalone full-window TFM: buffer Sharpe 1.04/−63.9% vs tranches 0.91/**−62.2%** — the buffer no longer protects the standalone drawdown either. The old rejection (maxDD −11.1% vs −7.7%) does not replicate. **Adopted in v3 (re-frozen 2026-09-21)** on the a-priori simplicity criterion — one cadence rule, no tuned buffer parameter (the k=1500 argmax was a disclosed multiple-testing liability) — with the buffered v2 retained and disclosed as the rejected alternative.
+- **Ratchet ablation (blend, at the final config)**: no ratchet → Sh 1.50 / mdd −11.8%; with the ratchet (any variant: depth 1.5-2.5, gate 0.05-0.10, floor 0.3-0.5) → Sh 1.46-1.49 / mdd −11.8% (identical — the blended drawdown never crosses the 10% gate except the disclosed anomaly month); the only effect is the 0.5x-start ramp costing ~0.3pp CAGR → dropped.
+- **Blend weight** (0.8x book, XGB T=3): 0.3 → IR 0.57 / −16.8%; 0.5 → 0.79 / −11.8%; 0.7 → 0.90 / −14.2% — IR rises toward the TFM engine; 0.5 keeps the best drawdown; picked by symmetry.
+- **Book gross** (XGB T=3): 0.6x → IR 0.63 / −8.7% · 0.8x → 0.79 / −11.8% · 1.0x → 0.88 / −14.9% · 1.2x → 0.94 / −18.0% — monotone IR/DD trade-off, no interior peak — a stated policy pick, not an optimization.
 
 §6.1's discovery overlap still applies to the specification itself (chosen after seeing 2016-26 data). Mitigations: the blend's dominance replicates out-of-design-window (2018-20 quasi-OOS: blend Sharpe 0.99 vs 0.60 TFM-only / 0.86 XGB), all surviving knobs sit on plateaus, and this disclosure. Expect OOS degradation regardless.
 
 ### Rule compliance
 
-- Positions: ~333 names (267-387; two 100/leg books with ~11-name overlap; tranche refreshes can temporarily overlap and lower the union — mechanical, explained) + 1 index instrument — within the 100-500 count.
+- Positions: ~284 names (220-348; two 100/leg books with ~10-name overlap; tranche refreshes can temporarily overlap and lower the union — mechanical, explained) + 1 index instrument — within the 100-500 count.
 - Gross exposure: 105% constant (0.8x book + 0.25x SPX; static — no time-varying exposure to explain or predict).
 - Net exposure: +25% at every date — inside the band, off the edge.
 - Realized beta: **+0.15 full window (se 0.05); +0.27 OOS 21-26 (se 0.07)** — the residual beta is the deliberate low-beta long sleeve and is explained as such.
 - Rebalancing: monthly (the TimesFM book rotates fully each month on buffer rules; one of the three XGB tranches reconstitutes each month — some holdings rebalance every month, satisfying the half-year requirement trivially).
-- Turnover: ~15%/month of NAV one-sided full-window (avg; max ~28%) — OOS 21-26: avg 14%/mo, max 24%, min 8% (blended legs: long 20%/29%, short 15%/34%). TimesFM legs 22%/11% (buffer), XGB legs 23%/23% (tranches, names held ~3 months). Industry range for a monthly-rebalanced quant market-neutral book.
+- Turnover: ~19%/month of NAV one-sided (both engines in T=3 tranches: TimesFM legs 27%/20%, XGB legs 23%/24%; max-month churn is *lower* than the buffered variant: 49%/45% vs 62%/46%). Industry range for a monthly-rebalanced quant market-neutral book.
 - Conventions (pinned by reproduction, §7): the SPX sleeve earns the SPX price return; book legs are excess over the pipeline RF.
 
 ### Caveats specific to this configuration
