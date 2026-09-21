@@ -233,6 +233,38 @@ Yearly detail (ann. return / Sharpe) — every calendar year 2018-2025 positive 
 | 2025 | +18.3% | 2.45 |
 | 2026 (8m) | +31.7% | 3.53 |
 
+### Size-cap decomposition (final config)
+
+Full-window decomposition of the book by CRSP size group (`src/size_cap_breakdown.py`;
+monthly table and per-cap metrics in `output/repro/v3_size_breakdown.csv` and
+`v3_size_cap_metrics.csv`; chart `v3_returns_by_cap.png`). Basket = the group's
+contribution divided by its weight, run standalone; ICC = monthly cross-sectional
+Spearman(forecast, next-month return) within the group, per engine.
+
+| Cap group | Gross share | Long / Short | Contribution | Basket ret / Sharpe / maxDD | ICC tfm / xgb | Turnover share |
+|---|---:|---|---:|---|---|---:|
+| Mega | 6.0% | 4.4% / 1.6% | +0.63pp/yr | +11.7% / +0.50 / −29.4% | −0.009 / +0.007 | 6.0% |
+| Large | 10.3% | 7.7% / 2.6% | +0.40pp/yr | +4.4% / +0.11 / −41.0% | −0.005 / +0.016 | 10.4% |
+| Small | 18.6% | 12.5% / 6.1% | +1.16pp/yr | +6.9% / +0.54 / −18.4% | +0.012 / +0.031 | 19.1% |
+| Micro | 38.0% | 18.0% / 20.0% | +1.27pp/yr | +3.7% / +0.38 / −19.6% | +0.031 / +0.034 | 39.3% |
+| **Nano** | **27.2%** | 7.4% / **19.8%** | **+10.49pp/yr** | **+43.0% / +1.35 / −56.3%** | **+0.100 / +0.078** | 25.2% |
+
+Reads:
+
+1. **The ICC gradient is the cleanest evidence of where the signal lives**: both engines'
+   cross-sectional IC rises monotonically into small caps (TimesFM −0.009 mega → +0.100
+   nano; XGB +0.007 → +0.078). No edge in large caps — consistent with
+   `docs/timesfm_alt_series_audit.md` and with why size caps destroyed performance while the
+   $1 *price* floor (tradeability) did not.
+2. **Where the risk concentrates**: the nano basket alone would draw down −56% run
+   standalone; in the actual book it is sized at 27% and the engines diversify it
+   (corr −0.07), which is why the blended config's maxDD is −11.0%.
+3. **Mega/large are liquidity ballast**: ~16% of notional contributing ~1pp/yr with
+   near-zero ICC — they keep the book in liquid, borrowable territory. Turnover by cap
+   mirrors weights (micro 39%, nano 25%); no bucket is a churn outlier. Net book gross
+   averages ~90% of the 1.0x construction because opposite-side engine overlaps (~10
+   names/month) net out at the book level.
+
 ![Final equity curve v3](../output/repro/timesfm_final_equity_curve_repro.png)
 
 *Top: growth of $1 (log) for the v3 blend vs the superseded v1 single-engine config, the raw 1x blend book, S&P 500, and the T-bill+4% benchmark. Bottom: v3 drawdown — the worst peak-to-trough episode is −11.0% (2019) with static exposures.*
