@@ -30,6 +30,9 @@ Artifacts: output/repro/final_config_monthly.csv, timesfm_final_equity_curve_rep
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -40,14 +43,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from repro_lib import (book_returns, load_preds, max_drawdown, monthly_market,
                        monthly_sets, ratchet_scales, staggered_sets,
                        turnover_per_leg, yearly_table)
+from xgb_baseline import apply_book_universe
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "output"
 REPRO_OUT = OUT / "repro"
 REPRO_OUT.mkdir(parents=True, exist_ok=True)
 
-MEMO_V2 = {"ann": 0.171, "cagr": 0.177, "sharpe": 1.45, "ir": 0.89, "maxdd": -0.156,
-           "beta": 0.16, "beta_oos": 0.28}
+MEMO_V2 = {"ann": 0.174, "cagr": 0.183, "sharpe": 1.79, "ir": 1.10, "maxdd": -0.110,
+           "beta": 0.18, "beta_oos": 0.24}
 
 
 def load_xgb_full():
@@ -55,6 +59,7 @@ def load_xgb_full():
     oos = pd.read_csv(OUT / "preds_xgb_timesfm.csv")
     xgb = pd.concat([back, oos], ignore_index=True)
     xgb["target_month"] = pd.to_datetime(xgb["target_month"])
+    xgb["eom"] = pd.to_datetime(xgb["eom"])
     return xgb.rename(columns={"pred_xgb_tfm": "tfm_forecast"})
 
 
@@ -108,6 +113,14 @@ def fmt(label, m):
 def main():
     tfm = load_preds()
     xgb = load_xgb_full()
+
+    prc = pd.read_parquet(ROOT / "data" / "raw" / "chars_final_with_names.parquet",
+                          columns=["permno", "eom", "prc"])
+    prc["eom"] = pd.to_datetime(prc["eom"])
+    tfm = tfm.merge(prc, on=["permno", "eom"], how="left", validate="many_to_one")
+    xgb = xgb.merge(prc, on=["permno", "eom"], how="left", validate="many_to_one")
+    tfm = apply_book_universe(tfm)     # point-in-time $1 share-price floor at formation
+    xgb = apply_book_universe(xgb)     # (both engines; training keeps the full panel)
 
     lt, st = staggered_sets(tfm, T=3)                          # TimesFM tranches (uniform cadence)
     port_t = book_returns(tfm, lt, st)

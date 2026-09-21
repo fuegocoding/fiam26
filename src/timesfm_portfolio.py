@@ -24,8 +24,11 @@ def build_portfolio(
     pred_col="tfm_forecast",
     screen_kwargs=None,
 ):
+    from xgb_baseline import apply_book_universe
+
     if screen_kwargs:
         preds = apply_investability_screen(preds, **screen_kwargs)
+    preds = apply_book_universe(preds)
     preds = preds.sort_values(["target_month", "permno"])
     rows = []
     long_sets = {}
@@ -93,6 +96,13 @@ def main():
     preds["eom"] = pd.to_datetime(preds["eom"])
     preds["target_month"] = pd.to_datetime(preds["target_month"])
     preds = preds.dropna(subset=["tfm_forecast"])
+    if "prc" not in preds.columns:
+        chars_p = pd.read_parquet(
+            ROOT / "data" / "raw" / "chars_final_with_names.parquet",
+            columns=["permno", "eom", "prc"],
+        )
+        chars_p["eom"] = pd.to_datetime(chars_p["eom"])
+        preds = preds.merge(chars_p, on=["permno", "eom"], how="left", validate="many_to_one")
     oos = preds[preds["target_month"] >= pd.Timestamp("2021-01-31")]
     screen_kwargs = {
         "min_me_percentile": args.min_me_percentile,

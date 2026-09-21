@@ -20,6 +20,18 @@ archived as `output/*_pre_conditioned.*`. The 2026-08 month is a disclosed data 
 (nano melt-up; see the strategy memo §8) and drives the large max-drawdown figures in both
 pipelines.
 
+## Update 2026-09-21 (b): $1 share-price floor adopted as the book universe
+
+The final config gates the book pool at a point-in-time share price of $1 at formation
+(`prc >= $1`, both legs, via `apply_book_universe` in `src/xgb_baseline.py` and the
+`min_price` option in `apply_investability_screen`). Rationale: standard institutional
+shortability bound (sub-$1 names have no borrow market) — a tradeability filter, not a size
+screen (company size stays unrestricted; the provider's data dictionary lists `prc` among
+sanctioned universe filters). The floor also structurally removes the 2026 Compustat-sourcing
+artifact (two zombie names produced the entire no-floor maxDD of −15.6%): with the floor, no
+OOS month falls below −5% and the config's maxDD is −11.0% (2019 episode). The no-floor
+variant is disclosed in the memo §8 data note. Training keeps the full supplied panel.
+
 ## Current implementation
 
 The existing TimesFM portfolio uses all eligible rows, ranks by forecast, and

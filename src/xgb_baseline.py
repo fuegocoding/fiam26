@@ -37,12 +37,25 @@ RANK_MIN, RANK_MAX = -1.0, 1.0
 def load_model_table():
     chars_path = RAW / "chars_final_with_names.parquet"
     features = list(pd.read_csv(RAW / "factor_char_list.csv")["variable"])
-    cols = ["permno", "eom", "ret_exc_lead1m"] + features
+    cols = ["permno", "eom", "ret_exc_lead1m", "prc"] + features
     table = pq.read_table(chars_path, columns=cols).to_pandas()
     table["eom"] = pd.to_datetime(table["eom"])
     table = table.reset_index(drop=True)
     table["target_month"] = table["eom"] + pd.offsets.MonthEnd(1)
     return table, features
+
+
+PRICE_FLOOR = 1.0
+
+
+def apply_book_universe(preds):
+    """Point-in-time share-price floor at formation (prc >= $1): the standard
+    institutional shortability bound, applied symmetrically to both legs of the
+    book universe. Training keeps the full supplied panel; the screen gates the
+    book pool only (documented in the strategy memo section 8)."""
+    from portfolio_constraints import apply_investability_screen
+
+    return apply_investability_screen(preds, min_price=PRICE_FLOOR)
 
 
 def rank_transform(table, features):
@@ -125,7 +138,9 @@ def monthly_benchmark_rf():
 def build_portfolio(preds, missing_value=0.0):
     """Equal-weight long/short book. Held names without a recorded forward return
     are credited `missing_value` excess return (0.0 primary; -0.30 haircut
-    sensitivity). Missing counts are reported per month."""
+    sensitivity). Missing counts are reported per month. The book pool is
+    filtered by the point-in-time $1 share-price floor."""
+    preds = apply_book_universe(preds)
     preds = preds.sort_values(["target_month", "permno"])
     rows = []
     long_sets = {}

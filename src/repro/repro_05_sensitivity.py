@@ -18,6 +18,9 @@ Runtime note: T1/T2 re-run the buffered set construction per k (the slow part).
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import numpy as np
 import pandas as pd
 
@@ -77,17 +80,27 @@ def fmt_blend(label, m):
 
 
 def main():
+    from xgb_baseline import apply_book_universe
+
     tfm = load_preds()
     xgbp = pd.read_csv(OUT / "preds_xgb_timesfm_backcast.csv")
     xgbo = pd.read_csv(OUT / "preds_xgb_timesfm.csv")
     for d in (xgbp, xgbo):
         d["target_month"] = pd.to_datetime(d["target_month"])
+        d["eom"] = pd.to_datetime(d["eom"])
     xgb = pd.concat([xgbp, xgbo], ignore_index=True).rename(
         columns={"pred_xgb_tfm": "tfm_forecast"})
+    prc = pd.read_parquet(ROOT / "data" / "raw" / "chars_final_with_names.parquet",
+                          columns=["permno", "eom", "prc"])
+    prc["eom"] = pd.to_datetime(prc["eom"])
+    tfm = tfm.merge(prc, on=["permno", "eom"], how="left", validate="many_to_one")
+    xgb = xgb.merge(prc, on=["permno", "eom"], how="left", validate="many_to_one")
+    tfm = apply_book_universe(tfm)   # point-in-time $1 share-price floor at formation
+    xgb = apply_book_universe(xgb)
     mkt = monthly_market()
 
-    # ---- final-config legs ----
-    lt_f, st_f = monthly_sets(tfm, buffer_k=1500)
+    # ---- final-config legs (v3: uniform T=3 tranches) ----
+    lt_f, st_f = staggered_sets(tfm, T=3)
     rl_t, rs_t = leg_series(tfm, lt_f, st_f)
     ls_t = rl_t - rs_t
     lx_f, sx_f = staggered_sets(xgb, T=3)

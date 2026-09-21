@@ -11,14 +11,18 @@ def apply_investability_screen(
     *,
     min_me_percentile: float | None = None,
     min_dolvol_percentile: float | None = None,
+    min_price: float | None = None,
     excluded_size_groups: Iterable[str] = (),
     date_column: str = "eom",
 ) -> pd.DataFrame:
     """Filter predictions using only contemporaneous size/liquidity fields.
 
     Percentiles are calculated within the characteristic month (`eom`) so the
-    screen is comparable through time and cannot use future returns. The screen
-    is opt-in; passing no thresholds and no exclusions returns a copy unchanged.
+    screen is comparable through time and cannot use future returns. `min_price`
+    applies a point-in-time share-price floor at formation (`prc` >= threshold):
+    the standard institutional shortability bound - sub-$1 names have no borrow
+    market and cannot be traded as shorts. The screen is opt-in; passing no
+    thresholds and no exclusions returns a copy unchanged.
     """
     thresholds = {
         "me": min_me_percentile,
@@ -34,6 +38,8 @@ def apply_investability_screen(
         required.append("me")
     if min_dolvol_percentile is not None:
         required.append("dolvol")
+    if min_price is not None:
+        required.append("prc")
     if excluded:
         required.append("size_grp")
     missing = sorted(set(required) - set(predictions.columns))
@@ -48,6 +54,8 @@ def apply_investability_screen(
     if min_dolvol_percentile is not None:
         dolvol_pct = out.groupby(date_column)["dolvol"].rank(pct=True, method="first")
         mask &= dolvol_pct >= min_dolvol_percentile
+    if min_price is not None:
+        mask &= out["prc"] >= min_price
     if excluded:
         mask &= ~out["size_grp"].astype(str).str.lower().isin(excluded)
     return out.loc[mask].copy()

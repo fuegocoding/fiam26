@@ -63,8 +63,9 @@ Validation of the regenerated file:
 - Manifest and per-month parts: `output/timesfm_safe_v2/`; combined file installed as `output/preds_timesfm_all.parquet`; the pre-regeneration cache archived as `output/preds_timesfm_all_pre_safe_conditioned.parquet`.
 
 Final-config impact: after the regeneration the XGB engines were retrained under the same
-unconditioned policy and the final config was re-frozen as **v3 (uniform T=3 tranches, both
-engines)**: OOS ann +17.9%, IR 1.02, maxDD −12.4% (details and the disclosed 2026-08 anomaly in
+unconditioned policy, the final config was re-frozen as **v3 (uniform T=3 tranches, both
+engines, 1.0x gross, $1 point-in-time price floor)**: OOS ann +21.3%, CAGR +22.9%, IR 1.45,
+maxDD −6.4%, no OOS month below −5% (details and the 2026 return-source artifact diagnosis in
 `docs/timesfm_strategy_memo.md` §8). The regeneration is compliance-critical (universe no longer
 future-conditioned), not performance-changing.
 
@@ -80,15 +81,17 @@ Long top-100 / short bottom-100 by prediction, equal weight, monthly rebalance, 
 
 **Regenerated 2026-09-21** from the safe forecast file and the unconditioned universe policy
 (every scored row is book-eligible; held names without a recorded forward return are credited
-0 excess; see §2.1 and `docs/timesfm_strategy_memo.md` §8 conventions). The **2026-08 month is
-contaminated by a data anomaly** — nano caps average +15.0% (7.3% >+50%) in the final panel
-month — which is inside every number below; excluding it is reported in the memo.
+0 excess; see §2.1 and `docs/timesfm_strategy_memo.md` §8 conventions). The TimesFM standalone
+books additionally apply the $1 share-price floor (final-config universe). The XGB rows predate
+the floor (their books still include sub-$1 names): the **2026-08 month is contaminated by a
+return-source artifact** (nano caps average +15.0%, 7.3% >+50%, in the final panel month) —
+diagnosed and structurally excluded in the final config (memo §8 data note).
 
 | Strategy | Ann. L/S | Sharpe | IR vs TB3MS+4% | Max DD | Beta | Alpha ann. (t) | Hit rate |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | XGBoost baseline (chars only) | +21.5% | 0.70 | 0.57 | −40.3% | +0.20 | +12.2% (1.09) | 66% |
-| TimesFM standalone, equal weight | +34.2% | 1.13 | 0.99 | −29.9% | −0.16 | — | 73% |
-| TimesFM standalone, vol-scaled | +31.3% | 1.02 | 0.89 | −32.4% | — | — | 73% |
+| TimesFM standalone, equal weight ($1 floor) | +22.1% | 0.96 | 0.79 | −22.0% | — | — | — |
+| TimesFM standalone, vol-scaled ($1 floor) | +19.0% | 0.82 | 0.65 | −21.6% | — | — | — |
 | **XGBoost + TimesFM features** | **+25.5%** | **0.72** | **0.61** | **−59.7%** | **−0.21** | **+20.5% (1.28)** | 63% |
 
 Supporting detail (regenerated values):
