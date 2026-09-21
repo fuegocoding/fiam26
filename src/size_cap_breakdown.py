@@ -158,6 +158,66 @@ def main():
         print(f"{g:8s} {share:6.1f}% {lo:6.1f}% {sh:6.1f}% "
               f"{c:+10.2f}pp {basket:+9.2f}% {to_share:9.1f}%")
 
+    # ------------------------------------------------- cap-group risk metrics
+    def group_basket_stats(g):
+        w = sel[f"w_{g}"].values
+        c = sel[f"contrib_{g}"].values
+        ok = w > 1e-9
+        if ok.sum() < 24:
+            return np.nan, np.nan, np.nan
+        b = c[ok] / w[ok]
+        sharpe = b.mean() / b.std(ddof=1) * np.sqrt(12) if b.std(ddof=1) > 0 else np.nan
+        cum = np.cumprod(1.0 + b)
+        mdd = float((cum / np.maximum.accumulate(cum) - 1.0).min())
+        return sharpe, mdd, float(np.mean(1 - ok))
+
+    print("\nper-cap risk metrics (book baskets, full window 2018-26):")
+    print(f"{'group':8s} {'basket Sharpe':>13s} {'basket maxDD':>12s} "
+          f"{'ICC tfm':>8s} {'ICC xgb':>8s}")
+    for g in GROUPS:
+        sharpe, mdd, _ = group_basket_stats(g)
+        print(f"{g:8s} {sharpe:+13.2f} {mdd:+12.1%}")
+
+    # ICC by cap group: monthly cross-sectional spearman(forecast, target)
+    # within each group, on the floored pools
+    panel["eom"] = panel["eom"]
+    def group_icc(preds, col):
+        d = preds.merge(panel[["permno", "eom", "size_grp"]],
+                        on=["permno", "eom"], how="left", validate="many_to_one")
+        d = d.dropna(subset=["size_grp", "ret_exc_lead1m"])
+        d["mm"] = d.eom.dt.to_period("M")
+        ics = d.groupby(["mm", "size_grp"]).apply(
+            lambda g: g[col].corr(g.ret_exc_lead1m, method="spearman")
+            if len(g) >= 30 else np.nan, include_groups=False)
+        return ics.groupby(level=1).mean()
+
+    icc_t = group_icc(tfm, "tfm_forecast")
+    icc_x = group_icc(xgb, "pred_xgb" if "pred_xgb" in xgb.columns else "tfm_forecast")
+    print(f"\nICC by cap group (monthly spearman, mean):")
+    for g in GROUPS:
+        print(f"{g:8s} tfm {icc_t.get(g, np.nan):+.3f}  xgb {icc_x.get(g, np.nan):+.3f}")
+
+    # persist summary
+    rows = []
+    for g in GROUPS:
+        sharpe, mdd, _ = group_basket_stats(g)
+        rows.append({
+            "group": g,
+            "gross_share": sel[f"w_{g}"].mean() / total_gross,
+            "long_share": sel[f"w_long_{g}"].mean() / total_gross,
+            "short_share": sel[f"w_short_{g}"].mean() / total_gross,
+            "contrib_ann_pp": sel[f"contrib_{g}"].mean() * 12 * 100,
+            "basket_ann": sel[f"contrib_{g}"].mean() * 12 / sel[f"w_{g}"].mean()
+            if sel[f"w_{g}"].mean() > 0 else np.nan,
+            "basket_sharpe": sharpe,
+            "basket_maxdd": mdd,
+            "turnover_share": sel[f"turn_{g}"].mean() / total_turn,
+            "icc_tfm": icc_t.get(g, np.nan),
+            "icc_xgb": icc_x.get(g, np.nan),
+        })
+    pd.DataFrame(rows).to_csv(OUTDIR / "v3_size_cap_metrics.csv", index=False)
+    print(f"saved: {OUTDIR / 'v3_size_cap_metrics.csv'}")
+
     # ---------------------------------------------------------------- chart
     mkt = monthly_market()
     idx = pd.PeriodIndex(sel.target_month, freq="M")
