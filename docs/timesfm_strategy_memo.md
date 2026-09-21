@@ -129,7 +129,7 @@ Because the crash cannot be predicted ex ante, the only effective protection is 
 
 The ratchet cuts max drawdown by a quarter (−64.5% → −40.9%), improves Sharpe in *both* sub-windows, and costs ~5.6%/yr of return — the insurance premium. It cannot prevent the first crash month (no reactive rule can); it prevents the cascade of consecutive loss months (2020's −9/−14/−5/−17/−15 sequence) from compounding.
 
-### Yearly performance with buffer + ratchet (final configuration)
+### Yearly performance with buffer + ratchet (v1-era standalone configuration; superseded by §8 v3)
 
 | Year | Ann. L/S | Sharpe |
 |---|---:|---:|
@@ -162,7 +162,7 @@ The ratchet cuts max drawdown by a quarter (−64.5% → −40.9%), improves Sha
   - `repro_lib.py` — shared primitives: rank-buffer book, ratchet sizing, FRED market data, metrics
   - `repro_01_base_and_buffer.py` — base k=100 and buffer k=1500 (§2, §3)
   - `repro_02_buffer_ratchet.py` — buffer + ratchet (§5.4)
-  - `repro_03_final_config.py` — §8 final config v2 (blend) + superseded v1 + equity curve; artifacts under `output/repro/`
+  - `repro_03_final_config.py` — §8 final config v3 (uniform-tranche blend) + superseded configs + equity curve; artifacts under `output/repro/`
   - `repro_05_sensitivity.py` — every disclosure table in §8 (buffer-k grids, XGB-buffer rejection, tranche cadence T, TFM cadence swap, ratchet ablation, blend weight, book gross)
 - XGBoost+TimesFM backcast folds 2018-2020 (§8 v2 extension): `src/xgb_timesfm_backcast.py` → `output/preds_xgb_timesfm_backcast.csv` (2018 thin-train, 2019-20 quasi-OOS; 2016-17 not foldable)
 - The reproduction pinned three previously unstated conventions: the ratchet de-gross mapping `exposure = max(0.3, 1 − 2×drawdown)` with month 1 at 0.5x; the SPX sleeve earning the SPX price return; the v1 ratchet scaling both sleeves. All §2-§5.4 and both §8 configs reproduce exactly from committed code, except the original §8 beta (+0.14, corrected to +0.27/+0.44 in the v1 record).
@@ -231,16 +231,16 @@ Yearly detail (ann. return / Sharpe) — **every calendar year 2018-2025 positiv
 | 2025 | +26.4% | 3.46 |
 | 2026 (8m) | −0.5% | −0.03 |
 
-![Final equity curve v2](../output/repro/timesfm_final_equity_curve_repro.png)
+![Final equity curve v3](../output/repro/timesfm_final_equity_curve_repro.png)
 
-*Top: growth of $1 (log) for the v2 blend vs the superseded v1 single-engine config, the raw 1x blend book, S&P 500, and the T-bill+4% benchmark. Bottom: v2 drawdown — the worst peak-to-trough episode is −7.7% with static exposures.*
+*Top: growth of $1 (log) for the v3 blend vs the superseded v1 single-engine config, the raw 1x blend book, S&P 500, and the T-bill+4% benchmark. Bottom: v3 drawdown — the worst peak-to-trough episode is −12.4% (the disclosed 2026-08 anomaly month) with static exposures.*
 
 ### Like-for-like vs the superseded v1 (both on 2018-2026)
 
 | Config | CAGR | Sharpe | IR | maxDD (OOS) | beta (OOS) | Worst | Months < −5% |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| **v2 blend 0.8x + 0.25x SPX (T=3 tranches)** | +16.5% | 1.72 | 0.99 | **−7.7%** (−4.7%) | +0.15 (+0.27) | −4.9% | 0 |
-| v1 TFM-only 1.0x + 0.5x SPX + ratchet | +22.8% | 1.59 | 1.11 | −24.1% (−6.5%) | +0.27 (+0.44) | −8.9% | 6 |
+| **v3 blend 0.8x + 0.25x SPX (uniform T=3 tranches)** | +14.8% | 1.49 | 0.80 | **−12.4%** (−12.4%) | +0.18 (+0.27) | −11.9% | 2 |
+| v1 TFM-only 1.0x + 0.5x SPX + ratchet | +25.0% | 1.45 | 1.06 | −19.1% (−10.7%) | +0.27 (+0.41) | −10.7% | 9 |
 
 v1 native-window (2016-10 → 2026-08) numbers as previously reported in this section: ann +21.8%, Sharpe 1.62, maxDD −24.1%, beta +0.27/+0.44, cumulative 7.8x. Reproducible via `src/repro/repro_03_final_config.py`.
 
@@ -250,7 +250,7 @@ v1 native-window (2016-10 → 2026-08) numbers as previously reported in this se
 
 ### Parameter-optimization disclosure (multiple-testing discipline)
 
-| Item | v1 (superseded) | v2 (final) |
+| Item | v1 (superseded) | v3 (final) |
 |---|---|---|
 | Tunable scalars | ~8 (buffer k; ratchet start/step/gate/floor/depth; SPX weight; book gross) | **2** (buffer k; book gross) |
 | Structural rules (not tuned) | — | engines 50/50 (symmetry); SPX weight = the beta≈0 anchor; ratchet dropped (ablation); no buffer on XGB (measured: hurts); XGB tranche cadence T=3 (rule: lowest turnover with no CAGR loss) |
@@ -262,7 +262,7 @@ Sensitivity evidence (regenerated 2026-09-21 on the fully unconditioned pipeline
 - **Buffer on the XGBoost book: no longer clearly harmful, still not adopted.** In the fixed pipeline the buffer grid is flat (raw Sh 0.55/−59.7%; k=150 → 0.56, 300 → 0.55, 600 → 0.34, 1000 → 0.60, 1500 → 0.49) — hysteresis neither reliably helps nor deepens the tree book's maxDD (the 2026-08 anomaly dominates it). It is still rejected: it does not improve Sharpe or drawdown while the max-month turnover stays ~95-98% until k=1500; the staggered tranches reduce the max-month churn instead.
 - **XGB tranche cadence T (the turnover control)**: NAV turnover / CAGR / IR / maxDD by T = 1: 27%/mo, +14.2%, 0.74, −10.4% · 2: 19%/mo, +14.7%, 0.77, −13.6% · **3: 15%/mo, +14.4%, 0.79, −11.8%**. T=3 is picked by the stated rule "lowest turnover with no CAGR loss"; max month ~29% — inside industry range.
 - **TimesFM cadence swap (uniform-tranche treatment): the old rejection does not replicate — adopted in v3.** With the fixed pipeline, giving both engines the same T=3 staggered tranches (one cadence rule, no buffer parameter) is performance-equivalent to the buffer: blend CAGR +14.8% (vs +14.4%), IR 0.80 (vs 0.79), OOS IR **1.02** (vs 0.97), maxDD −12.4% (vs −11.8% — both worst months are the same 2026-08 anomaly). Standalone full-window TFM: buffer Sharpe 1.04/−63.9% vs tranches 0.91/**−62.2%** — the buffer no longer protects the standalone drawdown either. The old rejection (maxDD −11.1% vs −7.7%) does not replicate. **Adopted in v3 (re-frozen 2026-09-21)** on the a-priori simplicity criterion — one cadence rule, no tuned buffer parameter (the k=1500 argmax was a disclosed multiple-testing liability) — with the buffered v2 retained and disclosed as the rejected alternative.
-- **Ratchet ablation (blend, at the final config)**: no ratchet → Sh 1.50 / mdd −11.8%; with the ratchet (any variant: depth 1.5-2.5, gate 0.05-0.10, floor 0.3-0.5) → Sh 1.46-1.49 / mdd −11.8% (identical — the blended drawdown never crosses the 10% gate except the disclosed anomaly month); the only effect is the 0.5x-start ramp costing ~0.3pp CAGR → dropped.
+- **Ratchet ablation (blend, at the final config)**: no ratchet → Sh 1.49 / mdd −12.4%; with the ratchet (any variant: depth 1.5-2.5, gate 0.05-0.10, floor 0.3-0.5) → Sh 1.46-1.48 / mdd −12.4% (identical — the blended drawdown never crosses the 10% gate except the disclosed anomaly month); the only effect is the 0.5x-start ramp costing ~0.4pp CAGR → dropped.
 - **Blend weight** (0.8x book, XGB T=3): 0.3 → IR 0.57 / −16.8%; 0.5 → 0.79 / −11.8%; 0.7 → 0.90 / −14.2% — IR rises toward the TFM engine; 0.5 keeps the best drawdown; picked by symmetry.
 - **Book gross** (XGB T=3): 0.6x → IR 0.63 / −8.7% · 0.8x → 0.79 / −11.8% · 1.0x → 0.88 / −14.9% · 1.2x → 0.94 / −18.0% — monotone IR/DD trade-off, no interior peak — a stated policy pick, not an optimization.
 
@@ -287,4 +287,4 @@ Sensitivity evidence (regenerated 2026-09-21 on the fully unconditioned pipeline
 
 ### Superseded v1 configuration (single-engine, for the record)
 
-TimesFM buffered book at 1x gross + 0.5x SPX (price return) + ratchet, 2016-10 → 2026-08: ann +21.8%, Sharpe 1.62, maxDD −24.1% (−21.2% in 2016-20; −6.5% in 2021-26), realized beta +0.27 (se 0.08) / +0.44 OOS, 83/119 months positive, worst month −8.9% (2021-01), cumulative 7.8x. Retired in favor of v2 on every metric — including the compliance-critical beta — with like-for-like numbers in the table above.
+TimesFM buffered book at 1x gross + 0.5x SPX (price return) + ratchet, 2016-10 → 2026-08: ann +21.8%, Sharpe 1.62, maxDD −24.1% (−21.2% in 2016-20; −6.5% in 2021-26), realized beta +0.27 (se 0.08) / +0.44 OOS, 83/119 months positive, worst month −8.9% (2021-01), cumulative 7.8x. Retired in favor of v3 on every metric — including the compliance-critical beta — with like-for-like numbers in the table above.
