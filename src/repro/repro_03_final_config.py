@@ -1,7 +1,7 @@
 """REPRO SCRIPT 3/3 - memo section 8: final competition configuration.
 
 FINAL CONFIG (v3, blend, uniform tranches; adopted 2026-09-21):
-  - Alpha book 0.8x gross, BOTH engines in 3 staggered tranches (uniform
+  - Alpha book 1.0x gross, BOTH engines in 3 staggered tranches (uniform
     turnover control, no rank-buffer parameter): TimesFM buffered book replaced
     by the T=3 tranche book (each tranche reconstituted every 3rd month from
     raw ranks; every name held ~3 months; ~15%/mo NAV turnover) at 0.4x gross
@@ -46,8 +46,8 @@ OUT = ROOT / "output"
 REPRO_OUT = OUT / "repro"
 REPRO_OUT.mkdir(parents=True, exist_ok=True)
 
-MEMO_V2 = {"ann": 0.144, "cagr": 0.148, "sharpe": 1.49, "ir": 0.80, "maxdd": -0.124,
-           "beta": 0.18, "beta_oos": 0.27}
+MEMO_V2 = {"ann": 0.171, "cagr": 0.177, "sharpe": 1.45, "ir": 0.89, "maxdd": -0.156,
+           "beta": 0.16, "beta_oos": 0.28}
 
 
 def load_xgb_full():
@@ -133,10 +133,10 @@ def main():
     ls_blend = 0.5 * (ls_t + ls_x)
     print(f"window {common[0]}..{common[-1]}: {len(common)} months\n")
 
-    # --- FINAL v3: blend 0.8x gross (0.4x per engine, both engines in 3 staggered tranches) + 0.25x SPX, no ratchet ---
-    ret_v2 = 0.4 * ls_blend + 0.25 * spx
+    # --- FINAL v3: blend 1.0x gross (0.5x per engine, both engines in 3 staggered tranches) + 0.25x SPX, no ratchet ---
+    ret_v2 = 0.5 * ls_blend + 0.25 * spx   # book gross policy 1.0x (risk appetite: low-20s CAGR)
     m2 = metrics(ret_v2, bench, mkt_rf)
-    print("--- FINAL v3: blend 0.8x gross, BOTH engines in T=3 staggered tranches + 0.25x SPX, no ratchet ---")
+    print("--- FINAL v3: blend 1.0x gross, BOTH engines in T=3 staggered tranches + 0.25x SPX, no ratchet ---")
     fmt("full window 2018-2026", m2)
     print(f"    memo v2 targets  : ann {MEMO_V2['ann']:+.1%} CAGR {MEMO_V2['cagr']:+.1%} "
           f"Sh {MEMO_V2['sharpe']:.2f} IR {MEMO_V2['ir']:.2f} mdd {MEMO_V2['maxdd']:.1%} "
@@ -162,7 +162,7 @@ def main():
     # same-window comparison for the memo
     m1_same = metrics(ret_v1.reindex(common).dropna(), bench, mkt_rf)
     print("\n--- like-for-like, both configs on 2018-2026 ---")
-    fmt("v3 blend 0.8x + 0.25x SPX", m2)
+    fmt("v3 blend 1.0x + 0.25x SPX", m2)
     fmt("v1 TFM-only 1.0x + 0.5x SPX", m1_same)
 
     yt = yearly_table(ret_v2, ret_v2.index)
@@ -177,7 +177,7 @@ def main():
     print(f"\ncompliance: positions avg {np.mean(total_names):.0f} (min {min(total_names)}, max {max(total_names)}), "
           f"engine overlap {np.mean(overlap):.0f}")
     print(f"turnover/leg: TimesFM tranches {to_tl:.0%}/{to_ts:.0%}, XGB tranches {to_xl:.0%}/{to_xs:.0%}")
-    print("exposures: gross 105% constant (0.8x book + 0.25x SPX, static), net +25%, monthly rebalance")
+    print("exposures: gross 125% constant (1.0x book + 0.25x SPX, static), net +25%, monthly rebalance")
 
     out = pd.DataFrame({
         "ret_final_v2": ret_v2, "ls_tfm_buffered": ls_t, "ls_xgb_raw": ls_x,
@@ -207,7 +207,7 @@ def make_chart(ret_v1, ret_v2, ls_blend, mkt, common):
         2, 1, figsize=(14, 9), sharex=True,
         gridspec_kw={"height_ratios": [2, 1]})
     ax1.plot(x, v2, color="#1f77b4", lw=2.8,
-             label=f"FINAL v3: blend 0.8x gross, uniform T=3 tranches + 0.25x SPX (Sh {metrics(ret_v2, mkt['benchmark'].reindex(common), mkt['mkt_rf'].reindex(common))['sharpe']:.2f}, maxDD {metrics(ret_v2, mkt['benchmark'].reindex(common), mkt['mkt_rf'].reindex(common))['maxdd']:.0%})")
+             label=f"FINAL v3: blend 1.0x gross, uniform T=3 tranches + 0.25x SPX (Sh {metrics(ret_v2, mkt['benchmark'].reindex(common), mkt['mkt_rf'].reindex(common))['sharpe']:.2f}, maxDD {metrics(ret_v2, mkt['benchmark'].reindex(common), mkt['mkt_rf'].reindex(common))['maxdd']:.0%})")
     ax1.plot(x, v1, color="#7f7f7f", lw=1.4,
              label="Superseded v1: TFM-only 1x gross + 0.5x SPX + ratchet")
     ax1.plot(x, raw, color="#7f7f7f", lw=0.9, ls="--", label="Blend book 1x gross (no overlay)")

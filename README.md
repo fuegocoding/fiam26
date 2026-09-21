@@ -41,10 +41,11 @@ This repository contains the starter data and reference scripts for the 2026 McG
 ## Recommended strategy: Evidence-Weighted Alpha
 
 **Current submission config: final v3** (re-frozen 2026-09-21; pipeline fully unconditioned) —
-TimesFM + XGBoost 50/50 blend, both engines in 3-month staggered tranches, + 0.25x SPX sleeve.
-Definition, performance table, conventions and disclosures: `docs/timesfm_strategy_memo.md` §8.
-Metrics accounting: `src/comp_metrics.py`. Superseded configs (v1 single-engine, v2 buffered) are
-retained in the memo as disclosed alternatives.
+TimesFM + XGBoost 50/50 blend, both engines in 3-month staggered tranches at 1.0x book gross
+(stated risk-appetite policy), + 0.25x SPX sleeve. Definition, performance table, conventions and
+disclosures: `docs/timesfm_strategy_memo.md` §8. Metrics accounting: `src/comp_metrics.py`.
+Superseded configs (v1 single-engine, v2 buffered, 0.8x-gross variant) are retained in the memo as
+disclosed alternatives.
 
 Build a market-neutral U.S. equity strategy whose alpha comes primarily from disciplined cross-sectional modeling of the 147 supplied characteristics, with 8-K disclosures used as a compact, point-in-time event overlay.
 
