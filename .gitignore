@@ -2,8 +2,12 @@ data/raw/*.parquet
 data/scrubbed/*.parquet
 data/scoring/council_scores.db
 data/scoring/council_scores.db-*
+data/scoring/jev_scores.db
+data/scoring/jev_scores.db-*
 output/council_features.parquet
+output/jev_features.parquet
 output/preds_xgb_agentic.csv
+output/preds_xgb_jev.csv
 output/economic_graph_refined/
 output/business_text_evidence.parquet
 output/expectations/

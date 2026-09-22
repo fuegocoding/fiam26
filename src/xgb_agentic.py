@@ -17,7 +17,7 @@ COUNCIL = OUT / "council_features.parquet"
 def main() -> None:
     if not COUNCIL.exists():
         raise FileNotFoundError(
-            f"missing {COUNCIL}; run python -m src.agentic.run_council first"
+            f"missing {COUNCIL}; run python -m src.agentic.archive_llm_council.run_council first"
         )
     table, base_features = load_model_table()
     council = pd.read_parquet(COUNCIL)

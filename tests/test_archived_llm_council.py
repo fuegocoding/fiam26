@@ -3,9 +3,9 @@ import unittest
 from types import SimpleNamespace
 
 from src.agentic.contracts import ROLE_NAMES, RedactedFiling
-from src.agentic.council import CouncilRunner
-from src.agentic.roles import build_role_messages
-from src.agentic.run_council import PROMPT_VERSION
+from src.agentic.archive_llm_council.council import CouncilRunner
+from src.agentic.archive_llm_council.roles import build_role_messages
+from src.agentic.archive_llm_council.run_council import PROMPT_VERSION
 from src.agentic.redaction import REDACTION_VERSION
 
 

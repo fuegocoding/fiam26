@@ -3,7 +3,7 @@ import unittest
 import pandas as pd
 
 from src.agentic.features import merge_council_features
-from src.agentic.run_council import filing_month_eom
+from src.agentic.filings import filing_month_eom
 
 
 class FeatureJoinTests(unittest.TestCase):

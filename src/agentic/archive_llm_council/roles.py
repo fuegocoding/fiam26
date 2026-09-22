@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from .contracts import ROLE_NAMES, RedactedFiling, verdict_schema_text
+from ..contracts import ROLE_NAMES, RedactedFiling, verdict_schema_text
 
 ROLE_PROMPTS = {
     "event_classifier": (

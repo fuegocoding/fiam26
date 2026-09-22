@@ -1,0 +1,70 @@
+"""Opt-in XGBoost evaluation with Jev System One stock-month features."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from agentic.features import merge_council_features
+from xgb_baseline import expanding_folds, evaluate, fit_fold, load_model_table, rank_transform
+
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / "output"
+JEV_FEATURES = OUT / "jev_features.parquet"
+
+
+def main() -> None:
+    if not JEV_FEATURES.exists():
+        raise FileNotFoundError(
+            f"missing {JEV_FEATURES}; run python -m src.agentic.run_jev first"
+        )
+    table, base_features = load_model_table()
+    jev = pd.read_parquet(JEV_FEATURES)
+    table, jev_features = merge_council_features(table, jev, prefix="jev_")
+    print(
+        f"model table: {len(table):,} rows, {len(base_features)} baseline features, "
+        f"{len(jev_features)} jev features"
+    )
+
+    transformed = rank_transform(table, base_features)
+    for feature in base_features:
+        table[feature] = transformed[feature].values
+    del transformed
+
+    all_features = base_features + jev_features
+    folds = expanding_folds(table)
+    all_preds = []
+    for i, (train_hi, val_lo, val_hi, test_lo, test_hi) in enumerate(folds):
+        train = table[table["target_month"] <= train_hi]
+        val = table[(table["target_month"] >= val_lo) & (table["target_month"] <= val_hi)]
+        test = table[(table["target_month"] >= test_lo) & (table["target_month"] <= test_hi)]
+        print(
+            f"fold {i}: train<={train_hi.date()} ({len(train):,}) "
+            f"val {val_lo.date()}..{val_hi.date()} ({len(val):,}) "
+            f"test {test_lo.date()}..{test_hi.date()} ({len(test):,})"
+        )
+        pred, _ = fit_fold(train, val, test, all_features)
+        output = test[["permno", "eom", "target_month", "ret_exc_lead1m"]].copy()
+        output["pred_xgb_jev"] = pred
+        all_preds.append(output)
+    preds = pd.concat(all_preds, ignore_index=True)
+    y = preds["ret_exc_lead1m"].to_numpy()
+    yhat = preds["pred_xgb_jev"].to_numpy()
+    r2 = 1.0 - np.sum((y - yhat) ** 2) / np.sum(y**2)
+    print(f"OOS R2 (XGBoost + Jev features): {r2:.5f}")
+
+    # Reuse the baseline portfolio mechanics without changing constraints.
+    portfolio_input = preds.rename(columns={"pred_xgb_jev": "pred_xgb"})
+    from xgb_baseline import build_portfolio
+
+    port, long_sets, short_sets = build_portfolio(portfolio_input)
+    metrics = evaluate(port, long_sets, short_sets)
+    print("--- XGBoost + Jev features: long top-100 / short bottom-100 ---")
+    for key, value in metrics.items():
+        print(f"{key}: {value}")
+    preds.to_csv(OUT / "preds_xgb_jev.csv", index=False)
+
+
+if __name__ == "__main__":
+    main()

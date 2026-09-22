@@ -191,38 +191,41 @@ Local data and rules should take precedence over generic examples. Useful extern
 - [FRED 3-Month Treasury Bill series (TB3MS)](https://fred.stlouisfed.org/series/TB3MS)
 - [8-K text-based strategy research](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3910451)
 
-## Opt-in strict pseudonymized council
+## Opt-in Jev event scorer (replaces the archived LLM council)
 
-The repository now includes a separate council feature factory under `src/agentic/`. It scores one filing at a time after a strict identity firewall removes issuer names, tickers, identifiers, URLs, sector/industry labels, and exact date cues. A stable keyed local identity map preserves the ability to join results back to `(permno, eom)`; the map and original identifiers are never sent to the model.
+Filings are scored with TypeSafe's Jev System One model (`jev-1.13`, pinned) through
+OpenRouter's TypeSafe-compatible endpoint (`POST .../api/v1/systemone`), one request per
+filing carrying 12 parallel questions (event Choice, materiality/surprise/forward-looking
+and cash-flow Scores, distress/direction/secondary Nouls). Answers are validated, encoded
+to numeric filing rows in code, cached in `data/scoring/jev_scores.db`, aggregated
+deterministically to `output/jev_features.parquet`, and evaluated through the opt-in
+`src/xgb_jev.py` branch. The scorer is a feature and audit layer, not a portfolio
+decision-maker. The previous 4-role chat-completions council is archived under
+`src/agentic/archive_llm_council/` (frozen at `council-v3`) for reference and ablations.
 
-Four independent roles receive the same redacted filing: event classifier, materiality analyst, Devil's Advocate, and evidence/audit checker. Their validated numeric verdicts are cached in `data/scoring/council_scores.db`, aggregated deterministically to `output/council_features.parquet`, and can be evaluated through the opt-in `src/xgb_agentic.py` branch. The council is a feature and audit layer, not a portfolio decision-maker.
+Strict redaction is unchanged: issuer names, tickers, identifiers, URLs, sector/industry
+labels, and exact date cues are masked before scoring, and a stable keyed local identity
+map preserves the `(permno, eom)` join without ever sending identifiers to the model.
 
-Availability follows the repository's monthly convention: filings dated in month `t` are aggregated at month-end `t` and predict the next-month target `t+1`. The council does not claim to support intramonth execution.
+Availability follows the repository's monthly convention: filings dated in month `t` are
+aggregated at month-end `t` and predict the next-month target `t+1`. The scorer does not
+claim to support intramonth execution.
 
-The LLM transport accepts any OpenAI-compatible Chat Completions endpoint:
+Configure the Jev endpoint (key is the OpenRouter key; model stays pinned):
 
 ```text
-LLM_API_KEY=...
-LLM_BASE_URL=https://provider.example/v1
-LLM_MODEL=provider-model-name
+JEV_API_KEY=(defaults to LLM_API_KEY)
+JEV_BASE_URL=https://openrouter.ai/api/v1/systemone
+JEV_MODEL=jev-1.13
 REDACTION_HMAC_KEY=a-local-secret-for-stable-opaque-ids
-LLM_TOOL_CALLING=0
 ```
 
-For a bounded pilot, set `LLM_TOOL_CALLING=1`. Agents can then call only the local
-`search_filing` and `get_filing_excerpt` tools against the already-redacted filing,
-with at most four calls per role. Use the cheap FinBERT uncertainty pre-ranking to
-control inference cost:
+Full competition scope is the default (every filing, idempotent cache). Pilot first:
 
 ```bash
-python -m src.agentic.run_council --top-uncertain 5000
+python -m src.agentic.run_jev --sample 20
+python -m src.agentic.run_jev --month 2021-01
+python src/xgb_jev.py
 ```
 
-Run a small pilot before a full scoring job:
-
-```bash
-python -m src.agentic.run_council --month 2021-01 --sample 20
-python src/xgb_agentic.py
-```
-
-The existing TimesFM, FinBERT, text-scoring, and baseline branches remain available independently. Compare characteristics-only, deterministic filing features, one council role, and the full council using the existing expanding time splits before retaining the council.
+The existing TimesFM, FinBERT, text-scoring, and baseline branches remain available independently. Compare characteristics-only, deterministic filing features, Jev single-question features, and the full Jev set using the existing expanding time splits before retaining the scorer.

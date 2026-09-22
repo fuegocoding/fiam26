@@ -21,6 +21,34 @@ def _configured(name: str, fallback: str) -> str:
     return value or fallback.strip()
 
 
+def jev_config():
+    """Return Jev System One settings (OpenRouter Decisions route).
+
+    Auth reuses the OpenRouter key already in ``.env``: ``JEV_API_KEY``
+    overrides, otherwise ``LLM_API_KEY``. Model is pinned to ``jev-1.13`` —
+    never the ``jev-latest`` alias — so tuned confidence thresholds cannot
+    shift under a release.
+    """
+    key = os.getenv("JEV_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+    if not key:
+        raise MissingAPIKeyError(
+            "no Jev API key set: fill JEV_API_KEY or LLM_API_KEY (OpenRouter key) in .env"
+        )
+    base_url = (
+        os.getenv("JEV_BASE_URL", "").strip()
+        or "https://openrouter.ai/api/v1/systemone"
+    )
+    return {
+        "api_key": key,
+        "model": os.getenv("JEV_MODEL", "").strip() or "jev-1.13",
+        "base_url": base_url,
+        "timeout_s": int(os.getenv("JEV_TIMEOUT_SECONDS", "").strip() or os.getenv("LLM_TIMEOUT_SECONDS", "120")),
+        "max_concurrency": int(
+            os.getenv("JEV_MAX_CONCURRENCY", "").strip() or os.getenv("LLM_MAX_CONCURRENCY", "8")
+        ),
+    }
+
+
 def llm_config():
     """Return provider-neutral settings with legacy aliases still supported."""
     provider = os.getenv("LLM_PROVIDER", "openrouter").lower().strip()

@@ -5,9 +5,14 @@ import pandas as pd
 
 
 def merge_council_features(
-    table: pd.DataFrame, council: pd.DataFrame
+    table: pd.DataFrame, council: pd.DataFrame, prefix: str = "council_"
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Left-join council columns while preserving the baseline panel exactly."""
+    """Left-join event-derived columns while preserving the baseline panel exactly.
+
+    ``prefix`` selects the feature namespace (``"council_"`` for the archived
+    LLM council, ``"jev_"`` for the Jev scorer) so both branches can share one
+    ablation table without column collisions.
+    """
     keys = ["permno", "eom"]
     for key in keys:
         if key not in table.columns or key not in council.columns:
@@ -21,7 +26,7 @@ def merge_council_features(
     feature_columns = sorted(
         column
         for column in council.columns
-        if column.startswith("council_") and column not in {"council_target"}
+        if column.startswith(prefix) and column not in {"council_target"}
     )
     merged = table.merge(council[keys + feature_columns], on=keys, how="left", validate="m:1")
     return merged, feature_columns

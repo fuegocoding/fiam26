@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 
 from src.agentic.aggregate import aggregate_verdicts
 from src.agentic.contracts import ROLE_NAMES
-from src.agentic.council import CouncilRunner
+from src.agentic.archive_llm_council.council import CouncilRunner
 from src.agentic.provider import CompatibleLLM, LLMConfig
 from src.agentic.prerank import select_uncertain_document_ids
 from src.agentic.redaction import REDACTION_VERSION, redact_filing

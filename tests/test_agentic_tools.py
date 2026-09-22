@@ -1,7 +1,7 @@
 import unittest
 
 from src.agentic.contracts import RedactedFiling
-from src.agentic.tools import RedactedFilingTools
+from src.agentic.archive_llm_council.tools import RedactedFilingTools
 
 
 class FilingToolsTests(unittest.TestCase):

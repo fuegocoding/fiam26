@@ -1,5 +1,11 @@
 # Strict Pseudonymized Agent Council Design
 
+> **Archived 2026-09-22 — superseded by the Jev scorer** (`src/agentic/run_jev.py`,
+> questions frozen as `jev-v1`, implementation in `src/agentic/jev_*.py`). The code below
+> is frozen at `council-v3` / `redaction-v2` under `src/agentic/archive_llm_council/`
+> and retained for reference and LLM-vs-Jev ablations. The redaction firewall,
+> availability convention, and aggregation semantics described here carry over unchanged.
+
 ## Goal
 
 Add an opt-in agentic feature factory beside the existing 8-K scorer, TimesFM branch, and XGBoost baseline. The factory converts each eligible filing into auditable, numeric stock-month features while keeping issuer identity outside the language model.

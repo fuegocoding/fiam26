@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from .contracts import AgentVerdict, ROLE_NAMES, RedactedFiling, validate_verdict
+from ..contracts import AgentVerdict, ROLE_NAMES, RedactedFiling, validate_verdict
 from .roles import build_role_messages
 from .tools import RedactedFilingTools, TOOL_SPECS
 
