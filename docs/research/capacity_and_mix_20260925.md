@@ -9,6 +9,10 @@
   names) keeps **14.6%/yr (Sharpe 1.68) under the tight limits and 18.8%/yr (Sharpe 2.28) under looser, prime-broker-style limits**,
   at $100m, against 20.2% (Sharpe 2.33) with no limits. Beta stays between −0.01 and 0.13 and alpha is significant in every case
   (t 3.5–5.4).
+- **The Sharpe above 2 depends on large nano/micro exposure.** The reported book holds about 57% of NAV (out of 173% gross) in
+  nano/micro names, and shorting them produces 54% of its gross P&L. Capping that group at 10–25% of NAV gives 10–11% a year and
+  Sharpe 1.3–1.4 under the loose limits (IR versus cash + 4% about 0.5–0.7), with alpha still significant (t 3.4–4.5). We treat
+  the uncapped numbers as an upper bound.
 - **A trailing-performance router adds nothing we can rely on.** At return level the best of ten variants added about 0.1–0.2
   Sharpe over equal weights (2.83–2.87 vs 2.70) while the worst lost up to 0.6 (2.07). After capacity limits the primary router is
   within about ±0.1 Sharpe of equal weights, and it tilts toward the borrow-dependent micro sleeves. We recommend fixed equal
@@ -188,6 +192,43 @@ Under the tight scenario the core collapses. The earlier single-book run at the 
 | $250m | 17.7% | 2.23 | 1.61 | 89% | 15.9% | 1.86 | 1.27 |
 | $500m | 16.3% | 2.12 | 1.47 | 83% | 15.3% | 1.87 | 1.25 |
 
+### Risk caps on the 8 equal-weight book ($100m)
+
+The grids above limit each name only by its own liquidity. These variants add caps on how much of the book can sit in volatile,
+thinly traded names (`risk_caps.csv`, `python -m src.capacity_mix.risk_caps`). Excess weight stays in cash.
+
+- **Per-name cap:** 2% (long) and 1.5% (short) of NAV.
+- **Volatility scaling:** weight × min(1, median stock volatility / stock volatility), volatility from `rvol_21d` annualised.
+- **Nano/micro budget:** gross nano+micro exposure limited to a share of NAV each month.
+- **Market-cap share:** longs at most 2% and shorts at most 1% of the company's market cap.
+
+| Variant | Nano/micro gross (% NAV) | C: ann. return | C: Sharpe | C: IR | A: ann. return | A: Sharpe | E: ann. return | E: Sharpe | C: alpha t |
+|---|---|---|---|---|---|---|---|---|---|
+| V0 as reported | 57% | 18.8% | 2.28 | 1.69 | 14.6% | 1.68 | 16.6% | 1.88 | 5.0 |
+| V1 per-name cap | 57% | 18.6% | 2.26 | 1.67 | 14.4% | 1.65 | 16.3% | 1.86 | 4.9 |
+| V2 + volatility scaling | 42% | 11.8% | 1.53 | 0.81 | 9.8% | 1.21 | 9.8% | 1.16 | 4.0 |
+| V3 + nano/micro ≤ 25% of NAV | 25% | 10.0% | 1.32 | 0.54 | 9.0% | 1.15 | 8.3% | 0.98 | 4.1 |
+| V4 + market-cap share caps | 25% | 10.0% | 1.32 | 0.53 | 8.9% | 1.15 | 8.3% | 0.99 | 4.1 |
+| V5 nano/micro ≤ 10% of NAV only | 10% | 11.3% | 1.41 | 0.71 | 10.8% | 1.37 | 10.0% | 1.17 | 4.5 |
+
+- The per-name and market-cap caps barely bind, because positions are already small (average 0.4% of NAV, maximum 2.5%).
+- Volatility scaling and the nano/micro budget do the work, because the alpha sits in the volatile, thinly traded names.
+- A per-tier limit is not a separate constraint: it is the nano/micro budget and participation rates a broker tier can support.
+
+### Sanity checks on the Sharpe (`python -m src.capacity_mix.sanity`)
+
+- **Diversification explains most of it.** The eight experts have a mean Sharpe of 0.95 and a mean pairwise correlation of 0.06,
+  which implies an equal-mix Sharpe of about 2.25; the measured return-level Sharpe is 2.70.
+- **By year (8 equal, net).** 2021: 37.2%, Sharpe 5.8. 2022: 19.0%, 2.4. 2023: 15.8%, 1.1 (worst month −5.0%). 2024: 27.6%, 3.5.
+  2025: 19.6%, 2.5. 2026 to August: 18.4%, 2.8. Positive every year; 2021 is extreme.
+- **Where the gross P&L comes from (25.9% a year at unit gross).** Shorts 15.9 points, longs 10.0. Nano/micro names 14.9,
+  small and larger 11.0. Under $5: 6.9; $5 and above: 19.0. Nano/micro shorts alone contribute 13.9 points (54%).
+- **Signal-lag test (gross).** Delaying every expert's holdings by 0, 1, 2 and 3 extra months gives 25.9%, 22.6%, 22.2% and
+  19.3% a year (Sharpe 3.08, 3.11, 3.05, 2.71). There is no cliff, which is expected because the sleeves hold for 3–12 months. It
+  is not evidence of look-ahead, but it does not rule it out.
+- **Selection noise.** The standard error of a 68-month Sharpe is 0.42. The best Sharpe expected from pure noise among 70, 190 and
+  465 tried ideas is 1.0, 1.15 and 1.27, so single-expert Sharpes of 1.5–1.8 are only 0.5–0.8 above that.
+
 ## Caveats
 
 - **Selection.** The seven sleeves were chosen after looking at the same 2021–2026 test years, and the router was tuned on the
@@ -211,6 +252,8 @@ Inputs required: `data/raw/chars_final_with_names.parquet`, the TimesFM and XGBo
 python -m pytest tests/test_capacity_mix.py
 python -m src.capacity_mix.routing     # fixed mixes, leave-one-out, router grid; writes CSVs and a git-ignored state file
 python -m src.capacity_mix.capacity    # A-G grid and fund-size sensitivity; writes capacity_grid.csv
+python -m src.capacity_mix.risk_caps   # per-name / volatility / nano-micro / market-cap caps; writes risk_caps.csv
+python -m src.capacity_mix.sanity      # yearly Sharpe, P&L breakdown, signal lag, selection noise; writes sanity_*.csv
 ```
 
 The seven sleeves' weights were produced by the sleeve builder and are shipped as `sleeve_weights.parquet`; regenerating them
@@ -218,8 +261,9 @@ needs `python -m src.edges.combined_book --scale 0.20 --sleeves e7_lm,e7_small_g
 
 ## Files
 
-- `src/capacity_mix/` — `common.py`, `routing.py`, `capacity.py`
-- `tests/test_capacity_mix.py`
+- `src/capacity_mix/` — `common.py`, `routing.py`, `capacity.py`, `risk_caps.py`, `sanity.py`
+- `tests/test_capacity_mix.py`, `tests/test_capacity_mix_risk_caps.py`
 - `docs/research/capacity_mix_20260925/` — `sleeve_weights.parquet`, `expert_stats.csv`, `expert_correlations.csv`,
-  `routing_returnlevel.csv`, `router_primary_mean_weights.csv`, `capacity_grid.csv`
+  `routing_returnlevel.csv`, `router_primary_mean_weights.csv`, `capacity_grid.csv`, `risk_caps.csv`, and
+  `sanity_yearly.csv`, `sanity_pnl_breakdown.csv`, `sanity_lag_placebo.csv`, `sanity_selection_noise.csv`, `sanity_diversification.csv`
 - Depends on the capacity engine: `src/capacity_constraints.py`, `src/capacity_backtest.py`, `src/large_mega_hedge.py`
