@@ -219,7 +219,9 @@ def main() -> None:
     predictions = predict(context)
     predictions.to_parquet(args.work_dir / "predictions.parquet", index=False)
     # Council hook: final/council will adjust final_score here.
-    portfolio, diagnostics = optimizer.optimize(predictions)
+    portfolio, diagnostics = optimizer.optimize(
+        predictions, context.panel_path
+    )
     config = optimizer.write(portfolio, diagnostics, args.work_dir)
     print(json.dumps(config, indent=2))
 

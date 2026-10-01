@@ -7,6 +7,12 @@ import pathlib
 import numpy as np
 import pandas as pd
 
+import risk
+
+_PANEL = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "data" / "raw" / "chars_final_with_names.parquet"
+)
 # Every dollar limit derives from NAV or a stock's ADV: change NAV to resize.
 NAV = 10_000_000.0
 GROSS = 1.00  # Long plus short notional over NAV.
@@ -48,9 +54,9 @@ def dollar_limits(nav: float = NAV) -> dict[str, float]:
 
 
 def optimize(
-    predictions: pd.DataFrame, nav: float = NAV
+    predictions: pd.DataFrame, panel_path: pathlib.Path, nav: float = NAV
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Builds each month's book from the final score.
+    """Builds each month's book from the final score, then applies risk rules.
 
     A holding absent from a month's predictions has already exited at its
     last price, so only names present that month can be kept.
@@ -58,6 +64,7 @@ def optimize(
     Args:
         predictions: One row per stock-month with return_month, permno,
             final_score, price, liquidity, sector, beta and labels.
+        panel_path: Characteristics panel holding the risk rules' history.
         nav: Net asset value that sets every dollar size.
 
     Returns:
@@ -65,12 +72,16 @@ def optimize(
     """
     frame = predictions.copy()
     frame["return_month"] = pd.to_datetime(frame.return_month).dt.to_period("M")
+    panel = pd.read_parquet(panel_path, columns=risk.PANEL_COLUMNS)
+    panel["eom"] = pd.to_datetime(panel.eom).dt.to_period("M")
+    scores = frame[["return_month", "permno", "final_score", "prc"]]
     previous: dict[int, float] = {}
     positions, diagnostics = [], []
     for month, current in frame.groupby("return_month", sort=True):
         prev_long = {p for p, w in previous.items() if w > 0}
         prev_short = {p for p, w in previous.items() if w < 0}
         weights, coverage = _book(current, nav, prev_long, prev_short)
+        weights, squeeze, rules = risk.protect(weights, month, panel, scores)
         attributes = current.set_index("permno")[_ATTRIBUTES]
         for permno, weight in weights.items():
             row = attributes.loc[permno]
@@ -91,6 +102,7 @@ def optimize(
                 "target_weight": weight,
                 "target_dollars": weight * nav,
                 "side": "long" if weight > 0 else "short",
+                **squeeze.loc[permno].to_dict(),
             })
         book = pd.Series(weights, dtype=float)
         sectors = attributes.sector.reindex(book.index)
@@ -110,6 +122,7 @@ def optimize(
             ),
             "turnover_nav": float(traded),
             **coverage,
+            **rules,
         })
         previous = weights
     return pd.DataFrame(positions), pd.DataFrame(diagnostics)
@@ -144,6 +157,21 @@ def write(
         "sector_neutral": SECTOR_NEUTRAL,
         "rank_buffer": BUFFER,
         "beta_neutral": BETA_NEUTRAL,
+        "risk": {
+            "peer_top_share": risk.PEER_TOP_SHARE,
+            "peer_scale": risk.PEER_SCALE,
+            "squeeze_move": risk.SQUEEZE_MOVE,
+            "max_short_multiple": risk.MAX_SHORT_MULTIPLE,
+            "runup_cap": risk.RUNUP_CAP,
+            "expected_shortfall_tail": risk.ES_TAIL,
+            "expected_shortfall_norm_months": risk.ES_NORM_MONTHS,
+            "expected_shortfall_tolerance": risk.ES_TOLERANCE,
+            "expected_shortfall_floor": risk.ES_FLOOR,
+            "edge_months": risk.EDGE_MONTHS,
+            "edge_tail": risk.EDGE_TAIL,
+            "edge_floor": risk.EDGE_FLOOR,
+            "edge_step": risk.EDGE_STEP,
+        },
         "months": int(portfolio.return_month.nunique()),
         "average_turnover_nav": float(diagnostics.turnover_nav.mean()),
         "average_net_exposure": float(diagnostics.net_exposure.mean()),
@@ -260,8 +288,14 @@ def main() -> None:
         "--output-dir", type=pathlib.Path,
         help="defaults to the folder of the predictions file",
     )
+    parser.add_argument(
+        "--panel", type=pathlib.Path, default=_PANEL,
+        help="characteristics panel read by the risk rules",
+    )
     args = parser.parse_args()
-    portfolio, diagnostics = optimize(pd.read_parquet(args.predictions))
+    portfolio, diagnostics = optimize(
+        pd.read_parquet(args.predictions), args.panel
+    )
     output_dir = args.output_dir or args.predictions.parent
     print(json.dumps(write(portfolio, diagnostics, output_dir), indent=2))
 
