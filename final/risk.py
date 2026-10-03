@@ -101,12 +101,15 @@ def protect(
     edge_t, edge_scale = _edge_throttle(scores, history, month)
     adjusted *= scale * edge_scale
 
-    table = pd.DataFrame({
-        "peer_squeeze_probability": probability.reindex(book.index),
-        "jump_1_in_100_months": _jump_level(history, shorts, formation)
-        .reindex(book.index),
-        "risk_multiplier": adjusted / book,
-    })
+    table = pd.DataFrame(
+        {
+            "peer_squeeze_probability": probability.reindex(book.index),
+            "jump_1_in_100_months": _jump_level(history, shorts, formation).reindex(
+                book.index
+            ),
+            "risk_multiplier": adjusted / book,
+        }
+    )
     summary = {
         "peer_flagged_shorts": int(flagged.sum()),
         "runup_capped_shorts": int(capped.sum()),
@@ -115,9 +118,7 @@ def protect(
         "risk_scale": scale,
         "edge_t": edge_t,
         "edge_scale": edge_scale,
-        "short_weight_in_flagged": float(
-            -adjusted[flagged[flagged].index].sum()
-        ),
+        "short_weight_in_flagged": float(-adjusted[flagged[flagged].index].sum()),
     }
     return adjusted.to_dict(), table, summary
 
@@ -161,8 +162,11 @@ def _peer_squeeze_probability(
         grouped = pooled.groupby(keys).ret
         stats = grouped.apply(lambda r: _squeeze_probability(r.to_numpy()))
         stats = stats[grouped.size() >= PEER_MIN_OBSERVATIONS]
-        lookup = (pd.MultiIndex.from_frame(current[keys]) if len(keys) > 1
-                  else pd.Index(current[keys[0]]))
+        lookup = (
+            pd.MultiIndex.from_frame(current[keys])
+            if len(keys) > 1
+            else pd.Index(current[keys[0]])
+        )
         found = pd.Series(stats.reindex(lookup).to_numpy(), index=now.index)
         probability = probability.fillna(found)
     return probability
@@ -170,11 +174,14 @@ def _peer_squeeze_probability(
 
 def _peer_keys(frame: pd.DataFrame) -> pd.DataFrame:
     gics = frame.gics.astype("string")
-    return pd.DataFrame({
-        "industry": gics.str[:6].fillna("na").to_numpy(),
-        "sector": gics.str[:2].fillna("na").to_numpy(),
-        "size": frame.size_grp.astype("string").fillna("na").to_numpy(),
-    }, index=frame.index)
+    return pd.DataFrame(
+        {
+            "industry": gics.str[:6].fillna("na").to_numpy(),
+            "sector": gics.str[:2].fillna("na").to_numpy(),
+            "size": frame.size_grp.astype("string").fillna("na").to_numpy(),
+        },
+        index=frame.index,
+    )
 
 
 def _squeeze_probability(returns: np.ndarray) -> float:
@@ -235,11 +242,11 @@ def _expected_shortfall(
         if len(series) < ES_MIN_MONTHS:
             return np.nan
         losses = np.sort(-series)[::-1]
-        return float(losses[:max(1, math.ceil(ES_TAIL * len(losses)))].mean())
+        return float(losses[: max(1, math.ceil(ES_TAIL * len(losses)))].mean())
 
     current = shortfall(pnl[-ES_WINDOW_MONTHS:])
     earlier = [
-        shortfall(pnl[max(0, len(pnl) - lag - ES_WINDOW_MONTHS):len(pnl) - lag])
+        shortfall(pnl[max(0, len(pnl) - lag - ES_WINDOW_MONTHS) : len(pnl) - lag])
         for lag in range(1, ES_NORM_MONTHS + 1)
     ]
     earlier = [value for value in earlier if np.isfinite(value)]
@@ -252,8 +259,7 @@ def _jump_level(
 ) -> pd.Series:
     """GEV 1-in-100-month level of each stock's largest daily return."""
     window = history.loc[
-        (history.eom > formation - GEV_WINDOW_MONTHS)
-        & history.permno.isin(permnos)
+        (history.eom > formation - GEV_WINDOW_MONTHS) & history.permno.isin(permnos)
     ].drop_duplicates(["eom", "permno"])
     maxima = window.pivot(index="eom", columns="permno", values="rmax1_21d")
     if maxima.empty:
@@ -266,8 +272,9 @@ def _jump_level(
     with np.errstate(divide="ignore", invalid="ignore"):
         b0 = values.sum(0) / count
         b1 = ((rank - 1) / (count - 1) * values).sum(0) / count
-        b2 = ((rank - 1) * (rank - 2) / ((count - 1) * (count - 2))
-              * values).sum(0) / count
+        b2 = ((rank - 1) * (rank - 2) / ((count - 1) * (count - 2)) * values).sum(
+            0
+        ) / count
         l2 = 2 * b1 - b0
         skew = np.clip((6 * b2 - 6 * b1 + b0) / l2, -0.5, 0.9)
         c = 2 / (3 + skew) - math.log(2) / math.log(3)

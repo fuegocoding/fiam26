@@ -7,6 +7,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 import xgboost as xgb
 
+import config
 from sleeves import base
 
 SEEDS = (0, 1, 2, 3)
@@ -14,9 +15,15 @@ FIRST_TRAIN_TARGET = pd.Timestamp("2015-02-01")
 # Heavily regularized: monthly returns are mostly noise, and the unregularized
 # default (learning rate 0.3) stopped at a single tree.
 PARAMS = {
-    "learning_rate": 0.02, "max_depth": 4, "min_child_weight": 500,
-    "subsample": 0.7, "colsample_bytree": 0.5, "reg_lambda": 10.0,
-    "n_estimators": 3000, "early_stopping_rounds": 200, "tree_method": "hist",
+    "learning_rate": 0.02,
+    "max_depth": 4,
+    "min_child_weight": 500,
+    "subsample": 0.7,
+    "colsample_bytree": 0.5,
+    "reg_lambda": 10.0,
+    "n_estimators": 3000,
+    "early_stopping_rounds": 200,
+    "tree_method": "hist",
     "eval_metric": "rmse",
 }
 
@@ -39,9 +46,7 @@ def build(context: base.Context) -> pathlib.Path:
     if output.exists():
         return output
     output.parent.mkdir(parents=True, exist_ok=True)
-    features = list(
-        pd.read_csv(context.data_dir / base.FACTOR_LIST_FILE)["variable"]
-    )
+    features = list(pd.read_csv(context.data_dir / config.FACTOR_LIST_FILE)["variable"])
     columns = ["permno", "eom", "ret_exc_lead1m", *features]
     table = pq.read_table(context.panel_path, columns=columns).to_pandas()
     table["eom"] = pd.to_datetime(table.eom)
@@ -49,26 +54,21 @@ def build(context: base.Context) -> pathlib.Path:
     table[features] = _rank_transform(table, features).astype("float32")
     table["target"] = table.groupby("eom").ret_exc_lead1m.rank(pct=True) - 0.5
     forecasts = []
-    for year in base.TEST_YEARS:
+    for year in config.TEST_YEARS:
         train, validation, test = _split(table, year)
         predictions = []
         for seed in SEEDS:
-            model = xgb.XGBRegressor(
-                random_state=seed, device=context.device, **PARAMS
-            )
+            model = xgb.XGBRegressor(random_state=seed, device=context.device, **PARAMS)
             model.fit(
                 train[features].values,
                 train.target.values,
-                eval_set=[
-                    (validation[features].values, validation.target.values)
-                ],
+                eval_set=[(validation[features].values, validation.target.values)],
                 verbose=False,
             )
             model.save_model(output.parent / f"model_{year}_seed{seed}.json")
             predictions.append(model.predict(test[features].values))
             print(
-                f"XGB rank {year} seed {seed}: best iteration"
-                f" {model.best_iteration}",
+                f"XGB rank {year} seed {seed}: best iteration {model.best_iteration}",
                 flush=True,
             )
         part = test[["permno", "eom", "target_month"]].copy()
@@ -93,7 +93,7 @@ def _split(
     test = table.loc[
         months.between(
             pd.Timestamp(f"{year}-01-01"),
-            min(pd.Timestamp(f"{year}-12-31"), base.LAST_TARGET),
+            min(pd.Timestamp(f"{year}-12-31"), config.LAST_TARGET),
         )
     ]
     return (

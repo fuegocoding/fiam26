@@ -1,13 +1,8 @@
 """I/B/E/S loaders and the point-in-time analyst expectation state."""
 
-import pathlib
-
 import pandas as pd
 
-CONSENSUS_FILE = "s365yejuuvprhila.csv.gz"
-PRICE_FILE = "lhn8sdwvp01ym0q7.csv.gz"
-SURPRISE_FILE = "b2tkpunzdr2n0s5t.csv.gz"
-LINK_FILE = "j2vz7zigsgxzab3h.csv.gz"
+import external
 
 _SNAPSHOT_TOLERANCE = pd.Timedelta(days=45)
 _TARGET_MAX_AGE = pd.Timedelta(days=120)
@@ -20,74 +15,54 @@ def month_end(values: pd.Series) -> pd.Series:
     return pd.to_datetime(values) + pd.offsets.MonthEnd(0)
 
 
-def load_link(ibes_dir: pathlib.Path) -> pd.DataFrame:
+def load_link() -> pd.DataFrame:
     """Dated ticker-permno links; the latest links in the extract stay open."""
-    link = pd.read_csv(ibes_dir / LINK_FILE, dtype={"TICKER": str})
+    link = external.read("ibes_link")
     link = link.dropna(subset=["PERMNO"])
     link = link[link.SCORE <= _MAX_LINK_SCORE].copy()
     link["permno"] = link.PERMNO.astype(int)
     link["sdate"] = pd.to_datetime(link.sdate)
     link["edate"] = pd.to_datetime(link.edate)
-    link.loc[link.edate >= link.edate.max(), "edate"] = pd.Timestamp(
-        "2099-12-31"
-    )
+    link.loc[link.edate >= link.edate.max(), "edate"] = pd.Timestamp("2099-12-31")
     return link[["TICKER", "permno", "sdate", "edate", "SCORE"]]
 
 
-def load_consensus(ibes_dir: pathlib.Path) -> pd.DataFrame:
+def load_consensus() -> pd.DataFrame:
     """US-dollar consensus rows from each ticker's last snapshot per month."""
-    columns = [
-        "TICKER", "STATPERS", "FPI", "FPEDATS", "NUMEST", "NUMUP", "NUMDOWN",
-        "MEDEST", "MEANEST", "STDEV", "ANNDATS_ACT", "USFIRM", "CURCODE",
-    ]
-    frame = pd.read_csv(
-        ibes_dir / CONSENSUS_FILE, usecols=columns, dtype={"TICKER": str}
-    )
+    frame = external.read("ibes_consensus")
     frame = frame[(frame.USFIRM == 1) & (frame.CURCODE == "USD")].drop(
         columns=["USFIRM", "CURCODE"]
     )
     for column in ("STATPERS", "FPEDATS", "ANNDATS_ACT"):
         frame[column] = pd.to_datetime(frame[column])
-    frame = frame.drop_duplicates(
-        ["TICKER", "STATPERS", "FPEDATS"], keep="last"
-    )
+    frame = frame.drop_duplicates(["TICKER", "STATPERS", "FPEDATS"], keep="last")
     frame["snap_month"] = frame.STATPERS.dt.to_period("M")
     last = frame.groupby(["TICKER", "snap_month"]).STATPERS.transform("max")
     return frame[frame.STATPERS == last].reset_index(drop=True)
 
 
-def load_prices(ibes_dir: pathlib.Path) -> pd.DataFrame:
+def load_prices() -> pd.DataFrame:
     """I/B/E/S share price of each snapshot, on the per-share EPS basis."""
-    frame = pd.read_csv(
-        ibes_dir / PRICE_FILE,
-        usecols=["TICKER", "STATPERS", "PRICE", "CURR_PRICE", "USFIRM"],
-        dtype={"TICKER": str},
-    )
-    frame = frame[
-        (frame.USFIRM == 1) & (frame.CURR_PRICE == "USD") & (frame.PRICE > 0)
-    ]
+    frame = external.read("ibes_price")
+    frame = frame[(frame.USFIRM == 1) & (frame.CURR_PRICE == "USD") & (frame.PRICE > 0)]
     frame["STATPERS"] = pd.to_datetime(frame.STATPERS)
     return frame.drop_duplicates(["TICKER", "STATPERS"], keep="last")[
         ["TICKER", "STATPERS", "PRICE"]
     ]
 
 
-def load_surprises(ibes_dir: pathlib.Path) -> pd.DataFrame:
+def load_surprises() -> pd.DataFrame:
     """Quarterly EPS actuals and surprises, one row per ticker and quarter."""
-    frame = pd.read_csv(ibes_dir / SURPRISE_FILE, dtype={"TICKER": str})
+    frame = external.read("ibes_surprise")
     frame = frame[
-        (frame.USFIRM == 1)
-        & (frame.MEASURE == "EPS")
-        & (frame.FISCALP == "QTR")
+        (frame.USFIRM == 1) & (frame.MEASURE == "EPS") & (frame.FISCALP == "QTR")
     ]
     frame = frame.dropna(subset=["actual", "surpmean", "anndats"]).copy()
     frame["fpe"] = month_end(
         pd.to_datetime(dict(year=frame.PYEAR, month=frame.PMON, day=1))
     )
     frame["anndats"] = pd.to_datetime(frame.anndats)
-    frame = frame.sort_values("anndats").drop_duplicates(
-        ["TICKER", "fpe"], keep="last"
-    )
+    frame = frame.sort_values("anndats").drop_duplicates(["TICKER", "fpe"], keep="last")
     frame = frame.sort_values(["TICKER", "anndats"])
     return frame[
         ["TICKER", "fpe", "anndats", "actual", "surpmean", "suescore"]
@@ -101,14 +76,10 @@ def attach_ticker(grid: pd.DataFrame, link: pd.DataFrame) -> pd.DataFrame:
     merged = merged.sort_values(
         ["permno", "eom", "SCORE", "sdate"], ascending=[True, True, True, False]
     )
-    return merged.drop_duplicates(["permno", "eom"])[
-        ["permno", "eom", "TICKER"]
-    ]
+    return merged.drop_duplicates(["permno", "eom"])[["permno", "eom", "TICKER"]]
 
 
-def build_expectation_state(
-    grid: pd.DataFrame, ibes_dir: pathlib.Path
-) -> pd.DataFrame:
+def build_expectation_state(grid: pd.DataFrame) -> pd.DataFrame:
     """Open-quarter consensus at each month-end plus its future surprise.
 
     Columns prefixed `target_` describe the later announcement of that
@@ -116,8 +87,8 @@ def build_expectation_state(
     """
     grid = grid[["permno", "eom"]].drop_duplicates().copy()
     grid["eom"] = month_end(grid.eom)
-    state = attach_ticker(grid, load_link(ibes_dir))
-    consensus = load_consensus(ibes_dir)
+    state = attach_ticker(grid, load_link())
+    consensus = load_consensus()
     snapshots = consensus[["TICKER", "STATPERS", "snap_month"]]
     snapshots = snapshots.drop_duplicates(["TICKER", "STATPERS"])
     state = _asof(state, snapshots, "STATPERS", _SNAPSHOT_TOLERANCE)
@@ -128,17 +99,17 @@ def build_expectation_state(
         how="inner",
     )
     state = _select_target_quarter(candidates)
-    state = state.merge(
-        load_prices(ibes_dir), on=["TICKER", "STATPERS"], how="inner"
-    )
-    targets = load_surprises(ibes_dir)[
+    state = state.merge(load_prices(), on=["TICKER", "STATPERS"], how="inner")
+    targets = load_surprises()[
         ["TICKER", "fpe", "anndats", "actual", "surpmean"]
-    ].rename(columns={
-        "fpe": "target_fpe",
-        "anndats": "target_ann",
-        "actual": "target_actual",
-        "surpmean": "target_surpmean",
-    })
+    ].rename(
+        columns={
+            "fpe": "target_fpe",
+            "anndats": "target_ann",
+            "actual": "target_actual",
+            "surpmean": "target_surpmean",
+        }
+    )
     state["target_fpe"] = month_end(state.FPEDATS).to_numpy()
     state = state.merge(targets, on=["TICKER", "target_fpe"], how="left")
     # A label counts only if released after t, within a plausible report lag.
@@ -151,8 +122,15 @@ def build_expectation_state(
         state.target_actual - state.target_surpmean
     ) / state.PRICE
     keep = [
-        "permno", "eom", "TICKER", "STATPERS", "FPEDATS", "PRICE",
-        "target_fpe", "target_ann", "target_surprise_p",
+        "permno",
+        "eom",
+        "TICKER",
+        "STATPERS",
+        "FPEDATS",
+        "PRICE",
+        "target_fpe",
+        "target_ann",
+        "target_surprise_p",
     ]
     return state[keep].sort_values(["permno", "eom"]).reset_index(drop=True)
 

@@ -11,8 +11,8 @@ import pandas as pd
 import pyarrow.parquet as pq
 import xgboost as xgb
 
-from sleeves import base
-from sleeves import ibes
+import config
+from sleeves import base, ibes
 
 XS_FILE = "xs_predictions.parquet"
 POOLED_FILE = "pooled_predictions.parquet"
@@ -25,15 +25,27 @@ FIRST_MONTH = pd.Timestamp("2018-01-31")
 N_FOLDS = 5
 RIDGE_LAMBDA = 10.0
 XS_TREES = {
-    "n_estimators": 400, "max_depth": 5, "learning_rate": 0.05,
-    "subsample": 0.8, "colsample_bytree": 0.8, "min_child_weight": 10,
-    "objective": "reg:absoluteerror", "tree_method": "hist", "nthread": 2,
+    "n_estimators": 400,
+    "max_depth": 5,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 10,
+    "objective": "reg:absoluteerror",
+    "tree_method": "hist",
+    "nthread": 2,
     "verbosity": 0,
 }
 POOLED_TREES = {
-    "n_estimators": 1500, "max_depth": 7, "learning_rate": 0.03,
-    "subsample": 0.8, "colsample_bytree": 0.8, "min_child_weight": 20,
-    "objective": "reg:absoluteerror", "tree_method": "hist", "verbosity": 0,
+    "n_estimators": 1500,
+    "max_depth": 7,
+    "learning_rate": 0.03,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 20,
+    "objective": "reg:absoluteerror",
+    "tree_method": "hist",
+    "verbosity": 0,
 }
 XS_WORKERS = 6
 POOLED_WORKERS = 3
@@ -44,68 +56,213 @@ MOE_MAX_ROWS = 250_000
 MOE_MIN_VARIANCE = 0.01
 
 LEVELS = {
-    "book": "be_me", "net_income": "ni_me", "sales": "sale_me",
-    "ocf": "ocf_me", "fcf": "fcf_me", "rnd": "rd_me",
-    "dividends": "div12m_me", "net_payout": "eqnpo_me", "debt": "debt_me",
+    "book": "be_me",
+    "net_income": "ni_me",
+    "sales": "sale_me",
+    "ocf": "ocf_me",
+    "fcf": "fcf_me",
+    "rnd": "rd_me",
+    "dividends": "div12m_me",
+    "net_payout": "eqnpo_me",
+    "debt": "debt_me",
     "net_debt": "netdebt_me",
 }
 RATIOS = [
-    "gp_at", "ebit_sale", "ni_be", "ope_be", "op_at", "cop_at", "ocf_at",
-    "niq_at", "niq_be", "sale_gr1", "sale_gr3", "saleq_gr1", "at_gr1",
-    "be_gr1a", "capx_gr1", "emp_gr1", "sale_emp_gr1", "niq_su", "saleq_su",
-    "ni_inc8q", "rd_sale", "rd5_at", "at_turnover", "tangibility", "cash_at",
-    "noa_at", "aliq_at", "at_be", "earnings_variability", "ni_ar1",
-    "ni_ivol", "ocfq_saleq_std", "f_score", "o_score", "qmj_prof",
-    "qmj_growth", "age", "dsale_dinv", "dsale_drec", "dgp_dsale",
-    "dsale_dsga", "oaccruals_at", "taccruals_at", "netis_at", "eqnetis_at",
-    "dbnetis_at", "niq_at_chg1", "niq_be_chg1", "ocf_at_chg1", "inv_gr1",
-    "noa_gr1a", "ppeinv_gr1a", "capex_abn", "debt_gr3", "ebit_bev",
-    "sale_bev", "opex_at", "pi_nix", "cop_atl1", "gp_atl1", "op_atl1",
+    "gp_at",
+    "ebit_sale",
+    "ni_be",
+    "ope_be",
+    "op_at",
+    "cop_at",
+    "ocf_at",
+    "niq_at",
+    "niq_be",
+    "sale_gr1",
+    "sale_gr3",
+    "saleq_gr1",
+    "at_gr1",
+    "be_gr1a",
+    "capx_gr1",
+    "emp_gr1",
+    "sale_emp_gr1",
+    "niq_su",
+    "saleq_su",
+    "ni_inc8q",
+    "rd_sale",
+    "rd5_at",
+    "at_turnover",
+    "tangibility",
+    "cash_at",
+    "noa_at",
+    "aliq_at",
+    "at_be",
+    "earnings_variability",
+    "ni_ar1",
+    "ni_ivol",
+    "ocfq_saleq_std",
+    "f_score",
+    "o_score",
+    "qmj_prof",
+    "qmj_growth",
+    "age",
+    "dsale_dinv",
+    "dsale_drec",
+    "dgp_dsale",
+    "dsale_dsga",
+    "oaccruals_at",
+    "taccruals_at",
+    "netis_at",
+    "eqnetis_at",
+    "dbnetis_at",
+    "niq_at_chg1",
+    "niq_be_chg1",
+    "ocf_at_chg1",
+    "inv_gr1",
+    "noa_gr1a",
+    "ppeinv_gr1a",
+    "capex_abn",
+    "debt_gr3",
+    "ebit_bev",
+    "sale_bev",
+    "opex_at",
+    "pi_nix",
+    "cop_atl1",
+    "gp_atl1",
+    "op_atl1",
     "ope_bel1",
 ]
 LEVEL_FEATURES = [f"{name}_lvl_at" for name in LEVELS] + [
-    "ebitda_lvl_at", "book_ev_lvl_at", "iv_lvl_at", "fwd_earn_lvl_at",
+    "ebitda_lvl_at",
+    "book_ev_lvl_at",
+    "iv_lvl_at",
+    "fwd_earn_lvl_at",
 ]
 FLAGS = ["has_analyst", "loss"]
 FEATURES = LEVEL_FEATURES + ["analyst_growth", "log_at"] + RATIOS + FLAGS
 GATE_TRAITS = [
-    "net_income_lvl_at", "loss", "op_at", "gp_at", "sale_gr1", "sale_gr3",
-    "analyst_growth", "rd_sale", "tangibility", "at_be", "debt_lvl_at",
-    "cash_at", "earnings_variability", "log_at", "dividends_lvl_at",
-    "fwd_earn_lvl_at", "book_lvl_at", "has_analyst",
+    "net_income_lvl_at",
+    "loss",
+    "op_at",
+    "gp_at",
+    "sale_gr1",
+    "sale_gr3",
+    "analyst_growth",
+    "rd_sale",
+    "tangibility",
+    "at_be",
+    "debt_lvl_at",
+    "cash_at",
+    "earnings_variability",
+    "log_at",
+    "dividends_lvl_at",
+    "fwd_earn_lvl_at",
+    "book_lvl_at",
+    "has_analyst",
 ]
 ANCHORS = ["a_book", "a_fwd", "a_sales", "a_ebitda", "a_assets"]
 BG_LEVELS = [
-    "book", "net_income", "sales", "ocf", "fcf", "rnd", "dividends", "debt",
-    "net_debt", "ebitda",
+    "book",
+    "net_income",
+    "sales",
+    "ocf",
+    "fcf",
+    "rnd",
+    "dividends",
+    "debt",
+    "net_debt",
+    "ebitda",
 ]
 THEORY = {
-    "financials": (("40",), [
-        "book_lvl_at", "net_income_lvl_at", "dividends_lvl_at",
-        "fwd_earn_lvl_at", "ni_be", "niq_be", "at_be",
-        "earnings_variability", "log_at", "iv_lvl_at", "has_analyst", "loss",
-    ]),
-    "utilities_real_estate": (("55", "60"), [
-        "net_income_lvl_at", "book_lvl_at", "dividends_lvl_at", "ocf_lvl_at",
-        "fwd_earn_lvl_at", "debt_lvl_at", "net_debt_lvl_at", "at_be",
-        "log_at", "iv_lvl_at", "has_analyst", "loss",
-    ]),
-    "growth": (("45", "50", "35"), [
-        "sales_lvl_at", "gp_at", "ebit_sale", "sale_gr1", "sale_gr3",
-        "saleq_gr1", "analyst_growth", "rnd_lvl_at", "rd5_at",
-        "fwd_earn_lvl_at", "ocf_lvl_at", "cash_at", "log_at", "has_analyst",
-        "loss",
-    ]),
-    "cyclical": (("10", "15", "20"), [
-        "ebitda_lvl_at", "ocf_lvl_at", "fcf_lvl_at", "book_lvl_at",
-        "net_debt_lvl_at", "ebit_sale", "sale_gr1", "tangibility",
-        "at_turnover", "fwd_earn_lvl_at", "log_at", "has_analyst", "loss",
-    ]),
-    "consumer": (("25", "30"), [
-        "net_income_lvl_at", "fwd_earn_lvl_at", "ocf_lvl_at", "sales_lvl_at",
-        "gp_at", "ebit_sale", "sale_gr1", "dividends_lvl_at",
-        "net_debt_lvl_at", "at_turnover", "log_at", "has_analyst", "loss",
-    ]),
+    "financials": (
+        ("40",),
+        [
+            "book_lvl_at",
+            "net_income_lvl_at",
+            "dividends_lvl_at",
+            "fwd_earn_lvl_at",
+            "ni_be",
+            "niq_be",
+            "at_be",
+            "earnings_variability",
+            "log_at",
+            "iv_lvl_at",
+            "has_analyst",
+            "loss",
+        ],
+    ),
+    "utilities_real_estate": (
+        ("55", "60"),
+        [
+            "net_income_lvl_at",
+            "book_lvl_at",
+            "dividends_lvl_at",
+            "ocf_lvl_at",
+            "fwd_earn_lvl_at",
+            "debt_lvl_at",
+            "net_debt_lvl_at",
+            "at_be",
+            "log_at",
+            "iv_lvl_at",
+            "has_analyst",
+            "loss",
+        ],
+    ),
+    "growth": (
+        ("45", "50", "35"),
+        [
+            "sales_lvl_at",
+            "gp_at",
+            "ebit_sale",
+            "sale_gr1",
+            "sale_gr3",
+            "saleq_gr1",
+            "analyst_growth",
+            "rnd_lvl_at",
+            "rd5_at",
+            "fwd_earn_lvl_at",
+            "ocf_lvl_at",
+            "cash_at",
+            "log_at",
+            "has_analyst",
+            "loss",
+        ],
+    ),
+    "cyclical": (
+        ("10", "15", "20"),
+        [
+            "ebitda_lvl_at",
+            "ocf_lvl_at",
+            "fcf_lvl_at",
+            "book_lvl_at",
+            "net_debt_lvl_at",
+            "ebit_sale",
+            "sale_gr1",
+            "tangibility",
+            "at_turnover",
+            "fwd_earn_lvl_at",
+            "log_at",
+            "has_analyst",
+            "loss",
+        ],
+    ),
+    "consumer": (
+        ("25", "30"),
+        [
+            "net_income_lvl_at",
+            "fwd_earn_lvl_at",
+            "ocf_lvl_at",
+            "sales_lvl_at",
+            "gp_at",
+            "ebit_sale",
+            "sale_gr1",
+            "dividends_lvl_at",
+            "net_debt_lvl_at",
+            "at_turnover",
+            "log_at",
+            "has_analyst",
+            "loss",
+        ],
+    ),
 }
 
 # Forked workers read the panel from here instead of pickling it per task.
@@ -132,7 +289,7 @@ def build(context: base.Context) -> pathlib.Path:
         warnings.simplefilter("ignore", RuntimeWarning)
         warnings.simplefilter("ignore", FutureWarning)
         _SHARED["device"] = context.device
-        panel = _build_panel(context.panel_path, context.ibes_dir, output)
+        panel = _build_panel(context.panel_path, output)
         xs = _cross_sectional(panel)
         xs.to_parquet(output / XS_FILE, index=False)
         pooled, diagnostics = _pooled(panel, xs)
@@ -143,20 +300,16 @@ def build(context: base.Context) -> pathlib.Path:
     return output
 
 
-def _analyst_forward(
-    grid: pd.DataFrame, ibes_dir: pathlib.Path, cache: pathlib.Path
-) -> pd.DataFrame:
+def _analyst_forward(grid: pd.DataFrame, cache: pathlib.Path) -> pd.DataFrame:
     """Next-four-quarter consensus EPS and its growth over trailing EPS."""
     if cache.exists():
         return pd.read_parquet(cache)
-    state = ibes.build_expectation_state(grid, ibes_dir)
+    state = ibes.build_expectation_state(grid)
     state["eom"] = state.eom.astype("datetime64[ns]")
-    rows = state[
-        ["permno", "eom", "TICKER", "STATPERS", "FPEDATS", "PRICE"]
-    ].rename(columns={"FPEDATS": "target_fpe"})
-    consensus = ibes.load_consensus(ibes_dir)[
-        ["TICKER", "STATPERS", "FPEDATS", "MEANEST"]
-    ]
+    rows = state[["permno", "eom", "TICKER", "STATPERS", "FPEDATS", "PRICE"]].rename(
+        columns={"FPEDATS": "target_fpe"}
+    )
+    consensus = ibes.load_consensus()[["TICKER", "STATPERS", "FPEDATS", "MEANEST"]]
     forward = rows.merge(consensus, on=["TICKER", "STATPERS"], how="inner")
     forward = forward[forward.FPEDATS >= forward.target_fpe].sort_values(
         ["permno", "eom", "FPEDATS"]
@@ -164,15 +317,13 @@ def _analyst_forward(
     forward = forward[forward.groupby(["permno", "eom"]).cumcount() < 4]
     summed = forward.groupby(["permno", "eom"]).MEANEST.agg(["sum", "size"])
     summed = summed[summed["size"] == 4]["sum"].rename("fwd_eps").reset_index()
-    surprises = ibes.load_surprises(ibes_dir)
+    surprises = ibes.load_surprises()
     surprises = surprises.sort_values(["TICKER", "anndats"]).copy()
     grouped = surprises.groupby("TICKER")
     surprises["trail_eps"] = grouped.actual.transform(
         lambda s: s.rolling(4, min_periods=4).sum()
     )
-    consecutive = (surprises.fpe - grouped.fpe.shift(3)).dt.days.between(
-        260, 300
-    )
+    consecutive = (surprises.fpe - grouped.fpe.shift(3)).dt.days.between(260, 300)
     surprises.loc[~consecutive, "trail_eps"] = np.nan
     trailing = pd.merge_asof(
         rows[["permno", "eom", "TICKER"]].sort_values("eom"),
@@ -184,16 +335,16 @@ def _analyst_forward(
         by="TICKER",
         direction="backward",
     )
-    out = rows[["permno", "eom", "PRICE"]].merge(
-        summed, on=["permno", "eom"], how="left"
-    ).merge(
-        trailing[["permno", "eom", "trail_eps"]],
-        on=["permno", "eom"],
-        how="left",
+    out = (
+        rows[["permno", "eom", "PRICE"]]
+        .merge(summed, on=["permno", "eom"], how="left")
+        .merge(
+            trailing[["permno", "eom", "trail_eps"]],
+            on=["permno", "eom"],
+            how="left",
+        )
     )
-    out["analyst_growth"] = (out.fwd_eps / out.trail_eps - 1.0).where(
-        out.trail_eps > 0
-    )
+    out["analyst_growth"] = (out.fwd_eps / out.trail_eps - 1.0).where(out.trail_eps > 0)
     out = out.drop_duplicates(["permno", "eom"])[
         ["permno", "eom", "PRICE", "fwd_eps", "analyst_growth"]
     ]
@@ -201,9 +352,7 @@ def _analyst_forward(
     return out
 
 
-def _winsorize_by_month(
-    values: np.ndarray, month_codes: np.ndarray
-) -> np.ndarray:
+def _winsorize_by_month(values: np.ndarray, month_codes: np.ndarray) -> np.ndarray:
     out = values.copy()
     for code in np.unique(month_codes):
         rows = month_codes == code
@@ -213,18 +362,22 @@ def _winsorize_by_month(
     return out
 
 
-def _build_panel(
-    panel_path: pathlib.Path, ibes_dir: pathlib.Path, output: pathlib.Path
-) -> pd.DataFrame:
+def _build_panel(panel_path: pathlib.Path, output: pathlib.Path) -> pd.DataFrame:
     """Asset-scaled accounting and analyst features with the target y."""
     columns = [
-        "permno", "eom", "gics", "prc", "me_company",
-        "at_me", "ebitda_mev", "bev_mev", "intrinsic_value",
-        *LEVELS.values(), *RATIOS,
+        "permno",
+        "eom",
+        "gics",
+        "prc",
+        "me_company",
+        "at_me",
+        "ebitda_mev",
+        "bev_mev",
+        "intrinsic_value",
+        *LEVELS.values(),
+        *RATIOS,
     ]
-    raw = pq.read_table(
-        panel_path, columns=list(dict.fromkeys(columns))
-    ).to_pandas()
+    raw = pq.read_table(panel_path, columns=list(dict.fromkeys(columns))).to_pandas()
     raw["eom"] = ibes.month_end(raw.eom).astype("datetime64[ns]")
     raw = raw.drop_duplicates(["permno", "eom"])
     raw = raw[(raw.at_me > 0) & (raw.me_company > 0)].reset_index(drop=True)
@@ -239,7 +392,7 @@ def _build_panel(
     feats["book_ev_lvl_at"] = raw.bev_mev.to_numpy(float) * ev_factor / at_me
     feats["iv_lvl_at"] = raw.intrinsic_value.to_numpy(float) / (at_me * me)
     forward = _analyst_forward(
-        raw[["permno", "eom"]], ibes_dir, output / "analyst_forward.parquet"
+        raw[["permno", "eom"]], output / "analyst_forward.parquet"
     )
     merged = raw[["permno", "eom", "prc"]].merge(
         forward, on=["permno", "eom"], how="left"
@@ -267,8 +420,10 @@ def _build_panel(
     panel["assets"] = at_me * me
     with np.errstate(divide="ignore", invalid="ignore"):
         for name, column in [
-            ("a_book", "book_lvl_at"), ("a_fwd", "fwd_earn_lvl_at"),
-            ("a_sales", "sales_lvl_at"), ("a_ebitda", "ebitda_lvl_at"),
+            ("a_book", "book_lvl_at"),
+            ("a_fwd", "fwd_earn_lvl_at"),
+            ("a_sales", "sales_lvl_at"),
+            ("a_ebitda", "ebitda_lvl_at"),
         ]:
             values = panel[column].to_numpy(float)
             panel[name] = np.where(values > 0, np.log(values), np.nan)
@@ -278,15 +433,11 @@ def _build_panel(
     panel["fold"] = (firm_hash.to_numpy() % N_FOLDS).astype(int)
     codes = panel.eom.dt.year.to_numpy() * 12 + panel.eom.dt.month.to_numpy()
     continuous = [column for column in FEATURES if column not in FLAGS]
-    panel[continuous] = _winsorize_by_month(
-        panel[continuous].to_numpy(float), codes
-    )
+    panel[continuous] = _winsorize_by_month(panel[continuous].to_numpy(float), codes)
     return panel
 
 
-def _standardize(
-    train: np.ndarray, test: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+def _standardize(train: np.ndarray, test: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     median = np.nanmedian(train, axis=0)
     median = np.where(np.isfinite(median), median, 0.0)
     train = np.where(np.isnan(train), median, train)
@@ -322,9 +473,7 @@ def _group_median(
     """Median by the finest industry level with enough training firms."""
     out = np.full(len(test_keys[0]), np.nan)
     for keys_train, keys_test in zip(train_keys, test_keys, strict=True):
-        stats = pd.Series(train_values).groupby(keys_train).agg(
-            ["median", "size"]
-        )
+        stats = pd.Series(train_values).groupby(keys_train).agg(["median", "size"])
         stats = stats[(stats["size"] >= minimum) & (stats.index != "")]
         mapped = pd.Series(keys_test).map(stats["median"])
         out = np.where(np.isnan(out), mapped.to_numpy(dtype=float), out)
@@ -332,9 +481,7 @@ def _group_median(
 
 
 def _sparse_columns(values: np.ndarray) -> list:
-    return [
-        j for j in range(values.shape[1]) if np.isnan(values[:, j]).mean() > 0.1
-    ]
+    return [j for j in range(values.shape[1]) if np.isnan(values[:, j]).mean() > 0.1]
 
 
 def _with_flags(values: np.ndarray, sparse: list) -> np.ndarray:
@@ -344,9 +491,7 @@ def _with_flags(values: np.ndarray, sparse: list) -> np.ndarray:
 
 
 def _dummies(labels: np.ndarray) -> np.ndarray:
-    return pd.get_dummies(pd.Series(labels, dtype="string")).to_numpy(
-        dtype=float
-    )
+    return pd.get_dummies(pd.Series(labels, dtype="string")).to_numpy(dtype=float)
 
 
 def _trees(
@@ -370,21 +515,23 @@ def _fit_month(month: pd.Timestamp) -> pd.DataFrame:
     n = len(block)
     sector = block.sector.to_numpy()
     x = block[FEATURES].to_numpy(float)
-    linear_x = np.column_stack([
-        _with_flags(x, _sparse_columns(x)),
-        _dummies(sector),
-        _dummies(block.gics4.to_numpy()),
-    ])
-    coded_x = np.column_stack([
-        x, pd.factorize(block.sector)[0], pd.factorize(block.gics4)[0]
-    ]).astype(float)
+    linear_x = np.column_stack(
+        [
+            _with_flags(x, _sparse_columns(x)),
+            _dummies(sector),
+            _dummies(block.gics4.to_numpy()),
+        ]
+    )
+    coded_x = np.column_stack(
+        [x, pd.factorize(block.sector)[0], pd.factorize(block.gics4)[0]]
+    ).astype(float)
     y = block.y.to_numpy(float)
     low, high = np.percentile(y, [1, 99])
     y_fit = np.clip(y, low, high)
     assets = block.assets.to_numpy(float)
-    levels = np.column_stack([
-        block[f"{name}_lvl_at"].to_numpy(float) * assets for name in BG_LEVELS
-    ])
+    levels = np.column_stack(
+        [block[f"{name}_lvl_at"].to_numpy(float) * assets for name in BG_LEVELS]
+    )
     levels = np.nan_to_num(_winsorize_by_month(levels, np.zeros(n)), nan=0.0)
     design = np.column_stack([np.ones(n), levels])
     market_equity = np.exp(y) * assets
@@ -417,9 +564,7 @@ def _fit_month(month: pd.Timestamp) -> pd.DataFrame:
         preds["M0"][te] = np.nanmean(np.vstack(implied), axis=0)
         preds["M2"][te] = _ridge(linear_x[tr], y_fit[tr], linear_x[te])
         beta, *_ = np.linalg.lstsq(design[tr], market_equity[tr], rcond=None)
-        preds["M3"][te] = np.log(
-            np.maximum(design[te] @ beta / assets[te], 1e-3)
-        )
+        preds["M3"][te] = np.log(np.maximum(design[te] @ beta / assets[te], 1e-3))
         preds["M4"][te] = _trees(XS_TREES, x[tr], y_fit[tr], x[te])
         preds["M5"][te] = _trees(XS_TREES, coded_x[tr], y_fit[tr], coded_x[te])
         theory = preds["M2"].copy()
@@ -448,9 +593,7 @@ def _cross_sectional(panel: pd.DataFrame) -> pd.DataFrame:
     fork = multiprocessing.get_context("fork")
     with fork.Pool(XS_WORKERS) as workers:
         results = workers.imap(_fit_month, months)
-        for number, (month, out) in enumerate(
-            zip(months, results, strict=True)
-        ):
+        for number, (month, out) in enumerate(zip(months, results, strict=True)):
             frames.append(out)
             if number % 12 == 0:
                 print(
@@ -487,9 +630,7 @@ def _fit_moe(x: np.ndarray, g: np.ndarray, y: np.ndarray) -> dict:
     for _ in range(MOE_ITERATIONS):
         for k in range(MOE_EXPERTS):
             weighted = xb * resp[:, k : k + 1]
-            weights[:, k] = np.linalg.solve(
-                weighted.T @ xb + penalty, weighted.T @ y
-            )
+            weights[:, k] = np.linalg.solve(weighted.T @ xb + penalty, weighted.T @ y)
             residual = y - xb @ weights[:, k]
             variance[k] = max(
                 float((resp[:, k] * residual**2).sum() / resp[:, k].sum()),
@@ -501,9 +642,7 @@ def _fit_moe(x: np.ndarray, g: np.ndarray, y: np.ndarray) -> dict:
             m = 0.9 * m + 0.1 * grad
             v = 0.999 * v + 0.001 * grad**2
             gate -= (
-                0.05
-                * (m / (1 - 0.9**step))
-                / (np.sqrt(v / (1 - 0.999**step)) + 1e-8)
+                0.05 * (m / (1 - 0.9**step)) / (np.sqrt(v / (1 - 0.999**step)) + 1e-8)
             )
         log_prior = np.log(_softmax(gb @ gate) + 1e-12)
         log_density = (
@@ -516,7 +655,9 @@ def _fit_moe(x: np.ndarray, g: np.ndarray, y: np.ndarray) -> dict:
         resp = np.exp(joint - log_likelihood[:, None])
         history.append(round(float(log_likelihood.mean()), 4))
     return {
-        "weights": weights, "gate": gate, "variance": variance,
+        "weights": weights,
+        "gate": gate,
+        "variance": variance,
         "history": history,
     }
 
@@ -547,9 +688,7 @@ def _fit_fold(year: int) -> tuple[int, pd.DataFrame, dict]:
     x_train = train[FEATURES].to_numpy(float)
     x_target = target[FEATURES].to_numpy(float)
     try:
-        m6 = _trees(
-            {**POOLED_TREES, "device": _SHARED["device"]}, x_train, y, x_target
-        )
+        m6 = _trees({**POOLED_TREES, "device": _SHARED["device"]}, x_train, y, x_target)
     except xgb.core.XGBoostError:
         m6 = _trees({**POOLED_TREES, "nthread": 6}, x_train, y, x_target)
     rows = np.random.default_rng(year).choice(
@@ -578,9 +717,7 @@ def _fit_fold(year: int) -> tuple[int, pd.DataFrame, dict]:
     return year, out, diagnostics
 
 
-def _pooled(
-    panel: pd.DataFrame, xs: pd.DataFrame
-) -> tuple[pd.DataFrame, dict]:
+def _pooled(panel: pd.DataFrame, xs: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     _SHARED.update(
         panel=panel,
         xs=xs[["permno", "eom", "m_med"]],
@@ -590,7 +727,7 @@ def _pooled(
     fork = multiprocessing.get_context("fork")
     with fork.Pool(POOLED_WORKERS) as workers:
         for year, out, diagnostic in workers.imap_unordered(
-            _fit_fold, base.TEST_YEARS
+            _fit_fold, config.TEST_YEARS
         ):
             frames.append(out)
             diagnostics[year] = diagnostic
@@ -602,7 +739,7 @@ def _pooled(
 def _select_models(xs: pd.DataFrame, pooled: pd.DataFrame) -> dict:
     """Lowest median absolute pricing error on the two validation years."""
     folds = {}
-    for year in base.TEST_YEARS:
+    for year in config.TEST_YEARS:
         block = xs.loc[
             xs.eom.between(
                 pd.Timestamp(f"{year - 2}-01-01"),

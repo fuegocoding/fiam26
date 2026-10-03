@@ -16,14 +16,27 @@ ROWS_FILE = "rows.parquet"
 TASKS = ("return", "eps", "risk")
 PEERS = 15
 CHARACTERISTICS = [
-    "me", "ret_3_1", "ret_12_1", "beta_60m", "ivol_capm_21d", "be_me",
-    "sale_me", "gp_at", "debt_me", "sale_gr1", "niq_su", "saleq_su",
+    "me",
+    "ret_3_1",
+    "ret_12_1",
+    "beta_60m",
+    "ivol_capm_21d",
+    "be_me",
+    "sale_me",
+    "gp_at",
+    "debt_me",
+    "sale_gr1",
+    "niq_su",
+    "saleq_su",
 ]
 TIMESFM_FEATURES = ["tfm_forecast", "tfm_spread", "tfm_n_ctx"]
 # Formation months from here on have no realized next month in the panel.
 _FIRST_UNUSED_MONTH = pd.Timestamp("2026-08-01")
 _ROW_COLUMNS = [
-    "permno", "eom", "target_month", "anndats",
+    "permno",
+    "eom",
+    "target_month",
+    "anndats",
     *(f"{task}_label" for task in TASKS),
 ]
 
@@ -33,7 +46,6 @@ def build(
     panel_path: pathlib.Path,
     snapshot_dir: pathlib.Path,
     timesfm_path: pathlib.Path,
-    ibes_dir: pathlib.Path,
 ) -> pathlib.Path:
     """Writes formation-time tokens, labels and peer lists for graph nodes.
 
@@ -48,7 +60,6 @@ def build(
         panel_path: Characteristics panel parquet.
         snapshot_dir: Monthly graph snapshots from `builder`.
         timesfm_path: TimesFM forecasts parquet.
-        ibes_dir: Directory of the I/B/E/S extracts.
 
     Returns:
         The output directory.
@@ -57,7 +68,12 @@ def build(
         return output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     columns = [
-        "permno", "eom", "ret_exc", "ret_exc_lead1m", "gics", "size_grp",
+        "permno",
+        "eom",
+        "ret_exc",
+        "ret_exc_lead1m",
+        "gics",
+        "size_grp",
         *CHARACTERISTICS,
     ]
     panel = pd.read_parquet(panel_path, columns=columns)
@@ -72,9 +88,7 @@ def build(
     panel = panel.merge(
         timesfm, on=["permno", "eom"], how="left", validate="one_to_one"
     )
-    events = earnings.dated_eps_events(
-        ibes.load_surprises(ibes_dir), ibes.load_link(ibes_dir)
-    )
+    events = earnings.dated_eps_events(ibes.load_surprises(), ibes.load_link())
     raw = pd.concat(
         [
             panel[CHARACTERISTICS + TIMESFM_FEATURES],
@@ -85,10 +99,12 @@ def build(
     )
     tokens = _rank_features(raw, panel.eom)
     # Keep surprise sign, magnitude and recency as well as their ranks.
-    extras = np.column_stack([
-        np.tanh(raw.eps_last.fillna(0).to_numpy() / 4),
-        np.exp(-raw.eps_age.fillna(10000).to_numpy() / 90),
-    ])
+    extras = np.column_stack(
+        [
+            np.tanh(raw.eps_last.fillna(0).to_numpy() / 4),
+            np.exp(-raw.eps_age.fillna(10000).to_numpy() / 90),
+        ]
+    )
     tokens = np.concatenate([tokens, extras.astype(np.float32)], axis=1)
     future = earnings.attach_next_eps(panel[["permno", "eom"]], events)
     panel = panel.merge(
@@ -162,9 +178,7 @@ def _past_news(panel: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     """Last three EPS surprises reported strictly before each month-end."""
     right = events.sort_values(["permno", "anndats"]).copy()
     for lag in (1, 2):
-        right[f"eps_lag{lag}"] = right.groupby("permno").next_suescore.shift(
-            lag
-        )
+        right[f"eps_lag{lag}"] = right.groupby("permno").next_suescore.shift(lag)
     right = right.rename(
         columns={"next_suescore": "eps_last", "anndats": "past_report"}
     )
@@ -181,12 +195,8 @@ def _past_news(panel: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
         direction="backward",
         allow_exact_matches=False,
     ).sort_values("row")
-    joined["eps_age"] = (joined.eom - joined.past_report).dt.days.clip(
-        upper=730
-    )
-    return joined[["eps_last", "eps_lag1", "eps_lag2", "eps_age"]].set_axis(
-        panel.index
-    )
+    joined["eps_age"] = (joined.eom - joined.past_report).dt.days.clip(upper=730)
+    return joined[["eps_last", "eps_lag1", "eps_lag2", "eps_age"]].set_axis(panel.index)
 
 
 def _rank_features(values: pd.DataFrame, months: pd.Series) -> np.ndarray:
@@ -194,9 +204,7 @@ def _rank_features(values: pd.DataFrame, months: pd.Series) -> np.ndarray:
     values = values.replace([np.inf, -np.inf], np.nan)
     ranked = values.groupby(months).rank(pct=True).mul(2).sub(1)
     observed = values.notna().to_numpy(np.float32)
-    return np.concatenate(
-        [ranked.fillna(0).to_numpy(np.float32), observed], axis=1
-    )
+    return np.concatenate([ranked.fillna(0).to_numpy(np.float32), observed], axis=1)
 
 
 def _peer_arrays(

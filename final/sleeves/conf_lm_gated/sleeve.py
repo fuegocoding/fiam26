@@ -22,9 +22,7 @@ class ConfLmGated(base.Sleeve):
     def load(self, context: base.Context) -> None:
         revisions = pd.read_parquet(panel.path(context.work_dir))
         revisions["eom"] = pd.to_datetime(revisions.eom)
-        self.frame = context.chars.merge(
-            revisions, on=["permno", "eom"], how="inner"
-        )
+        self.frame = context.chars.merge(revisions, on=["permno", "eom"], how="inner")
 
     @typing.override
     def score(self, year: int, broad: bool = False) -> pd.DataFrame:
@@ -32,11 +30,7 @@ class ConfLmGated(base.Sleeve):
         agree = np.sign(frame.ret_3_1).eq(
             np.sign(frame.rev3_near)
         ) & frame.rev3_near.ne(0)
-        frame["score"] = (
-            frame.rev3_near if broad else frame.rev3_near.where(agree)
-        )
+        frame["score"] = frame.rev3_near if broad else frame.rev3_near.where(agree)
         if not broad:
-            frame = frame.loc[
-                frame.tradable & frame.size_grp.isin(["large", "mega"])
-            ]
+            frame = frame.loc[frame.tradable & frame.size_grp.isin(["large", "mega"])]
         return base.formation_output(frame, year)

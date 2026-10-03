@@ -2,8 +2,7 @@
 
 import pathlib
 
-from sleeves import base
-from sleeves import ibes
+from sleeves import base, ibes
 
 _QUARTERLY_FPI = ("6", "7", "8", "9")
 
@@ -23,16 +22,14 @@ def build(context: base.Context) -> pathlib.Path:
     if output.exists():
         return output
     output.parent.mkdir(parents=True, exist_ok=True)
-    consensus = ibes.load_consensus(context.ibes_dir)
-    consensus = consensus.loc[
-        consensus.FPI.astype(str).isin(_QUARTERLY_FPI)
-    ].copy()
+    consensus = ibes.load_consensus()
+    consensus = consensus.loc[consensus.FPI.astype(str).isin(_QUARTERLY_FPI)].copy()
     consensus["eom"] = consensus.snap_month.dt.to_timestamp("M")
     announced = consensus.ANNDATS_ACT.notna() & (
         consensus.ANNDATS_ACT <= consensus.STATPERS
     )
     consensus = consensus.loc[~announced].merge(
-        ibes.load_prices(context.ibes_dir),
+        ibes.load_prices(),
         on=["TICKER", "STATPERS"],
         how="inner",
     )
@@ -43,15 +40,11 @@ def build(context: base.Context) -> pathlib.Path:
     consensus = consensus.merge(
         lagged, on=["TICKER", "FPEDATS", "snap_month"], how="left"
     )
-    consensus["rev3_near"] = (consensus.MEANEST - consensus.lag3) / (
-        consensus.PRICE
-    )
+    consensus["rev3_near"] = (consensus.MEANEST - consensus.lag3) / (consensus.PRICE)
     near = consensus.sort_values(["TICKER", "eom", "FPEDATS"]).drop_duplicates(
         ["TICKER", "eom"]
     )
-    tickers = ibes.attach_ticker(
-        context.chars[["permno", "eom"]], ibes.load_link(context.ibes_dir)
-    )
+    tickers = ibes.attach_ticker(context.chars[["permno", "eom"]], ibes.load_link())
     revisions = tickers.merge(
         near[["TICKER", "eom", "rev3_near"]], on=["TICKER", "eom"], how="inner"
     )

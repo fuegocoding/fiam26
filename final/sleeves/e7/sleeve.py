@@ -39,7 +39,5 @@ class E7(base.Sleeve):
                 frame.tradable & frame.size_grp.isin(self._size_groups)
             ].copy()
         groups = frame.groupby(["eom", "sector"])
-        frame["score"] = groups.sue.rank(pct=True) + groups.post_breadth.rank(
-            pct=True
-        )
+        frame["score"] = groups.sue.rank(pct=True) + groups.post_breadth.rank(pct=True)
         return base.formation_output(frame, year)

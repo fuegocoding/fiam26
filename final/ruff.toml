@@ -1,0 +1,10 @@
+line-length = 88
+
+[lint]
+select = ["E", "F", "W", "B", "I"]
+
+[lint.isort]
+known-first-party = [
+    "borrow", "combiner", "config", "evaluate", "graph", "identity",
+    "optimizer", "report", "risk", "sleeves",
+]

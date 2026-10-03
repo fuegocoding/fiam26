@@ -4,8 +4,7 @@ import pathlib
 
 import pandas as pd
 
-from sleeves import base
-from sleeves import ibes
+from sleeves import base, ibes
 
 
 def path(work_dir: pathlib.Path) -> pathlib.Path:
@@ -24,9 +23,7 @@ def build(context: base.Context) -> pathlib.Path:
         return output
     output.parent.mkdir(parents=True, exist_ok=True)
     chars = context.chars
-    state = ibes.build_expectation_state(
-        chars[["permno", "eom"]], context.ibes_dir
-    )
+    state = ibes.build_expectation_state(chars[["permno", "eom"]])
     state["eom"] = pd.to_datetime(state.eom)
     events = state.dropna(subset=["target_ann", "target_surprise_p"])
     events = events.loc[events.target_ann > events.eom]
@@ -39,7 +36,7 @@ def build(context: base.Context) -> pathlib.Path:
     events = events.loc[events.target_ann <= events.report_eom].rename(
         columns={"eom": "forecast_eom", "target_surprise_p": "sue"}
     )
-    consensus = ibes.load_consensus(context.ibes_dir)[
+    consensus = ibes.load_consensus()[
         ["TICKER", "STATPERS", "FPEDATS", "NUMUP", "NUMDOWN", "NUMEST"]
     ]
     key = ["permno", "target_fpe"]
@@ -72,7 +69,12 @@ def build(context: base.Context) -> pathlib.Path:
         how="inner",
     )
     columns = [
-        "permno", "eom", "sector", "size_grp", "tradable", "sue",
+        "permno",
+        "eom",
+        "sector",
+        "size_grp",
+        "tradable",
+        "sue",
         "post_breadth",
     ]
     delayed[columns].to_parquet(output, index=False)

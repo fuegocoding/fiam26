@@ -25,8 +25,7 @@ class TimesFm(base.Sleeve):
     def load(self, context: base.Context) -> None:
         forecasts = pd.read_parquet(
             forecast.path(context.work_dir),
-            columns=["permno", "eom", "target_month", "tfm_forecast",
-                     "tfm_n_ctx"],
+            columns=["permno", "eom", "target_month", "tfm_forecast", "tfm_n_ctx"],
         )
         forecasts = forecasts.loc[forecasts.tfm_n_ctx >= MIN_HISTORY_MONTHS]
         forecasts = forecasts.drop(columns="tfm_n_ctx").rename(

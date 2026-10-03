@@ -8,6 +8,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 import timesfm3
 
+import config
 from sleeves import base
 
 CHECKPOINT = "google/timesfm-3.0-pytorch"
@@ -41,7 +42,7 @@ def build(context: base.Context) -> pathlib.Path:
     months = [
         month
         for month in pd.DatetimeIndex(returns.eom.unique()).sort_values()
-        if FIRST_TARGET <= month + pd.offsets.MonthEnd(1) <= base.LAST_TARGET
+        if FIRST_TARGET <= month + pd.offsets.MonthEnd(1) <= config.LAST_TARGET
     ]
     forecaster = None
     parts = []
@@ -82,9 +83,7 @@ def _contexts(
     history = history[history.permno.isin(set(current.permno))]
     grouped = {
         permno: stock
-        for permno, stock in history.sort_values("eom").groupby(
-            "permno", sort=False
-        )
+        for permno, stock in history.sort_values("eom").groupby("permno", sort=False)
     }
     contexts, kept = [], []
     for permno in current.permno.to_numpy():
@@ -93,9 +92,7 @@ def _contexts(
             continue
         calendar = pd.date_range(stock.eom.min(), month, freq="ME")
         series = (
-            stock.set_index("eom")
-            .ret_exc.reindex(calendar)
-            .to_numpy(dtype=np.float32)
+            stock.set_index("eom").ret_exc.reindex(calendar).to_numpy(dtype=np.float32)
         )
         gaps = np.flatnonzero(~np.isfinite(series))
         if len(gaps):

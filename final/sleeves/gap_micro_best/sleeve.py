@@ -42,9 +42,7 @@ class GapMicroBest(base.Sleeve):
         chosen = set(self._best.values())
         required = chosen - set(valuation.POOLED_MODELS)
         if "M9" in chosen:
-            required.update(
-                set(valuation.ENSEMBLE) - set(valuation.POOLED_MODELS)
-            )
+            required.update(set(valuation.ENSEMBLE) - set(valuation.POOLED_MODELS))
         columns = ["permno", "eom", "y", *sorted(required)]
         self._xs = pd.read_parquet(
             directory / valuation.XS_FILE, columns=list(dict.fromkeys(columns))
@@ -64,11 +62,13 @@ class GapMicroBest(base.Sleeve):
     @typing.override
     def score(self, year: int, broad: bool = False) -> pd.DataFrame:
         if year not in self._best:
-            return pd.DataFrame({
-                "return_month": pd.Series(dtype="period[M]"),
-                "permno": pd.Series(dtype="int64"),
-                "score": pd.Series(dtype="float64"),
-            })
+            return pd.DataFrame(
+                {
+                    "return_month": pd.Series(dtype="period[M]"),
+                    "permno": pd.Series(dtype="int64"),
+                    "score": pd.Series(dtype="float64"),
+                }
+            )
         model = self._best[year]
         if model in valuation.POOLED_MODELS:
             gap = self._pooled.loc[self._pooled.fold_year.eq(year)].copy()

@@ -7,13 +7,20 @@ import pathlib
 import numpy as np
 import pandas as pd
 
-PANEL_FILE = "chars_final_with_names.parquet"
-FACTOR_LIST_FILE = "factor_char_list.csv"
-TEST_YEARS = tuple(range(2021, 2027))
-LAST_TARGET = pd.Timestamp("2026-08-31")
+import config
+
 _PANEL_COLUMNS = [
-    "permno", "eom", "gics", "size_grp", "prc", "dolvol",
-    "cash_at", "ocf_at", "ret_3_1", "dsale_dinv", "dsale_dsga",
+    "permno",
+    "eom",
+    "gics",
+    "size_grp",
+    "prc",
+    "dolvol",
+    "cash_at",
+    "ocf_at",
+    "ret_3_1",
+    "dsale_dinv",
+    "dsale_dsga",
 ]
 
 
@@ -23,14 +30,13 @@ class Context:
 
     chars: pd.DataFrame
     data_dir: pathlib.Path
-    ibes_dir: pathlib.Path
     work_dir: pathlib.Path
     device: str = "cuda"
 
     @property
     def panel_path(self) -> pathlib.Path:
         """Location of the characteristics panel."""
-        return self.data_dir / PANEL_FILE
+        return self.data_dir / config.PANEL_FILE
 
 
 class Sleeve(abc.ABC):
@@ -70,10 +76,8 @@ class Sleeve(abc.ABC):
 
 def load_panel(data_dir: pathlib.Path) -> pd.DataFrame:
     """Formation panel with sector and the liquid, priced tradable flag."""
-    chars = pd.read_parquet(data_dir / PANEL_FILE, columns=_PANEL_COLUMNS)
-    chars["eom"] = (
-        pd.to_datetime(chars.eom).dt.to_period("M").dt.to_timestamp("M")
-    )
+    chars = pd.read_parquet(data_dir / config.PANEL_FILE, columns=_PANEL_COLUMNS)
+    chars["eom"] = pd.to_datetime(chars.eom).dt.to_period("M").dt.to_timestamp("M")
     chars = chars.drop_duplicates(["permno", "eom"]).reset_index(drop=True)
     chars["sector"] = chars.gics.astype("string").str[:2]
     chars["tradable"] = (
@@ -93,17 +97,13 @@ def formation_output(frame: pd.DataFrame, year: int) -> pd.DataFrame:
     ].reset_index(drop=True)
 
 
-def next_month_forecasts(
-    forecasts: pd.DataFrame, chars: pd.DataFrame
-) -> pd.DataFrame:
+def next_month_forecasts(forecasts: pd.DataFrame, chars: pd.DataFrame) -> pd.DataFrame:
     """Keeps one-month-ahead forecasts and attaches the formation price."""
     forecasts = forecasts.copy()
     forecasts["eom"] = pd.to_datetime(forecasts.eom)
     forecasts["target_month"] = pd.to_datetime(forecasts.target_month)
     forecasts = forecasts.loc[
-        forecasts.target_month.dt.to_period("M").eq(
-            forecasts.eom.dt.to_period("M") + 1
-        )
+        forecasts.target_month.dt.to_period("M").eq(forecasts.eom.dt.to_period("M") + 1)
     ]
     return forecasts.merge(
         chars[["permno", "eom", "prc"]], on=["permno", "eom"], how="left"
@@ -133,9 +133,9 @@ def scale_scores(broad: pd.DataFrame, native: pd.DataFrame) -> pd.DataFrame:
         ) * np.sqrt(12.0)
     native = native.copy()
     groups = native.groupby("return_month").score
-    native["native_score"] = (
-        (groups.rank(pct=True) - 0.5) * np.sqrt(12.0)
-    ).where(groups.transform("size") > 1, 0.0)
+    native["native_score"] = ((groups.rank(pct=True) - 0.5) * np.sqrt(12.0)).where(
+        groups.transform("size") > 1, 0.0
+    )
     return broad[["return_month", "permno", "broad_score"]].merge(
         native[["return_month", "permno", "native_score"]],
         on=["return_month", "permno"],

@@ -14,13 +14,34 @@ from scipy import sparse
 
 # Economic characteristics only: no momentum, correlation, beta or volatility.
 DEFAULT_FUNDAMENTALS = (
-    "be_me", "sale_me", "ocf_me", "ebitda_mev", "gp_at", "op_at", "niq_at",
-    "ebit_sale", "at_turnover", "cash_at", "debt_me", "tangibility",
-    "rd_sale", "capx_gr1", "at_gr1", "sale_gr1", "emp_gr1", "oaccruals_at",
+    "be_me",
+    "sale_me",
+    "ocf_me",
+    "ebitda_mev",
+    "gp_at",
+    "op_at",
+    "niq_at",
+    "ebit_sale",
+    "at_turnover",
+    "cash_at",
+    "debt_me",
+    "tangibility",
+    "rd_sale",
+    "capx_gr1",
+    "at_gr1",
+    "sale_gr1",
+    "emp_gr1",
+    "oaccruals_at",
 )
 COMPONENTS = ("industry", "business", "fundamentals", "events", "returns")
 _OPTIONAL_COLUMNS = (
-    "primary_sec", "gics", "ff49", "sic", "ticker", "company_name", "gvkey",
+    "primary_sec",
+    "gics",
+    "ff49",
+    "sic",
+    "ticker",
+    "company_name",
+    "gvkey",
 )
 _INDUSTRY_LEVELS = (1.0, 0.75, 0.50, 0.25)
 _TOKEN = re.compile(r"[a-z][a-z0-9]{2,}")
@@ -45,8 +66,11 @@ class GraphConfig:
 
     weights: dict[str, float] = dataclasses.field(
         default_factory=lambda: {
-            "industry": 0.20, "business": 0.42, "fundamentals": 0.33,
-            "events": 0.04, "returns": 0.01,
+            "industry": 0.20,
+            "business": 0.42,
+            "fundamentals": 0.33,
+            "events": 0.04,
+            "returns": 0.01,
         }
     )
     n_neighbors: int = 15
@@ -69,8 +93,7 @@ class GraphConfig:
     def normalized_weights(self) -> dict[str, float]:
         """Component weights scaled to sum to one."""
         values = np.array([self.weights[k] for k in COMPONENTS], dtype=float)
-        return dict(zip(COMPONENTS, (values / values.sum()).tolist(),
-                        strict=True))
+        return dict(zip(COMPONENTS, (values / values.sum()).tolist(), strict=True))
 
 
 @dataclasses.dataclass
@@ -145,8 +168,7 @@ def reweight_candidates(
     """Recombines component scores, keeps the top k and applies a softmax."""
     weights = config.normalized_weights()
     ranked = candidates[
-        (candidates.industry > 0)
-        & (candidates.source_index != candidates.target_index)
+        (candidates.industry > 0) & (candidates.source_index != candidates.target_index)
     ].copy()
     eligible = np.zeros(len(ranked), dtype=bool)
     sources = ranked.groupby("source_index", sort=False).indices
@@ -168,9 +190,11 @@ def reweight_candidates(
         ["source_index", "similarity", "target_permco"],
         ascending=[True, False, True],
     )
-    ranked = ranked.groupby("source_index", sort=False, as_index=False).head(
-        config.n_neighbors
-    ).copy()
+    ranked = (
+        ranked.groupby("source_index", sort=False, as_index=False)
+        .head(config.n_neighbors)
+        .copy()
+    )
     row_max = ranked.groupby("source_index").similarity.transform("max")
     ranked["softmax_mass"] = np.exp(
         (ranked.similarity - row_max) / config.softmax_temperature
@@ -209,7 +233,11 @@ class EconomicGraphBuilder:
         """
         self.config = config or GraphConfig()
         required = {
-            "permco", "permno", "eom", "ret", "me",
+            "permco",
+            "permno",
+            "eom",
+            "ret",
+            "me",
             *self.config.fundamental_columns,
         }
         optional = [c for c in _OPTIONAL_COLUMNS if c in panel]
@@ -224,8 +252,11 @@ class EconomicGraphBuilder:
         )
         self.panel = p.drop_duplicates(["permco", "eom"]).reset_index(drop=True)
         columns = [
-            "available_at", "business_description", "document_id",
-            "event_text", "permco",
+            "available_at",
+            "business_description",
+            "document_id",
+            "event_text",
+            "permco",
         ]
         e = text_evidence[columns].copy()
         e["available_at"] = pd.to_datetime(
@@ -233,9 +264,9 @@ class EconomicGraphBuilder:
         )
         for column in ("business_description", "event_text"):
             e[column] = e[column].fillna("").astype(str)
-        self.text_evidence = e.sort_values(
-            ["available_at", "document_id"]
-        ).reset_index(drop=True)
+        self.text_evidence = e.sort_values(["available_at", "document_id"]).reset_index(
+            drop=True
+        )
 
     def _text_vectors(
         self, month: pd.Timestamp, companies: np.ndarray
@@ -258,15 +289,11 @@ class EconomicGraphBuilder:
         business_map = descriptions.groupby(
             "permco", sort=False
         ).business_description.agg(" ".join)
-        begin = (
-            period - (config.event_lookback_months - 1)
-        ).start_time.tz_localize("UTC")
-        recent = known[
-            (known.available_at >= begin) & (known.event_text.str.len() > 0)
-        ]
-        event_map = recent.groupby("permco", sort=False).event_text.agg(
-            " ".join
+        begin = (period - (config.event_lookback_months - 1)).start_time.tz_localize(
+            "UTC"
         )
+        recent = known[(known.available_at >= begin) & (known.event_text.str.len() > 0)]
+        event_map = recent.groupby("permco", sort=False).event_text.agg(" ".join)
         return (
             _hashed_tfidf(
                 business_map.reindex(companies).fillna("").tolist(),
@@ -296,9 +323,7 @@ class EconomicGraphBuilder:
         periods = pd.period_range(
             end=month.to_period("M"), periods=config.return_window, freq="M"
         )
-        window = self.panel[
-            self.panel.eom.between(periods[0].to_timestamp("M"), month)
-        ]
+        window = self.panel[self.panel.eom.between(periods[0].to_timestamp("M"), month)]
         history = (
             window.pivot(index="permco", columns="eom", values="ret")
             .reindex(index=index, columns=periods.to_timestamp("M"))
@@ -344,9 +369,7 @@ class EconomicGraphBuilder:
                 eligible = np.flatnonzero(industry[local] >= threshold)
                 eligible = eligible[eligible != start + local]
                 order = np.lexsort((companies[eligible], -row[eligible]))
-                chosen = set(
-                    eligible[order[: config.candidate_pool_size]].tolist()
-                )
+                chosen = set(eligible[order[: config.candidate_pool_size]].tolist())
                 for component in (industry, business, fundamentals, events):
                     informative = eligible[component[local, eligible] > 0]
                     component_order = np.lexsort(
@@ -354,31 +377,34 @@ class EconomicGraphBuilder:
                     )
                     chosen.update(
                         informative[
-                            component_order[
-                                : config.component_candidate_pool_size
-                            ]
+                            component_order[: config.component_candidate_pool_size]
                         ].tolist()
                     )
                 for neighbor in sorted(chosen):
-                    candidate_rows.append((
-                        start + local,
-                        neighbor,
-                        industry[local, neighbor],
-                        business[local, neighbor],
-                        fundamentals[local, neighbor],
-                        events[local, neighbor],
-                        returns[local, neighbor],
-                    ))
+                    candidate_rows.append(
+                        (
+                            start + local,
+                            neighbor,
+                            industry[local, neighbor],
+                            business[local, neighbor],
+                            fundamentals[local, neighbor],
+                            events[local, neighbor],
+                            returns[local, neighbor],
+                        )
+                    )
         candidates = pd.DataFrame(
             candidate_rows,
             columns=[
-                "source_index", "target_index", "industry", "business",
-                "fundamentals", "events", "returns",
+                "source_index",
+                "target_index",
+                "industry",
+                "business",
+                "fundamentals",
+                "events",
+                "returns",
             ],
         )
-        candidates["target_permco"] = companies[
-            candidates.target_index.to_numpy(int)
-        ]
+        candidates["target_permco"] = companies[candidates.target_index.to_numpy(int)]
         adjacency = reweight_candidates(candidates, len(current), config)
         nodes = current[["permco", "permno"]].copy()
         nodes.index.name = "node_index"
@@ -396,9 +422,7 @@ class EconomicGraphBuilder:
 
 def _standardize(frame: pd.DataFrame, quantile: float) -> pd.DataFrame:
     x = frame.astype(float).replace([np.inf, -np.inf], np.nan)
-    x = x.clip(
-        lower=x.quantile(quantile), upper=x.quantile(1 - quantile), axis=1
-    )
+    x = x.clip(lower=x.quantile(quantile), upper=x.quantile(1 - quantile), axis=1)
     scale = x.std(ddof=0)
     return (x - x.mean()) / scale.where(scale > 1e-12)
 
@@ -497,9 +521,7 @@ def _fundamental_similarity(
     return np.clip(similarity, 0, 1)
 
 
-def _industry_similarity(
-    snapshot: pd.DataFrame, start: int, stop: int
-) -> np.ndarray:
+def _industry_similarity(snapshot: pd.DataFrame, start: int, stop: int) -> np.ndarray:
     """Hierarchical GICS; FF49, then SIC, when a pair lacks usable GICS."""
     n = len(snapshot)
     gics = snapshot.get("gics", pd.Series(pd.NA, index=snapshot.index))
@@ -539,9 +561,7 @@ def _industry_similarity(
     )
     sic = sic.where(sic.between(100, 9999)).to_numpy(float)
     sic_score = (sic[start:stop, None] // 100 == sic[None, :] // 100) * 0.50
-    sic_score = np.maximum(
-        sic_score, (sic[start:stop, None] == sic[None, :]) * 0.75
-    )
+    sic_score = np.maximum(sic_score, (sic[start:stop, None] == sic[None, :]) * 0.75)
     return np.where(fallback & ~ff_pair, sic_score, result)
 
 

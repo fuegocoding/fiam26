@@ -8,40 +8,98 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 _BUSINESS_TERMS = (
-    "provider", "provides", "platform", "service", "services", "product",
-    "products", "manufacturer", "manufactures", "develops", "operates",
-    "customers", "clients", "retail", "software", "technology",
-    "healthcare", "financial", "energy", "market", "business", "solutions",
-    "network", "brands", "stores", "distribution",
+    "provider",
+    "provides",
+    "platform",
+    "service",
+    "services",
+    "product",
+    "products",
+    "manufacturer",
+    "manufactures",
+    "develops",
+    "operates",
+    "customers",
+    "clients",
+    "retail",
+    "software",
+    "technology",
+    "healthcare",
+    "financial",
+    "energy",
+    "market",
+    "business",
+    "solutions",
+    "network",
+    "brands",
+    "stores",
+    "distribution",
 )
 _SPECIFIC_TERMS = (
-    "software", "platform", "network", "stores", "retail", "customers",
-    "clients", "manufacturer", "manufactures", "healthcare", "payments",
-    "cloud", "energy", "products", "services", "solutions", "distribution",
+    "software",
+    "platform",
+    "network",
+    "stores",
+    "retail",
+    "customers",
+    "clients",
+    "manufacturer",
+    "manufactures",
+    "healthcare",
+    "payments",
+    "cloud",
+    "energy",
+    "products",
+    "services",
+    "solutions",
+    "distribution",
     "subscription",
 )
 _STOP_MARKERS = (
-    "forward-looking statements", "forward looking statements",
-    "safe harbor", "investor contact", "media contact", "contacts:",
-    "item 9.01", "signature", "source:", "for more information", "###",
+    "forward-looking statements",
+    "forward looking statements",
+    "safe harbor",
+    "investor contact",
+    "media contact",
+    "contacts:",
+    "item 9.01",
+    "signature",
+    "source:",
+    "for more information",
+    "###",
 )
 _BOILERPLATE = (
     "broad, non-exclusionary distribution",
-    "deemed to be material information", "through various channels",
+    "deemed to be material information",
+    "through various channels",
     "involve risks and uncertainties",
     "estimated quantities of crude oil",
     "actual results may differ materially",
 )
 _REJECTED_SENTENCES = (
-    "securities and exchange commission", "forward-looking", "safe harbor",
-    "signature", "exhibit", "registrant", "telephone number",
+    "securities and exchange commission",
+    "forward-looking",
+    "safe harbor",
+    "signature",
+    "exhibit",
+    "registrant",
+    "telephone number",
 )
 _REJECTED_HEADINGS = (
-    "about the transaction", "about the merger", "about the offering",
-    "about this", "about our", "about its", "about forward",
+    "about the transaction",
+    "about the merger",
+    "about the offering",
+    "about this",
+    "about our",
+    "about its",
+    "about forward",
 )
 _GENERIC_NAME_WORDS = {
-    "company", "corporation", "incorporated", "holdings", "limited",
+    "company",
+    "corporation",
+    "incorporated",
+    "holdings",
+    "limited",
 }
 _SPACE = re.compile(r"\s+")
 _SUMMARY = re.compile(
@@ -67,17 +125,24 @@ def build_profiles(
     """
     if output_path.exists():
         return output_path
-    schema = pa.schema([
-        ("permco", pa.int64()),
-        ("document_id", pa.string()),
-        ("available_at", pa.timestamp("us", tz="UTC")),
-        ("business_description", pa.string()),
-        ("event_text", pa.string()),
-    ])
+    schema = pa.schema(
+        [
+            ("permco", pa.int64()),
+            ("document_id", pa.string()),
+            ("available_at", pa.timestamp("us", tz="UTC")),
+            ("business_description", pa.string()),
+            ("event_text", pa.string()),
+        ]
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
-        "permco", "document_id", "filing_date", "company_name", "title",
-        "items", "text",
+        "permco",
+        "document_id",
+        "filing_date",
+        "company_name",
+        "title",
+        "items",
+        "text",
     ]
     end_of_day = pd.Timedelta(hours=23, minutes=59, seconds=59)
     with pq.ParquetWriter(output_path, schema, compression="zstd") as writer:
@@ -87,19 +152,20 @@ def build_profiles(
             for filing in batch.to_pylist():
                 name = filing["company_name"]
                 description = extract_business_description(filing["text"], name)
-                records.append({
-                    "permco": filing["permco"],
-                    "document_id": filing["document_id"],
-                    "available_at": (
-                        pd.Timestamp(filing["filing_date"], tz="UTC")
-                        + end_of_day
-                    ),
-                    "business_description": description
-                    or extract_durable_business_language(filing["text"], name),
-                    "event_text": event_text(
-                        filing["title"], filing["items"], filing["text"], name
-                    ),
-                })
+                records.append(
+                    {
+                        "permco": filing["permco"],
+                        "document_id": filing["document_id"],
+                        "available_at": (
+                            pd.Timestamp(filing["filing_date"], tz="UTC") + end_of_day
+                        ),
+                        "business_description": description
+                        or extract_durable_business_language(filing["text"], name),
+                        "event_text": event_text(
+                            filing["title"], filing["items"], filing["text"], name
+                        ),
+                    }
+                )
             writer.write_table(pa.Table.from_pylist(records, schema=schema))
     return output_path
 
@@ -125,12 +191,11 @@ def extract_business_description(
             return _remove_issuer_name(candidate, company_name)
         end = position
     # Fall back to a summary sentence near the end that names the issuer.
-    tail = compact[max(0, len(compact) - 18000):]
+    tail = compact[max(0, len(compact) - 18000) :]
     name_tokens = [
         token.lower()
         for token in re.findall(r"[A-Za-z]{4,}", company_name or "")
-        if token.lower()
-        not in {"corporation", "company", "incorporated", "holdings"}
+        if token.lower() not in {"corporation", "company", "incorporated", "holdings"}
     ]
     for match in reversed(list(_SUMMARY.finditer(tail))):
         start = max(0, match.start() - 180)
@@ -149,7 +214,7 @@ def extract_durable_business_language(
     compact = _clean(text)
     if not compact:
         return ""
-    body = compact[min(900, len(compact)):]
+    body = compact[min(900, len(compact)) :]
     candidates = []
     for position, sentence in enumerate(_SENTENCE.split(body)):
         sentence = sentence.strip()
@@ -176,14 +241,14 @@ def event_text(
 ) -> str:
     """Filing title, form items and an excerpt of the first item's text."""
     title_value = _clean(title)
-    item_values = sorted({
-        str(item).strip() for item in (items or []) if str(item).strip()
-    })
+    item_values = sorted(
+        {str(item).strip() for item in (items or []) if str(item).strip()}
+    )
     compact = _clean(text)
     lower = compact.lower()
     item_start = lower.find("item ", min(700, len(lower)))
     if item_start >= 0:
-        excerpt = compact[item_start:item_start + 1400]
+        excerpt = compact[item_start : item_start + 1400]
     else:
         excerpt = compact[900:2300]
     excerpt = _remove_issuer_name(excerpt, company_name)
