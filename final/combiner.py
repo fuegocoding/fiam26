@@ -7,14 +7,13 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 import config
-from graph import builder, business_text, dataset, overlay, train
+import timing
+from graph import builder, business_text, dataset, overlay
 from sleeves import base, inventory_retail, oplev_software, runway_micro
 from sleeves.conf_lm_gated import sleeve as conf_lm_gated
 from sleeves.e7 import sleeve as e7
 from sleeves.filing_events import sleeve as filing_events
 from sleeves.gap_micro_best import sleeve as gap_micro_best
-from sleeves.timesfm import forecast as timesfm_forecast
-from sleeves.timesfm import sleeve as timesfm
 from sleeves.xgb_rank import sleeve as xgb_rank
 
 GRAPH_SEEDS = (7, 19, 43)
@@ -37,12 +36,13 @@ _FORMATION_COLUMNS = [
     *_LABELS,
 ]
 # Sleeves built for micro caps. A book too large to trade micro caps scores
-# stocks without them (`final_score_liquid`, read by optimizer.py above
-# MICRO_SLEEVES_MAX_NAV).
+# stocks without them (`final_score_liquid`). The committed NAV switch is
+# retained in this timing-only comparison; it carries research-selection bias.
 MICRO_SLEEVES = ("gap_micro_best", "runway_micro")
 _PREDICTION_COLUMNS = [
     "return_month",
     "formation_date",
+    "timing_policy",
     "permno",
     "permco",
     *_LABELS,
@@ -73,7 +73,6 @@ def make_sleeves() -> tuple[base.Sleeve, ...]:
         conf_lm_gated.ConfLmGated(),
         inventory_retail.InventoryRetail(),
         oplev_software.OplevSoftware(),
-        timesfm.TimesFm(),
         xgb_rank.XgbRank(),
         filing_events.FilingEvents(),
     )
@@ -140,6 +139,11 @@ def blend(wide: pd.DataFrame, names: list[str]) -> pd.DataFrame:
 
 def graph_forecasts(context: base.Context) -> pd.DataFrame:
     """Builds filing text, monthly graphs and tokens, then trains the model."""
+    cached = context.work_dir / "graph_forecasts.parquet"
+    if cached.exists():
+        return pd.read_parquet(cached)
+    from graph import train
+
     graph_dir = context.work_dir / "graph"
     text = business_text.build_profiles(
         context.data_dir / config.FILINGS_FILE, graph_dir / "business_text.parquet"
@@ -151,7 +155,6 @@ def graph_forecasts(context: base.Context) -> pd.DataFrame:
         graph_dir / "tokens",
         context.panel_path,
         snapshots,
-        timesfm_forecast.build(context),
     )
     runs = train.train(
         tokens,
@@ -181,12 +184,16 @@ def formation_fields(panel_path: pathlib.Path) -> pd.DataFrame:
 
 def predict(context: base.Context) -> pd.DataFrame:
     """Final NAV-independent stock scores for every test month."""
+    timing.prepare_cache(context.work_dir, context.data_dir, context.device)
     sleeves = make_sleeves()
     wide = score_sleeves(context, sleeves)
     stored = wide.assign(return_month=wide.return_month.dt.to_timestamp("M"))
     stored.to_parquet(context.work_dir / "sleeves.parquet", index=False)
     blended = blend(wide, [sleeve.name for sleeve in sleeves])
     forecasts = graph_forecasts(context)
+    forecasts = forecasts.loc[
+        pd.to_datetime(forecasts.target_month).le(config.LAST_TARGET)
+    ]
     forecasts.to_parquet(context.work_dir / "graph_forecasts.parquet", index=False)
     formation = formation_fields(context.panel_path)
     graph = overlay.company_forecasts(forecasts, formation)
@@ -218,6 +225,7 @@ def predict(context: base.Context) -> pd.DataFrame:
     assert len(scored) == len(scored_liquid)
     scored["final_score_liquid"] = scored_liquid.final_score.to_numpy()
     scored = scored.rename(columns={"eom": "formation_date"})
+    scored["timing_policy"] = timing.PREDICTION_POLICY
     scored = scored[_PREDICTION_COLUMNS].sort_values(["return_month", "permno"])
     scored = scored.reset_index(drop=True)
     scored["return_month"] = scored.return_month.dt.to_timestamp("M")

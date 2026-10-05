@@ -1,14 +1,22 @@
-# FIAM 2026 market-neutral book (`final/`)
+# FIAM 2026 long/short equity book (`final/`)
 
 Each month this pipeline scores every U.S. stock in the competition panel, buys
-the 100 best and shorts the 100 worst inside each sector, sizes the two legs so
-the book is beta-neutral, applies tail-risk rules and writes the submission
-files. It covers January 2021 to August 2026 (68 holding months).
+the 100 best and shorts the 100 worst inside each sector. It applies bounded
+beta sizing and tail-risk rules, then writes the submission files. It covers January 2021 to August 2026 (68 holding months).
 Self-contained: nothing outside this folder is imported.
+
+**Current version: committed strategy recipes plus timing fixes and explicit
+last-known-price exits, refreshed 2026-10-04.** Annual validation-selection
+changes were removed at the user's request. TimesFM is excluded from sleeves
+and graph inputs. The committed $50M NAV sleeve switch is restored; its
+historical test-period selection bias remains.
+The fund-size tables below describe this version. Later ablations and research
+comparisons remain historical. Prior use of the test period during research
+and missing source-vintage timestamps prevent an unbiased-holdout claim.
 
 ```
 competition data ─┐
-external data ────┼─> 10 sleeves ─> rank blend ─> graph tilt (5%) ─> identity labels
+external data ────┼─> 9 sleeves ─> rank blend ─> graph tilt (5%) ─> identity labels
                   │                                                       │
                   └───────────────── borrow screen ─> optimizer ─> risk rules ─> book ─> evaluation + report
 ```
@@ -19,10 +27,10 @@ external data ────┼─> 10 sleeves ─> rank blend ─> graph tilt (5%
 |---|---|
 | Python | 3.13 |
 | Packages | `pip install -r final/requirements.txt` (numpy, pandas, pyarrow, scipy, xgboost, torch, timesfm, matplotlib, pinned) |
-| GPU | NVIDIA GPU with CUDA for TimesFM and the graph model; built on an RTX 3070 laptop (8 GB). `DEVICE = "cpu"` in `config.py` should also work, much slower; not tested |
+| GPU | NVIDIA GPU with CUDA for the fitted sleeves and graph model; built on an RTX 3070 laptop (8 GB). `DEVICE = "cpu"` in `config.py` should also work, much slower; not tested |
 | Memory | about 8 GB free; the largest step peaks at 7.2 GB |
 | Disk | about 0.8 GB of competition files, 144 MB of external data, 0.6 GB of outputs |
-| Network | first run only: the TimesFM 3 weights (`google/timesfm-3.0-pytorch`) download from Hugging Face into `HF_HOME` (default `~/.cache/huggingface`). Nothing else is downloaded |
+| Network | The active pipeline uses supplied local data; no pretrained checkpoint download |
 | Time | about 1 h 45 min for a full rebuild on the laptop above; seconds with `--reuse` |
 
 ```bash
@@ -58,7 +66,7 @@ sleeve scores and identical statistics.
 Settings live in `config.py`; there are no other command-line options:
 - `NAV`: fund size in dollars. Every dollar and liquidity limit derives from
   it. Default $10M.
-- `DEVICE`: where TimesFM and the graph model run.
+- `DEVICE`: where fitted sleeves and the graph model run.
 - `DATA_DIR`, `WORK_DIR`: where inputs are read and outputs written.
 - `TEST_YEARS`, `LAST_TARGET`: the test window.
 
@@ -85,7 +93,7 @@ module that uses them.
 Timing convention: at each month-end t the pipeline uses only information
 available at t and forms the book held over month t+1 (`return_month`).
 
-### 1. Ten return signals ("sleeves", `sleeves/`)
+### 1. Nine return signals ("sleeves", `sleeves/`)
 
 Each sleeve gives every stock a score. Its *native universe* is where it is
 meant to work, and the rest of the universe is scored too where data exist.
@@ -100,7 +108,6 @@ percentile, and a known sector.
 | `conf_lm_gated` | Three-month revision of the nearest open quarter's consensus EPS, scaled by price, kept only when it agrees in sign with 3-to-1-month price momentum | tradable large/mega | no |
 | `inventory_retail` | Sales growth minus inventory growth | tradable small/large/mega in retailing and consumer durables (GICS 2550, 2520) | no |
 | `oplev_software` | Sales growth minus SG&A growth (operating leverage) | tradable small/large/mega in software and IT services (GICS 4510) | no |
-| `timesfm` | Zero-shot TimesFM 3 forecast of next-month excess return from the stock's own monthly return history (at least 48 months). The model sees anonymous return series: no ticker, name or date | price ≥ $1 | no (pretrained) |
 | `xgb_rank` | XGBoost on the 147 characteristics, each ranked to [−1, 1] within the month. Target: the next-month return's percentile rank. Heavily regularized, 4 seeds averaged | price ≥ $1 | yes |
 | `filing_events` | XGBoost on counts of SEC EDGAR filing events over 1, 3 and 12 months: late filings, comment letters, offerings, 13D/13G, proxy fights, deal filings and similar (details below). Target ranked within size group × sector, 4 seeds | price ≥ $1 | yes |
 
@@ -115,8 +122,8 @@ percentile, and a known sector.
   pairwise correlation, and equal weights avoid fitting the mix on the test
   years.
 - **Second score:** a version without the two micro-cap sleeves
-  (`final_score_liquid`) is computed for books above $50M (micro-sleeve switch,
-  below).
+  (`final_score_liquid`) is used above the committed $50M NAV threshold.
+  This switch remains a fixed, historically test-selected design choice.
 
 ### 3. Graph overlay (`graph/`)
 
@@ -178,8 +185,14 @@ verified label forward, with its source (details below).
   what is actually held.
 - **Costs:** trading costs of 5 to 60 bp per unit traded and borrow fees of 25
   to 1,500 bp a year, both by size tier. Capital earns the 3-month T-bill.
-- **Missing returns:** a holding with no next-month return exits at its last
-  price (zero return).
+- **Missing returns:** a stock selected at month-end t with no t+1 return
+  closes during holding month t+1 at the latest positive panel price dated
+  no later than that holding month's end. Price P&L is exit/opening price − 1,
+  converted to excess return using that month's cash rate. Exit trading costs
+  are charged and the closed position is removed from subsequent drift and
+  the next retention buffer. `report/liquidations.csv` records the quote and
+  trade. An unchanged last price can give zero price return; missing returns
+  are never silently replaced by zero excess returns.
 - **Benchmark:** T-bill + 4% a year. Information ratio = √12 × mean(active) /
   sd(active).
 - **Statistics:** alpha and beta come from a regression on S&P 500 excess
@@ -188,7 +201,7 @@ verified label forward, with its source (details below).
 - **OOS R²:** each score is mapped to an expected return using only slopes
   already realized, then compared with a zero forecast.
 
-## Time discipline (no look-ahead)
+## Time discipline and limitations
 
 | Fitted model | Trains on target months | Validates / early-stops on | Predicts |
 |---|---|---|---|
@@ -200,16 +213,27 @@ verified label forward, with its source (details below).
   month t+1.
 - **Analyst data:** a feature uses only consensus snapshots and announcements
   dated on or before the month-end. Later announcements serve only as training
-  labels.
-- **SEC filings:** an 8-K or EDGAR filing in month m first counts for month m+1.
-- **Short interest:** treated as public 12 days after settlement.
+  labels. Later revisions cannot replace the first earnings report, and
+  supplied ticker-link end dates are respected.
+- **SEC filings:** a filing in month m first counts for month m+1. Each
+  company's CIK/name mapping uses only evidence known at formation.
+- **Short interest:** use explicit publication dates when supplied; otherwise
+  delay ten business days, excluding federal holidays and Good Friday.
 - **Labels:** the identity agent uses nothing dated after formation.
 - **Universe:** stocks without a next-month return stay in the universe (no
   survivorship filter); they exit at their last price if held.
 - **Risk rules:** they use returns up to the formation month only.
-- **TimesFM:** a pretrained foundation model whose training data is not
-  certified to end before 2021. It sees only anonymous return series. This is
-  a disclosed limitation.
+- **TimesFM:** excluded from the active sleeves and graph inputs.
+- **Opening turnover:** previous holdings drift using the previous month's
+  realized return, cash rate, costs and borrow fees; no current-month rate.
+- **Guards:** no outcome columns in predictions; exact next-month targets;
+  dated identity evidence; no predictions past August 2026; stale caches rejected.
+- **Source vintages:** supplied extracts do not establish historical publication
+  and revision timestamps for every value.
+- **Parameter selection:** committed recipes are restored, with the original
+  Y−2…Y−1 early-stopping windows. Blend weights are equal, graph tilt is 5%,
+  borrow cap is 15% and risk/portfolio settings are fixed. They are not all
+  validation-selected in this requested version.
 - **Research choices:** several design choices (the borrow-screen cap, the
   filing-events source, the micro-sleeve switch) were made looking at
   2021–2026 results, so read their gains as upper estimates (see the notes
@@ -237,71 +261,63 @@ verified label forward, with its source (details below).
 
 ## Results by fund size
 
-Out-of-sample test period January 2021 to August 2026 (68 months). Monthly
-rebalancing, all risk rules on, 100 longs and 100 shorts every month. Returns
-are on NAV and net of trading costs (5 to 60 bp per unit traded by size tier)
-and borrow fees (25 to 1,500 bp a year by size tier); capital earns the
-3-month T-bill. A stock with no next-month return exits at its last price.
+Evaluation period January 2021 to August 2026 (68 months). Monthly
+rebalancing, committed risk settings, 100 longs and 100 shorts at formation.
+Returns are on NAV, net of trading and borrow costs, with T-bill cash interest.
+Missing holding-month returns trigger explicit last-quote liquidations and
+exit fees. All six sizes pass portfolio compliance checks.
 
 | Metric | $10M | $100M | $250M | $500M | $750M | $1000M |
 |---|---|---|---|---|---|---|
-| Information ratio vs T-bill + 4% | **1.93** | **1.47** | **1.05** | **1.18** | **0.73** | **0.46** |
-| Sharpe ratio (excess of T-bill) | 2.46 | 2.01 | 1.64 | 1.85 | 1.47 | 1.31 |
-| CAGR (compounded annual return) | **23.5%** | **19.7%** | **15.0%** | **15.1%** | **11.7%** | **9.7%** |
-| Cumulative return (Jan 2021 – Aug 2026) | 231.2% | 176.4% | 121.1% | 121.4% | 86.9% | 69.2% |
-| Annualized active return (vs T-bill + 4%) | 14.3% | 11.1% | 7.0% | 7.0% | 3.9% | 2.1% |
-| Annualized volatility | 7.4% | 7.5% | 6.7% | 5.9% | 5.4% | 4.7% |
-| Max drawdown | -2.3% (Jul 2025) | -3.3% (Jan 2023) | -4.3% (Jan 2023) | -2.5% (Dec 2023) | -3.5% (Aug 2025) | -3.5% (Aug 2025) |
-| Worst / best month | -2.2% / +8.6% | -3.3% / +8.5% | -3.2% / +7.1% | -2.0% / +6.9% | -2.3% / +4.8% | -2.7% / +4.0% |
-| Months beating the hurdle | 63% | 65% | 62% | 59% | 60% | 60% |
-| Alpha vs S&P 500 (CAPM) | 19.7%/yr (t 5.7) | 16.1%/yr (t 5.3) | 11.9%/yr (t 4.4) | 11.8%/yr (t 5.4) | 8.7%/yr (t 4.5) | 6.8%/yr (t 4.3) |
-| Beta vs S&P 500 | -0.13 (SE 0.068) | -0.10 (SE 0.060) | -0.09 (SE 0.058) | -0.08 (SE 0.045) | -0.07 (SE 0.042) | -0.06 (SE 0.036) |
-| Correlation with S&P 500 | -0.26 | -0.20 | -0.20 | -0.20 | -0.19 | -0.20 |
-| 4-factor alpha (market, size, value, momentum) | 11.8%/yr (t 4.0) | 6.6%/yr (t 3.3) | 4.8%/yr (t 2.5) | 6.0%/yr (t 3.7) | 3.7%/yr (t 2.5) | 2.5%/yr (t 1.9) |
-| 4-factor loadings (mkt / size / value / mom) | -0.08 / -0.34 / +0.26 / +0.13 | -0.02 / -0.31 / +0.24 / +0.22 | -0.02 / -0.25 / +0.16 / +0.17 | -0.02 / -0.20 / +0.12 / +0.15 | -0.02 / -0.15 / +0.09 / +0.14 | -0.01 / -0.10 / +0.06 / +0.13 |
-| Trading costs / borrow fees per year | 2.1% / 1.9% | 1.7% / 1.5% | 1.4% / 1.0% | 1.1% / 0.7% | 1.0% / 0.5% | 0.9% / 0.4% |
-| Gross exposure, average (range) | 81% (37%–100%) | 87% (38%–100%) | 87% (38%–100%) | 90% (37%–100%) | 89% (37%–100%) | 89% (37%–100%) |
-| Net exposure, average (range) | +1.4% (-7.8% to +9.4%) | +1.1% (-9.4% to +8.7%) | +0.8% (-6.9% to +6.5%) | +0.0% (-13.5% to +7.2%) | +0.0% (-13.5% to +7.3%) | +0.2% (-11.5% to +6.9%) |
-| Monthly turnover (of NAV) | 74% | 78% | 77% | 74% | 71% | 68% |
+| Information ratio vs T-bill + 4% | **1.55** | **1.22** | **0.91** | **1.08** | **0.64** | **0.44** |
+| Sharpe ratio (excess of T-bill) | 2.11 | 1.80 | 1.55 | 1.84 | 1.42 | 1.31 |
+| CAGR (compounded annual return) | **19.7%** | **16.7%** | **13.5%** | **13.6%** | **10.9%** | **9.6%** |
+| Cumulative return (Jan 2021 – Aug 2026) | 176.7% | 140.1% | 104.7% | 105.9% | 80.0% | 68.4% |
+| Annualized active return (vs T-bill + 4%) | 11.1% | 8.5% | 5.6% | 5.7% | 3.3% | 2.0% |
+| Annualized volatility | 7.1% | 7.0% | 6.2% | 5.2% | 5.1% | 4.6% |
+| Max drawdown | -2.9% (Jul 2025) | -2.3% (Jan 2023) | -2.3% (Jul 2025) | -1.8% (Dec 2023) | -3.3% (Jul 2025) | -3.6% (Aug 2025) |
+| Worst / best month | -2.9% / +8.9% | -2.3% / +9.2% | -1.5% / +7.9% | -1.7% / +5.6% | -2.1% / +4.3% | -2.0% / +4.0% |
+| Months beating the hurdle | 65% | 59% | 56% | 59% | 60% | 60% |
+| Alpha vs S&P 500 (CAPM) | 16.1%/yr (t 4.5) | 13.3%/yr (t 4.1) | 10.4%/yr (t 3.7) | 10.6%/yr (t 5.1) | 8.1%/yr (t 4.0) | 6.8%/yr (t 3.8) |
+| Beta vs S&P 500 | -0.10 (SE 0.072) | -0.08 (SE 0.058) | -0.08 (SE 0.052) | -0.09 (SE 0.042) | -0.08 (SE 0.038) | -0.07 (SE 0.033) |
+| Correlation with S&P 500 | -0.21 | -0.18 | -0.19 | -0.26 | -0.24 | -0.22 |
+| 4-factor alpha (market, size, value, momentum) | 7.5%/yr (t 2.8) | 3.9%/yr (t 1.7) | 3.5%/yr (t 1.6) | 5.2%/yr (t 2.5) | 3.6%/yr (t 1.5) | 3.2%/yr (t 1.3) |
+| 4-factor loadings (mkt / size / value / mom) | -0.06 / -0.30 / +0.32 / +0.13 | -0.01 / -0.29 / +0.28 / +0.20 | -0.03 / -0.26 / +0.21 / +0.14 | -0.04 / -0.18 / +0.14 / +0.13 | -0.04 / -0.17 / +0.10 / +0.11 | -0.03 / -0.14 / +0.07 / +0.09 |
+| Trading costs / borrow fees per year | 2.0% / 1.6% | 1.6% / 1.3% | 1.4% / 0.9% | 1.1% / 0.6% | 1.0% / 0.4% | 0.9% / 0.3% |
+| Gross exposure, average (range) | 75% (37%–100%) | 82% (37%–100%) | 85% (37%–100%) | 87% (37%–100%) | 87% (37%–100%) | 86% (37%–100%) |
+| Net exposure, average (range) | +1.8% (-6.8% to +13.1%) | +2.1% (-5.4% to +8.9%) | +1.5% (-5.4% to +8.0%) | +0.9% (-8.3% to +8.4%) | +0.3% (-10.3% to +7.9%) | +0.3% (-9.2% to +6.5%) |
+| Monthly turnover (of NAV) | 71% | 76% | 76% | 75% | 71% | 69% |
 | Holdings per month (long / short) | 100 / 100 | 100 / 100 | 100 / 100 | 100 / 100 | 100 / 100 | 100 / 100 |
-| Position size, average / max (% NAV) | 0.41% / 0.82% | 0.43% / 0.79% | 0.43% / 0.79% | 0.45% / 0.70% | 0.45% / 0.61% | 0.44% / 0.59% |
-| Micro/nano share of short positions | 47% | 23% | 9% | 4% | 2% | 1% |
-| OOS R² (zero benchmark, all scored stocks) | +0.06% | +0.03% | +0.03% | +0.03% | +0.03% | +0.03% |
+| Position size, average / max (% NAV) | 0.38% / 0.79% | 0.41% / 0.76% | 0.42% / 0.76% | 0.44% / 0.76% | 0.43% / 0.59% | 0.43% / 0.62% |
+| Micro/nano share of short positions | 43% | 21% | 9% | 4% | 2% | 1% |
+| OOS R² (zero benchmark, all scored stocks) | +0.05% | +0.02% | +0.02% | +0.02% | +0.02% | +0.02% |
 
 | Year | $10M | $100M | $250M | $500M | $750M | $1000M | Hurdle (T-bill + 4%) | S&P 500 |
 |---|---|---|---|---|---|---|---|---|
-| 2021 | 23.3% | 26.9% | 21.1% | 16.9% | 16.5% | 11.1% | 4.1% | 26.9% |
-| 2022 | 40.1% | 29.6% | 18.6% | 19.0% | 13.4% | 13.5% | 6.2% | -19.4% |
-| 2023 | 21.8% | 10.2% | 11.5% | 9.9% | 7.1% | 3.8% | 9.5% | 24.2% |
-| 2024 | 23.9% | 18.5% | 17.4% | 19.4% | 15.5% | 14.0% | 9.3% | 23.3% |
-| 2025 | 15.9% | 18.4% | 13.0% | 14.2% | 8.8% | 7.0% | 8.4% | 16.4% |
-| 2026 (to Aug) | 9.7% | 8.7% | 4.1% | 6.1% | 5.1% | 5.9% | 5.2% | 12.3% |
+| 2021 | 21.2% | 26.4% | 22.1% | 16.3% | 15.5% | 12.5% | 4.1% | 26.9% |
+| 2022 | 36.5% | 26.4% | 15.9% | 16.9% | 13.0% | 11.4% | 6.2% | -19.4% |
+| 2023 | 23.5% | 7.8% | 7.8% | 5.5% | 2.9% | 2.7% | 9.5% | 24.2% |
+| 2024 | 11.9% | 10.8% | 13.3% | 17.3% | 15.5% | 13.0% | 9.3% | 23.3% |
+| 2025 | 12.9% | 16.3% | 12.2% | 14.1% | 10.3% | 8.8% | 8.4% | 16.4% |
+| 2026 (to Aug) | 7.2% | 8.3% | 5.5% | 7.3% | 5.1% | 6.5% | 5.2% | 12.3% |
 
 ### Reading the table
 
-- **Capacity.** A position must be tradable within five days at 5% (longs)
-  or 2% (shorts) of daily dollar volume. As NAV grows, small and illiquid
-  names drop out (micro/nano shorts fall from 47% to 1%) and the book drifts
-  to large caps, where the signals are weaker. Above $50M the book is scored
-  without the two micro-cap sleeves (see the switch section below).
-- **Stock-specific alpha is largest at $10M and still visible to $500M.** The
-  4-factor alpha is 11.8%/yr (t 4.0) at $10M, 6.6% (t 3.3) at $100M, 4.8%
-  (t 2.5) at $250M, 6.0% (t 3.7) at $500M and 3.7% (t 2.5) at $750M; it is
-  marginal at $1B (2.5%, t 1.9). The sizes above $10M carry more
-  selection risk than the headline (the micro-sleeve switch was chosen on the
-  test months), so treat them as the capacity curve, not as separate results.
-- **Larger sizes are, if anything, optimistic.** Costs are a fixed rate per
-  unit traded by size tier and do not grow with order size, so the extra
-  market impact of trading millions per name is not charged.
-- **Beta** is small and negative (-0.06 to -0.13) at every size. With HAC
-  standard errors |t| is 1.6 to 1.9, so it is not significant at 5%, but it is
-  close at $10M (t -1.9; -2.2 with classical standard errors). Say so on the
-  neutrality slide rather than calling it zero.
-- **Exposure.** Gross is at most 100% of NAV against the 200% limit; the
-  risk rules hold the remainder as cash when tail risk is high or the
-  signal's recent edge is weak.
+- **Capacity:** above $50M the committed blend drops the two micro-cap
+  sleeves. Formation-time liquidity limits further restrict tradable names.
+- **Costs:** fixed rates by size tier include normal trading and liquidation
+  fees. Additional order-size market impact is not modeled.
+- **Drawdown:** measured on monthly NAV and anchored to initial NAV; it does
+  not measure daily or intramonth losses.
+- **Settlement:** the last available quote is a valuation convention; it does
+  not establish executable proceeds or recover unavailable delisting returns.
+- **Interpretation:** timing corrections do not erase test-period research
+  selections or certify historical source vintages.
 
-### What changed from the 2026-10-01 book
+### Historical changes from the 2026-10-01 book
+
+All comparisons below predate the current timing and liquidation corrections.
+They are retained as research history, not current performance.
 
 Information ratio vs T-bill + 4% / CAGR / 4-factor alpha (t), same 68 test
 months, same costs, all risk rules on:
@@ -313,7 +329,7 @@ months, same costs, all risk rules on:
 | + filing-events sleeve only | 1.73 / 22.5% / 10.7% (3.5) | 0.97 / 15.2% / 3.4% (1.2) | 0.54 / 11.4% / 0.5% (0.2) |
 | Both, scored with all ten sleeves | 1.78 / 22.3% / 10.4% (3.8) | 1.05 / 15.4% / 2.8% (1.1) | 0.79 / 12.5% / 1.8% (0.8) |
 | Both + micro-sleeve switch | 1.78 / 22.3% / 10.4% (3.8) | 1.43 / 18.9% / 6.3% (3.1) | 1.14 / 14.8% / 4.9% (3.4) |
-| **+ identity agent (this table)** | **1.93 / 23.5% / 11.8% (4.0)** | **1.47 / 19.7% / 6.6% (3.3)** | **1.18 / 15.1% / 6.0% (3.7)** |
+| **+ identity agent (historical book)** | **1.93 / 23.5% / 11.8% (4.0)** | **1.47 / 19.7% / 6.6% (3.3)** | **1.18 / 15.1% / 6.0% (3.7)** |
 
 The borrow screen is what helps at $500M (0.52 to 0.82, CAGR +1.5 points):
 it removes the shorts a large book could not borrow. At $10M it adds 0.1 of
@@ -461,7 +477,11 @@ stock carried while held (e.g. DWAC before DJT, FB before META).
 
 Research and checks: `docs/research/council_v2_20261002_results.md`.
 
-## Micro-sleeve switch (`combiner.py`, `optimizer.py`)
+## Historical micro-sleeve switch (`combiner.py`, `optimizer.py`)
+
+The committed switch is restored in this timing-and-liquidation-only version.
+The comparisons below are historical; the current results are in the fund-size
+tables above.
 
 Two sleeves, `gap_micro_best` and `runway_micro`, are built for micro caps.
 Above `MICRO_SLEEVES_MAX_NAV` ($50M) the optimizer reads `final_score_liquid`,
@@ -492,7 +512,7 @@ A warning sign: dropping either micro sleeve alone at $100M lowers the informati
 ratio (1.31 to 1.18 without `runway_micro`, to 1.16 without `gap_micro_best`; research
 harness), and only dropping both raises it (1.48). A gain that appears only for the
 pair, with opposite-signed singles, is what noise or a fragile interaction looks like.
-The switch is on by default because the official-chain paired evidence is positive
+Historically, the switch was enabled because the official-chain paired evidence is positive
 at four of five sizes; for the conservative book that ignores it, set
 `MICRO_SLEEVES_MAX_NAV = float("inf")` in `optimizer.py` (the by-NAV table then
 reads 1.78 / 1.05 / 0.74 / 0.79 / 0.54 / 0.29 from $10M to $1B).
@@ -505,314 +525,20 @@ the broad scoring stays for every other sleeve. The $50M threshold is a
 judgement between two tested sizes. Treat the $100M to $500M gain as probable but
 overstated, and the $10M headline as unaffected.
 
-## Turnover cap (tested, not adopted)
-
-Question tested: does capping monthly turnover at 30% or 20% of NAV help? Turnover
-here is buys plus sells as a share of NAV, the same measure as the 68% to 78% in
-the results table. It does not help: the cap saves 0.5% to 1.5% a year of trading
-costs but gives up 2% to 9% a year of return, and it lowers the information ratio
-at every fund size except $1000M at 30%, where the gain is within noise (4-factor
-alpha t-statistic unchanged at 1.9). The 20% cap removes the 4-factor alpha from
-$100M up.
-
-How the cap was applied:
-- Each month the optimizer builds its book as described above. The trade is
-  measured from the current holdings, which are last month's book drifted with
-  its realized returns.
-- If that trade exceeds the cap, the rank buffer is widened (1, 2, 4, 8 times
-  the sector quota, then every eligible incumbent) until the trade fits. Any
-  unused budget is spent moving toward the production book.
-- If the widest buffer still trades more than the cap, the book moves only part
-  of the way to its target, the same fraction for every position, so that it
-  trades exactly the cap.
-- The risk rules run on every candidate book.
-
-Names being sold off stay in the book while they fade out, so a capped book holds
-220 to 264 names on average (at most 362) instead of exactly 100 / 100, and gross
-can reach 107% from drifted positions. Every capped book passes all the compliance
-checks, and the no-cap column reproduces the results table exactly. The test used
-a research script outside the submission (`output/turnover_cap/run_cap.py` in the
-project repository); nothing in `final/` changes.
-
-| Fund | IR: none / 30% / 20% | CAGR: none / 30% / 20% | 4-factor alpha (t): none / 30% / 20% | Trading costs per year: none / 30% / 20% |
-|---|---|---|---|---|
-| $10M | 1.93 / 1.29 / 1.09 | 23.5% / 17.4% / 14.9% | 11.8% (4.0) / 7.1% (3.3) / 2.9% (1.5) | 2.1% / 0.8% / 0.6% |
-| $100M | 1.47 / 0.76 / 0.59 | 19.7% / 13.2% / 11.4% | 6.6% (3.3) / 1.3% (0.6) / -1.5% (-0.7) | 1.7% / 0.7% / 0.5% |
-| $250M | 1.05 / 0.77 / 0.29 | 15.0% / 13.6% / 9.2% | 4.8% (2.5) / 2.1% (0.7) / -1.4% (-0.6) | 1.4% / 0.6% / 0.4% |
-| $500M | 1.18 / 0.80 / 0.14 | 15.1% / 12.2% / 8.1% | 6.0% (3.7) / 2.7% (1.7) / -0.8% (-0.4) | 1.1% / 0.5% / 0.3% |
-| $750M | 0.73 / 0.46 / -0.02 | 11.7% / 10.0% / 7.3% | 3.7% (2.5) / 2.7% (1.4) / 0.4% (0.2) | 1.0% / 0.4% / 0.3% |
-| $1000M | 0.46 / 0.60 / 0.05 | 9.7% / 10.5% / 7.7% | 2.5% (1.9) / 3.2% (1.9) / 1.2% (0.8) | 0.9% / 0.4% / 0.2% |
-
-Why it fails: the signals are monthly, so a position kept after its signal turns
-earns little, and the short side loses most. At $10M, short-leg P&L falls from
-14.7% a year with no cap to 9.2% at 30% and 7.2% at 20%, while long-leg P&L falls
-from 7.6% to 6.6% and 5.9%. The risk rules also move gross by about 8% of NAV a
-month, which uses part of the budget before any name is replaced.
-
-Turnover is often quoted one-way (half of buys plus sells). Read that way, 20% to
-30% one-way is 40% to 60% in the measure above, and the cost is much smaller. At
-$10M:
-
-| Metric | No cap | 60% cap | 40% cap |
-|---|---|---|---|
-| Information ratio vs T-bill + 4% | **1.93** | **1.83** | **1.63** |
-| Sharpe ratio | 2.46 | 2.36 | 2.16 |
-| CAGR | **23.5%** | **23.0%** | **21.1%** |
-| Cumulative return | 231.2% | 223.8% | 195.9% |
-| Active return per year | 14.3% | 13.9% | 12.3% |
-| Volatility | 7.4% | 7.6% | 7.5% |
-| Max drawdown | -2.3% (Jul 2025) | -2.5% (Jul 2025) | -2.1% (Jul 2025) |
-| Worst / best month | -2.2% / +8.6% | -2.5% / +8.6% | -2.1% / +7.8% |
-| Months beating the hurdle | 63% | 66% | 66% |
-| Alpha vs S&P 500 (t) | 19.7% (5.7) | 19.2% (5.2) | 17.9% (4.9) |
-| Beta vs S&P 500 (SE) | -0.13 (0.068) | -0.12 (0.072) | -0.15 (0.072) |
-| Correlation with S&P 500 | -0.26 | -0.23 | -0.30 |
-| 4-factor alpha (t) | 11.8% (4.0) | 11.3% (3.6) | 10.5% (3.8) |
-| Trading costs / borrow per year | 2.1% / 1.9% | 1.6% / 1.9% | 1.1% / 1.9% |
-| Gross exposure, avg (range) | 81% (37–100%) | 82% (37–100%) | 83% (37–100%) |
-| Net exposure, avg (range) | +1.4% (-7.8% to +9.4%) | +1.6% (-8.0% to +8.1%) | +1.3% (-8.8% to +8.4%) |
-| Monthly turnover | 74% | 56% | 39% |
-| Holdings, avg long / short (max total) | 100 / 100 (200) | 108 / 107 (229) | 110 / 110 (267) |
-| Position size, avg / max | 0.41% / 0.82% | 0.38% / 0.77% | 0.38% / 0.79% |
-| Micro/nano share of shorts | 47% | 46% | 44% |
-| Months the cap forced a partial move | – | 0% | 7% |
-| Compliance checks | pass | pass | pass |
-| Return 2021 (hurdle 4.1%, S&P 26.9%) | 23.3% | 22.9% | 21.5% |
-| Return 2022 (hurdle 6.2%, S&P -19.4%) | 40.1% | 41.6% | 41.4% |
-| Return 2023 (hurdle 9.5%, S&P 24.2%) | 21.8% | 22.2% | 19.6% |
-| Return 2024 (hurdle 9.3%, S&P 23.3%) | 23.9% | 21.3% | 18.6% |
-| Return 2025 (hurdle 8.4%, S&P 16.4%) | 15.9% | 15.5% | 12.5% |
-| Return 2026 to Aug (hurdle 5.2%, S&P 12.3%) | 9.7% | 8.6% | 8.0% |
-
-If lower turnover is wanted anyway, a 60% cap (30% one-way) costs about 0.1 of
-information ratio at $10M. Full tables for the 30% and 20% caps, by fund size:
-
-<details>
-<summary>$10M fund: full table</summary>
-
-| Metric | No cap | 30% cap | 20% cap |
-|---|---|---|---|
-| Information ratio vs T-bill + 4% | **1.93** | **1.29** | **1.09** |
-| Sharpe ratio | 2.46 | 1.86 | 1.73 |
-| CAGR | **23.5%** | **17.4%** | **14.9%** |
-| Cumulative return | 231.2% | 148.7% | 120.0% |
-| Active return per year | 14.3% | 9.1% | 6.9% |
-| Volatility | 7.4% | 7.1% | 6.3% |
-| Max drawdown | -2.3% (Jul 2025) | -2.9% (May 2026) | -2.9% (Dec 2024) |
-| Worst / best month | -2.2% / +8.6% | -2.6% / +6.6% | -2.3% / +5.6% |
-| Months beating the hurdle | 63% | 62% | 60% |
-| Alpha vs S&P 500 (t) | 19.7% (5.7) | 15.0% (5.2) | 12.2% (4.6) |
-| Beta vs S&P 500 (SE) | -0.13 (0.068) | -0.17 (0.062) | -0.13 (0.054) |
-| Correlation with S&P 500 | -0.26 | -0.37 | -0.30 |
-| 4-factor alpha (t) | 11.8% (4.0) | 7.1% (3.3) | 2.9% (1.5) |
-| Trading costs / borrow per year | 2.1% / 1.9% | 0.8% / 1.7% | 0.6% / 1.6% |
-| Gross exposure, avg (range) | 81% (37–100%) | 85% (37–102%) | 80% (37–106%) |
-| Net exposure, avg (range) | +1.4% (-7.8% to +9.4%) | +3.2% (-7.3% to +11.1%) | +2.4% (-5.3% to +8.9%) |
-| Monthly turnover | 74% | 30% | 20% |
-| Holdings, avg long / short (max total) | 100 / 100 (200) | 120 / 130 (327) | 119 / 144 (348) |
-| Position size, avg / max | 0.41% / 0.82% | 0.34% / 0.82% | 0.30% / 0.82% |
-| Micro/nano share of shorts | 47% | 40% | 39% |
-| Months the cap forced a partial move | – | 72% | 84% |
-| Compliance checks | pass | pass | pass |
-| Return 2021 (hurdle 4.1%, S&P 26.9%) | 23.3% | 19.7% | 16.0% |
-| Return 2022 (hurdle 6.2%, S&P -19.4%) | 40.1% | 36.6% | 32.1% |
-| Return 2023 (hurdle 9.5%, S&P 24.2%) | 21.8% | 14.2% | 14.1% |
-| Return 2024 (hurdle 9.3%, S&P 23.3%) | 23.9% | 12.5% | 10.0% |
-| Return 2025 (hurdle 8.4%, S&P 16.4%) | 15.9% | 13.3% | 6.7% |
-| Return 2026 to Aug (hurdle 5.2%, S&P 12.3%) | 9.7% | 4.6% | 7.1% |
-
-</details>
-
-<details>
-<summary>$100M fund: full table</summary>
-
-| Metric | No cap | 30% cap | 20% cap |
-|---|---|---|---|
-| Information ratio vs T-bill + 4% | **1.47** | **0.76** | **0.59** |
-| Sharpe ratio | 2.01 | 1.33 | 1.23 |
-| CAGR | **19.7%** | **13.2%** | **11.4%** |
-| Cumulative return | 176.4% | 101.7% | 84.1% |
-| Active return per year | 11.1% | 5.4% | 3.7% |
-| Volatility | 7.5% | 7.1% | 6.3% |
-| Max drawdown | -3.3% (Jan 2023) | -4.4% (Aug 2022) | -5.8% (Aug 2022) |
-| Worst / best month | -3.3% / +8.5% | -4.1% / +7.3% | -5.1% / +5.7% |
-| Months beating the hurdle | 65% | 62% | 60% |
-| Alpha vs S&P 500 (t) | 16.1% (5.3) | 10.8% (3.1) | 8.7% (2.8) |
-| Beta vs S&P 500 (SE) | -0.10 (0.060) | -0.14 (0.070) | -0.09 (0.058) |
-| Correlation with S&P 500 | -0.20 | -0.29 | -0.22 |
-| 4-factor alpha (t) | 6.6% (3.3) | 1.3% (0.6) | -1.5% (-0.7) |
-| Trading costs / borrow per year | 1.7% / 1.5% | 0.7% / 1.2% | 0.5% / 1.1% |
-| Gross exposure, avg (range) | 87% (38–100%) | 82% (37–101%) | 84% (37–107%) |
-| Net exposure, avg (range) | +1.1% (-9.4% to +8.7%) | +0.7% (-9.0% to +9.4%) | +2.3% (-5.8% to +7.6%) |
-| Monthly turnover | 78% | 30% | 20% |
-| Holdings, avg long / short (max total) | 100 / 100 (200) | 115 / 120 (281) | 123 / 141 (362) |
-| Position size, avg / max | 0.43% / 0.79% | 0.35% / 0.82% | 0.32% / 0.87% |
-| Micro/nano share of shorts | 23% | 18% | 15% |
-| Months the cap forced a partial move | – | 55% | 88% |
-| Compliance checks | pass | pass | pass |
-| Return 2021 (hurdle 4.1%, S&P 26.9%) | 26.9% | 22.5% | 18.9% |
-| Return 2022 (hurdle 6.2%, S&P -19.4%) | 29.6% | 24.3% | 19.6% |
-| Return 2023 (hurdle 9.5%, S&P 24.2%) | 10.2% | 10.2% | 12.6% |
-| Return 2024 (hurdle 9.3%, S&P 23.3%) | 18.5% | 11.2% | 5.1% |
-| Return 2025 (hurdle 8.4%, S&P 16.4%) | 18.4% | 7.2% | 1.3% |
-| Return 2026 to Aug (hurdle 5.2%, S&P 12.3%) | 8.7% | 0.8% | 8.0% |
-
-</details>
-
-<details>
-<summary>$250M fund: full table</summary>
-
-| Metric | No cap | 30% cap | 20% cap |
-|---|---|---|---|
-| Information ratio vs T-bill + 4% | **1.05** | **0.77** | **0.29** |
-| Sharpe ratio | 1.64 | 1.31 | 0.97 |
-| CAGR | **15.0%** | **13.6%** | **9.2%** |
-| Cumulative return | 121.1% | 105.6% | 64.7% |
-| Active return per year | 7.0% | 5.8% | 1.7% |
-| Volatility | 6.7% | 7.5% | 5.9% |
-| Max drawdown | -4.3% (Jan 2023) | -5.0% (Aug 2022) | -5.5% (Aug 2022) |
-| Worst / best month | -3.2% / +7.1% | -4.8% / +6.9% | -4.0% / +5.3% |
-| Months beating the hurdle | 62% | 59% | 56% |
-| Alpha vs S&P 500 (t) | 11.9% (4.4) | 11.2% (3.3) | 7.0% (2.4) |
-| Beta vs S&P 500 (SE) | -0.09 (0.058) | -0.14 (0.065) | -0.12 (0.050) |
-| Correlation with S&P 500 | -0.20 | -0.27 | -0.32 |
-| 4-factor alpha (t) | 4.8% (2.5) | 2.1% (0.7) | -1.4% (-0.6) |
-| Trading costs / borrow per year | 1.4% / 1.0% | 0.6% / 0.9% | 0.4% / 0.8% |
-| Gross exposure, avg (range) | 87% (38–100%) | 85% (37–102%) | 84% (37–105%) |
-| Net exposure, avg (range) | +0.8% (-6.9% to +6.5%) | -0.6% (-10.0% to +4.9%) | -0.6% (-9.0% to +4.7%) |
-| Monthly turnover | 77% | 30% | 20% |
-| Holdings, avg long / short (max total) | 100 / 100 (200) | 112 / 114 (271) | 120 / 130 (302) |
-| Position size, avg / max | 0.43% / 0.79% | 0.37% / 0.73% | 0.33% / 0.96% |
-| Micro/nano share of shorts | 9% | 7% | 5% |
-| Months the cap forced a partial move | – | 39% | 81% |
-| Compliance checks | pass | pass | pass |
-| Return 2021 (hurdle 4.1%, S&P 26.9%) | 21.1% | 20.8% | 18.0% |
-| Return 2022 (hurdle 6.2%, S&P -19.4%) | 18.6% | 23.6% | 15.5% |
-| Return 2023 (hurdle 9.5%, S&P 24.2%) | 11.5% | 8.1% | 8.6% |
-| Return 2024 (hurdle 9.3%, S&P 23.3%) | 17.4% | 16.0% | 6.5% |
-| Return 2025 (hurdle 8.4%, S&P 16.4%) | 13.0% | 8.9% | 2.5% |
-| Return 2026 to Aug (hurdle 5.2%, S&P 12.3%) | 4.1% | 0.8% | 2.1% |
-
-</details>
-
-<details>
-<summary>$500M fund: full table</summary>
-
-| Metric | No cap | 30% cap | 20% cap |
-|---|---|---|---|
-| Information ratio vs T-bill + 4% | **1.18** | **0.80** | **0.14** |
-| Sharpe ratio | 1.85 | 1.53 | 1.03 |
-| CAGR | **15.1%** | **12.2%** | **8.1%** |
-| Cumulative return | 121.4% | 92.1% | 55.4% |
-| Active return per year | 7.0% | 4.4% | 0.6% |
-| Volatility | 5.9% | 5.5% | 4.5% |
-| Max drawdown | -2.5% (Dec 2023) | -2.5% (Jan 2023) | -5.6% (May 2026) |
-| Worst / best month | -2.0% / +6.9% | -2.5% / +5.2% | -1.8% / +3.9% |
-| Months beating the hurdle | 59% | 56% | 53% |
-| Alpha vs S&P 500 (t) | 11.8% (5.4) | 9.5% (4.1) | 5.3% (2.6) |
-| Beta vs S&P 500 (SE) | -0.08 (0.045) | -0.10 (0.045) | -0.07 (0.037) |
-| Correlation with S&P 500 | -0.20 | -0.27 | -0.22 |
-| 4-factor alpha (t) | 6.0% (3.7) | 2.7% (1.7) | -0.8% (-0.4) |
-| Trading costs / borrow per year | 1.1% / 0.7% | 0.5% / 0.6% | 0.3% / 0.5% |
-| Gross exposure, avg (range) | 90% (37–100%) | 88% (37–105%) | 85% (37–104%) |
-| Net exposure, avg (range) | +0.0% (-13.5% to +7.2%) | -0.1% (-6.9% to +7.2%) | +1.6% (-5.9% to +7.2%) |
-| Monthly turnover | 74% | 30% | 20% |
-| Holdings, avg long / short (max total) | 100 / 100 (200) | 112 / 113 (247) | 116 / 120 (289) |
-| Position size, avg / max | 0.45% / 0.70% | 0.39% / 0.80% | 0.36% / 0.70% |
-| Micro/nano share of shorts | 4% | 3% | 3% |
-| Months the cap forced a partial move | – | 40% | 76% |
-| Compliance checks | pass | pass | pass |
-| Return 2021 (hurdle 4.1%, S&P 26.9%) | 16.9% | 15.0% | 12.7% |
-| Return 2022 (hurdle 6.2%, S&P -19.4%) | 19.0% | 19.5% | 15.5% |
-| Return 2023 (hurdle 9.5%, S&P 24.2%) | 9.9% | 8.6% | 5.7% |
-| Return 2024 (hurdle 9.3%, S&P 23.3%) | 19.4% | 15.2% | 11.2% |
-| Return 2025 (hurdle 8.4%, S&P 16.4%) | 14.2% | 9.3% | 1.2% |
-| Return 2026 to Aug (hurdle 5.2%, S&P 12.3%) | 6.1% | 2.2% | 0.4% |
-
-</details>
-
-<details>
-<summary>$750M fund: full table</summary>
-
-| Metric | No cap | 30% cap | 20% cap |
-|---|---|---|---|
-| Information ratio vs T-bill + 4% | **0.73** | **0.46** | **-0.02** |
-| Sharpe ratio | 1.47 | 1.22 | 0.86 |
-| CAGR | **11.7%** | **10.0%** | **7.3%** |
-| Cumulative return | 86.9% | 71.9% | 49.4% |
-| Active return per year | 3.9% | 2.4% | -0.1% |
-| Volatility | 5.4% | 5.3% | 4.6% |
-| Max drawdown | -3.5% (Aug 2025) | -3.6% (Aug 2025) | -5.2% (May 2026) |
-| Worst / best month | -2.3% / +4.8% | -3.1% / +4.1% | -2.5% / +3.9% |
-| Months beating the hurdle | 60% | 56% | 54% |
-| Alpha vs S&P 500 (t) | 8.7% (4.5) | 7.5% (3.6) | 5.0% (2.5) |
-| Beta vs S&P 500 (SE) | -0.07 (0.042) | -0.10 (0.040) | -0.10 (0.034) |
-| Correlation with S&P 500 | -0.19 | -0.28 | -0.34 |
-| 4-factor alpha (t) | 3.7% (2.5) | 2.7% (1.4) | 0.4% (0.2) |
-| Trading costs / borrow per year | 1.0% / 0.5% | 0.4% / 0.4% | 0.3% / 0.4% |
-| Gross exposure, avg (range) | 89% (37–100%) | 88% (37–101%) | 86% (37–103%) |
-| Net exposure, avg (range) | +0.0% (-13.5% to +7.3%) | -0.7% (-8.9% to +6.1%) | -2.2% (-7.5% to +1.7%) |
-| Monthly turnover | 71% | 30% | 20% |
-| Holdings, avg long / short (max total) | 100 / 100 (200) | 110 / 110 (239) | 115 / 117 (263) |
-| Position size, avg / max | 0.45% / 0.61% | 0.40% / 0.57% | 0.37% / 0.67% |
-| Micro/nano share of shorts | 2% | 2% | 1% |
-| Months the cap forced a partial move | – | 25% | 75% |
-| Compliance checks | pass | pass | pass |
-| Return 2021 (hurdle 4.1%, S&P 26.9%) | 16.5% | 14.4% | 12.6% |
-| Return 2022 (hurdle 6.2%, S&P -19.4%) | 13.4% | 16.6% | 14.4% |
-| Return 2023 (hurdle 9.5%, S&P 24.2%) | 7.1% | 6.1% | 7.1% |
-| Return 2024 (hurdle 9.3%, S&P 23.3%) | 15.5% | 15.4% | 7.0% |
-| Return 2025 (hurdle 8.4%, S&P 16.4%) | 8.8% | 5.0% | -0.0% |
-| Return 2026 to Aug (hurdle 5.2%, S&P 12.3%) | 5.1% | 0.3% | 1.4% |
-
-</details>
-
-<details>
-<summary>$1000M fund: full table</summary>
-
-| Metric | No cap | 30% cap | 20% cap |
-|---|---|---|---|
-| Information ratio vs T-bill + 4% | **0.46** | **0.60** | **0.05** |
-| Sharpe ratio | 1.31 | 1.44 | 1.16 |
-| CAGR | **9.7%** | **10.5%** | **7.7%** |
-| Cumulative return | 69.2% | 76.3% | 51.9% |
-| Active return per year | 2.1% | 2.9% | 0.2% |
-| Volatility | 4.7% | 4.8% | 3.6% |
-| Max drawdown | -3.5% (Aug 2025) | -2.8% (Aug 2025) | -2.2% (Dec 2024) |
-| Worst / best month | -2.7% / +4.0% | -2.5% / +3.9% | -1.4% / +4.0% |
-| Months beating the hurdle | 60% | 59% | 47% |
-| Alpha vs S&P 500 (t) | 6.8% (4.3) | 7.6% (4.9) | 4.9% (3.1) |
-| Beta vs S&P 500 (SE) | -0.06 (0.036) | -0.07 (0.038) | -0.07 (0.031) |
-| Correlation with S&P 500 | -0.20 | -0.21 | -0.30 |
-| 4-factor alpha (t) | 2.5% (1.9) | 3.2% (1.9) | 1.2% (0.8) |
-| Trading costs / borrow per year | 0.9% / 0.4% | 0.4% / 0.3% | 0.2% / 0.3% |
-| Gross exposure, avg (range) | 89% (37–100%) | 88% (37–100%) | 87% (37–104%) |
-| Net exposure, avg (range) | +0.2% (-11.5% to +6.9%) | -0.9% (-8.9% to +5.1%) | +0.8% (-7.3% to +5.1%) |
-| Monthly turnover | 68% | 30% | 20% |
-| Holdings, avg long / short (max total) | 100 / 100 (200) | 110 / 108 (237) | 121 / 120 (259) |
-| Position size, avg / max | 0.44% / 0.59% | 0.40% / 0.61% | 0.36% / 0.67% |
-| Micro/nano share of shorts | 1% | 1% | 1% |
-| Months the cap forced a partial move | – | 18% | 78% |
-| Compliance checks | pass | pass | pass |
-| Return 2021 (hurdle 4.1%, S&P 26.9%) | 11.1% | 12.0% | 10.0% |
-| Return 2022 (hurdle 6.2%, S&P -19.4%) | 13.5% | 14.3% | 14.6% |
-| Return 2023 (hurdle 9.5%, S&P 24.2%) | 3.8% | 7.6% | 8.5% |
-| Return 2024 (hurdle 9.3%, S&P 23.3%) | 14.0% | 13.8% | 5.1% |
-| Return 2025 (hurdle 8.4%, S&P 16.4%) | 7.0% | 8.2% | 2.8% |
-| Return 2026 to Aug (hurdle 5.2%, S&P 12.3%) | 5.9% | 3.9% | 2.9% |
-
-</details>
-
 ## Reproducibility and memory
 
-Every number above comes from a full rebuild with `python final/main.py`, run
-on 2026-10-02 with no saved models: all ten sleeves, TimesFM, the graph model
-and the book. The run reproduced the previous prepared run exactly: identical
-sleeve scores on all 270,149 stock-months and identical statistics. Metrics
-are computed by `evaluate.py`. The $10M column is `final/output/report/`; the
-other sizes rerun the book and report at each NAV from the same predictions
-(`output/nav_report.py`, results in `output/final_nav/`), and
-`output/final_nav/readme_table.py` regenerates the two tables above.
+The current fund-size tables were rebuilt on 2026-10-04 from the committed
+strategy recipes with timing and liquidation corrections. Timing-safe model
+artifacts were reused; reassembly reproduced all 270,149 saved timing-corrected
+forecasts exactly (normalizing timestamp precision for comparison). All six
+portfolios and reports were recalculated for explicit exits.
+
+The $10M results are in `final/output/report/`; the other sizes are in
+`output/final_nav/`. `final/output/timing_exit_protocol.json` records the active
+protocol and reuse hashes. The preceding validation-selected outputs and source
+recovery are in `output/final_timing_exit_20261004/`. Timing/report/liquidation
+regression checks: 48 passed. Runtime measurements below describe the older
+full pipeline, including TimesFM.
 
 Peak memory by stage, each built in its own process on a 16 GB laptop:
 

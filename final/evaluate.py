@@ -7,8 +7,8 @@ turnover is measured against what is actually held. Costs and conventions:
 * trading cost per unit traded, by size tier (5 to 60 bp; 25 bp if unknown);
 * borrow fee on short notional, by size tier (25 to 1,500 bp a year);
 * capital earns the 3-month T-bill (TB3MS / 100 / 12);
-* a holding with no next-month return in the panel exits at its last price
-  (zero return for that month);
+* a holding with no next-month return is explicitly liquidated at its latest
+  dated panel quote in that month, including the exit fee; no zero-label fill;
 * benchmark = T-bill + 4% a year; active = total - benchmark;
   information ratio = sqrt(12) * mean(active) / stdev(active).
 
@@ -53,7 +53,22 @@ def load_universe(panel_path: pathlib.Path) -> pd.DataFrame:
     u["return_month"] = pd.to_datetime(u.eom).dt.to_period("M") + 1
     u["sector"] = u.gics.astype("string").str[:2].fillna("na")
     u["size_grp"] = u.size_grp.astype("string")
-    u = u.drop(columns=["eom", "gics"])
+    quotes = u.loc[u.prc.notna() & u.prc.abs().gt(0), ["permno", "eom", "prc"]].copy()
+    quotes["quote_date"] = pd.to_datetime(quotes.pop("eom")).astype("datetime64[ns]")
+    quotes["exit_price"] = quotes.pop("prc").abs()
+    quotes = quotes.drop_duplicates(["permno", "quote_date"])
+    u["liquidation_cutoff"] = u.return_month.dt.to_timestamp("M").astype(
+        "datetime64[ns]"
+    )
+    u = pd.merge_asof(
+        u.sort_values("liquidation_cutoff"),
+        quotes.sort_values("quote_date"),
+        left_on="liquidation_cutoff",
+        right_on="quote_date",
+        by="permno",
+        direction="backward",
+    ).rename(columns={"quote_date": "exit_price_date"})
+    u = u.drop(columns=["eom", "gics", "liquidation_cutoff"])
     u = u.drop_duplicates(["return_month", "permno"]).reset_index(drop=True)
     for c in [
         "prc",
@@ -80,10 +95,33 @@ def market() -> pd.DataFrame:
     return pd.DataFrame({"rf": tbill / 100 / 12, "spx": spx})
 
 
+def position_returns(cur: pd.DataFrame, rf: float) -> tuple[pd.Series, pd.Series]:
+    """Missing returns trigger a last-quote liquidation, never a zero-label fill."""
+    realized = cur.ret_exc_lead1m.astype(float).copy()
+    missing = realized.isna()
+    if missing.any():
+        needed = {"prc", "exit_price", "exit_price_date"}
+        if not needed.issubset(cur.columns):
+            raise ValueError(
+                "Liquidation requires opening price and a dated last quote"
+            )
+        entry = cur.prc.abs()
+        exit_price = cur.exit_price
+        invalid = missing & (
+            entry.isna() | entry.le(0) | exit_price.isna() | exit_price.le(0)
+        )
+        if invalid.any():
+            raise ValueError("No usable price for missing-return liquidation")
+        # The last-quote price change is a total price return, not an excess return.
+        realized.loc[missing] = exit_price.loc[missing] / entry.loc[missing] - 1 - rf
+    return realized, missing
+
+
 def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataFrame:
     """One row per month: rf, P&L by leg, costs, total, exposures."""
     keyed = universe.set_index(["return_month", "permno"])
-    rows, prev, prev_r, prev_size = [], {}, {}, {}
+    rows, exits, prev, prev_r, prev_size = [], [], {}, {}, {}
+    prev_rf, prev_total = 0.0, 0.0
     for m in sorted(books):
         w = books[m]
         if not w:
@@ -91,13 +129,14 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
         rf = float(mkt.rf.get(m, np.nan))
         ids = list(w)
         cur = keyed.reindex(pd.MultiIndex.from_arrays([[m] * len(ids), ids]))
-        ret = pd.Series(cur.ret_exc_lead1m.to_numpy(), index=ids).fillna(0.0)
+        realized, liquidated = position_returns(cur, rf)
+        ret = pd.Series(realized.to_numpy(), index=ids)
+        liquidated = pd.Series(liquidated.to_numpy(), index=ids)
         size = pd.Series(cur.size_grp.astype("string").to_numpy(), index=ids)
         sector = pd.Series(cur.sector.to_numpy(), index=ids)
         beta = pd.Series(cur.beta_60m.to_numpy(), index=ids)
-        prev_total = sum(x * prev_r.get(p, 0.0) for p, x in prev.items())
         drift = {
-            p: x * (1 + prev_r.get(p, 0.0) + rf) / (1 + prev_total + rf)
+            p: x * (1 + prev_r.get(p, 0.0) + prev_rf) / (1 + prev_total)
             for p, x in prev.items()
         }
         cost = traded = 0.0
@@ -107,6 +146,28 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
                 tier = size.get(p) if p in w else prev_size.get(p)
                 cost += d * NAME_COST_BP.get(str(tier), 25.0) / 1e4
                 traded += d
+        # Close the missing-data holding in this month; it is absent from next
+        # month's drift, so the exit cannot be charged again one month later.
+        for p in liquidated[liquidated].index:
+            j = ids.index(p)
+            exit_notional = abs(w[p]) * (1 + ret[p] + rf)
+            exit_cost = exit_notional * NAME_COST_BP.get(str(size[p]), 25.0) / 1e4
+            cost += exit_cost
+            traded += exit_notional
+            exits.append(
+                {
+                    "return_month": m,
+                    "permno": p,
+                    "opening_weight": w[p],
+                    "opening_price": float(cur.prc.iloc[j]),
+                    "exit_price": float(cur.exit_price.iloc[j]),
+                    "exit_price_date": cur.exit_price_date.iloc[j],
+                    "exit_notional": exit_notional,
+                    "exit_cost": exit_cost,
+                    "price_return": ret[p] + rf,
+                    "reason": "missing_return_last_available_quote",
+                }
+            )
         ws = pd.Series(w)
         neg = ws < 0
         borrow = (
@@ -144,12 +205,16 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
                 "missing": int(cur.ret_exc_lead1m.isna().sum()),
             }
         )
-        prev, prev_r = w, ret.to_dict()
+        prev = {p: x for p, x in w.items() if not liquidated[p]}
+        prev_r = ret.to_dict()
+        prev_rf = rf
+        prev_total = rf + pnl - cost - borrow
         prev_size.update(size.to_dict())
     out = pd.DataFrame(rows).set_index("month")
     out["spx"] = mkt.spx.reindex(out.index)
     out["benchmark"] = out.rf + HURDLE / 12
     out["active"] = out.total - out.benchmark
+    out.attrs["liquidations"] = pd.DataFrame(exits)
     return out
 
 
@@ -209,7 +274,7 @@ def metrics(r: pd.DataFrame, factor_returns: pd.DataFrame | None = None) -> dict
         "ann_active": float(a.mean() * 12),
         "ir": float(np.sqrt(12) * a.mean() / a.std()),
         "sharpe": float(np.sqrt(12) * ex.mean() / ex.std()),
-        "max_dd": float((curve / curve.cummax() - 1).min()),
+        "max_dd": float((curve / curve.cummax().clip(lower=1.0) - 1).min()),
         "turnover": float(r.traded.mean()),
         "cost_ann": float(r.cost.mean() * 12),
         "borrow_ann": float(r.borrow.mean() * 12),

@@ -29,7 +29,6 @@ CHARACTERISTICS = [
     "niq_su",
     "saleq_su",
 ]
-TIMESFM_FEATURES = ["tfm_forecast", "tfm_spread", "tfm_n_ctx"]
 # Formation months from here on have no realized next month in the panel.
 _FIRST_UNUSED_MONTH = pd.Timestamp("2026-08-01")
 _ROW_COLUMNS = [
@@ -45,12 +44,13 @@ def build(
     output_dir: pathlib.Path,
     panel_path: pathlib.Path,
     snapshot_dir: pathlib.Path,
-    timesfm_path: pathlib.Path,
 ) -> pathlib.Path:
     """Writes formation-time tokens, labels and peer lists for graph nodes.
 
     Tokens are monthly ranks plus observed flags, return lags, past EPS
-    surprises (announced strictly before month-end) and TimesFM forecasts.
+    surprises (announced strictly before month-end). Pretrained forecasts are
+    excluded because their training cutoff predates neither all folds nor all
+    training rows.
     Labels are next-month return rank, next EPS surprise and absolute return
     rank, all in [-1, 1]. Row zero of the features file is padding, so a
     peer index i points at feature row i.
@@ -59,7 +59,6 @@ def build(
         output_dir: Destination; reused when its rows file already exists.
         panel_path: Characteristics panel parquet.
         snapshot_dir: Monthly graph snapshots from `builder`.
-        timesfm_path: TimesFM forecasts parquet.
 
     Returns:
         The output directory.
@@ -81,17 +80,10 @@ def build(
     panel["eom"] = pd.to_datetime(panel.eom)
     if panel.duplicated(["permno", "eom"]).any():
         raise ValueError("Duplicate panel keys")
-    timesfm = pd.read_parquet(
-        timesfm_path, columns=["permno", "eom", *TIMESFM_FEATURES]
-    )
-    timesfm["eom"] = pd.to_datetime(timesfm.eom)
-    panel = panel.merge(
-        timesfm, on=["permno", "eom"], how="left", validate="one_to_one"
-    )
     events = earnings.dated_eps_events(ibes.load_surprises(), ibes.load_link())
     raw = pd.concat(
         [
-            panel[CHARACTERISTICS + TIMESFM_FEATURES],
+            panel[CHARACTERISTICS],
             _calendar_lags(panel),
             _past_news(panel, events),
         ],

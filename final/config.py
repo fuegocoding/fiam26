@@ -22,7 +22,7 @@ WORK_DIR = FINAL / "output"
 # Fund size in dollars; every dollar limit in the optimizer derives from it.
 NAV = 10_000_000.0
 
-# TimesFM and the graph model run on this device.
+# Fitted sleeves and the graph model run on this device.
 DEVICE = "cuda"
 
 # Holding months: January 2021 to August 2026. Year Y is predicted by models

@@ -5,8 +5,10 @@ import pathlib
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 import risk
+import timing
 from config import NAV
 
 # Every dollar limit derives from NAV (config.py) or a stock's ADV.
@@ -23,11 +25,9 @@ SECTOR_NEUTRAL = True
 MIN_SECTOR_NAMES = 4
 # A holding stays while it still ranks within (1 + BUFFER) x its quota.
 BUFFER = 0.5
-# Above this NAV the book is scored without the micro-cap sleeves
-# (`final_score_liquid`): micro caps are barely tradable there, and in the
-# 2021-2026 test months dropping those two sleeves improved the book at
-# $100M and up but not at $10M. The threshold sits between the two sizes that
-# were tested and is a judgement (see README).
+# Restore the committed NAV switch for this timing-only comparison.
+# It was selected on test-period research results, a disclosed selection bias.
+ENABLE_MICRO_SLEEVE_SWITCH = True
 MICRO_SLEEVES_MAX_NAV = 50_000_000.0
 # A stock with this share of its shares outstanding already sold short cannot
 # be borrowed at the size or fee the cost model assumes, so it is never
@@ -69,11 +69,15 @@ def dollar_limits(nav: float = NAV) -> dict[str, float]:
 def scored_for_nav(predictions: pd.DataFrame, nav: float) -> pd.DataFrame:
     """Copy of the predictions carrying the score set that fits the NAV.
 
-    Above MICRO_SLEEVES_MAX_NAV the blend without the micro-cap sleeves
-    replaces `final_score` and `available_count`; otherwise nothing changes.
+    Above the committed $50M threshold, use the score without the two
+    micro-cap sleeves. This fixed switch retains historical selection bias.
     """
     frame = predictions.copy()
-    if nav > MICRO_SLEEVES_MAX_NAV and "final_score_liquid" in frame:
+    if (
+        ENABLE_MICRO_SLEEVE_SWITCH
+        and nav > MICRO_SLEEVES_MAX_NAV
+        and "final_score_liquid" in frame
+    ):
         frame["final_score"] = frame.final_score_liquid
         frame["available_count"] = frame.available_count_liquid
     return frame
@@ -101,6 +105,7 @@ def optimize(
     Returns:
         Target positions per month, and per-month exposures and coverage.
     """
+    timing.validate_predictions(predictions)
     frame = scored_for_nav(predictions, nav)
     frame["return_month"] = pd.to_datetime(frame.return_month).dt.to_period("M")
     if short_interest is not None:
@@ -112,9 +117,19 @@ def optimize(
     panel = pd.read_parquet(panel_path, columns=risk.PANEL_COLUMNS)
     panel["eom"] = pd.to_datetime(panel.eom).dt.to_period("M")
     scores = frame[["return_month", "permno", "final_score", "prc"]]
+    closed = set()
+    if "ret_exc_lead1m" in pq.ParquetFile(panel_path).schema.names:
+        outcomes = pd.read_parquet(
+            panel_path, columns=["permno", "eom", "ret_exc_lead1m"]
+        )
+        outcomes = outcomes.loc[outcomes.ret_exc_lead1m.isna()]
+        settled = pd.to_datetime(outcomes.eom).dt.to_period("M") + 1
+        closed = set(zip(settled, outcomes.permno, strict=True))
     previous: dict[int, float] = {}
     positions, diagnostics = [], []
     for month, current in frame.groupby("return_month", sort=True):
+        # Only settled prior-month closures can clear the retention buffer.
+        previous = {p: w for p, w in previous.items() if (month - 1, p) not in closed}
         prev_long = {p for p, w in previous.items() if w > 0}
         prev_short = {p for p, w in previous.items() if w < 0}
         weights, coverage = _book(current, nav, prev_long, prev_short)
@@ -194,6 +209,8 @@ def write(
         "rank_buffer": BUFFER,
         "short_interest_cap": SHORT_INTEREST_CAP,
         "micro_sleeves_max_nav": MICRO_SLEEVES_MAX_NAV,
+        "micro_sleeve_switch_enabled": ENABLE_MICRO_SLEEVE_SWITCH,
+        "parameter_source": "committed_fixed_recipe_with_timing_and_liquidation_fixes",
         "beta_neutral": BETA_NEUTRAL,
         "risk": {
             "peer_top_share": risk.PEER_TOP_SHARE,

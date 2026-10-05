@@ -40,18 +40,27 @@ def build(context: base.Context) -> pathlib.Path:
         ["TICKER", "STATPERS", "FPEDATS", "NUMUP", "NUMDOWN", "NUMEST"]
     ]
     key = ["permno", "target_fpe"]
-    pairs = events[["permno", "TICKER", "target_fpe", "target_ann"]].merge(
-        consensus, on="TICKER"
-    )
-    following = pairs.loc[
-        (pairs.FPEDATS > pairs.target_fpe)
-        & (pairs.FPEDATS <= pairs.target_fpe + pd.offsets.MonthEnd(4))
-    ]
-    following = following.loc[
-        following.FPEDATS == following.groupby(key).FPEDATS.transform("min")
-    ]
-    post = following.loc[following.STATPERS > following.target_ann]
-    post = post.sort_values("STATPERS").groupby(key).head(1).copy()
+    # A signal can use only the report month's and following month's public
+    # snapshots. Join those date windows separately to avoid a full-history
+    # ticker join, which used several GB of temporary memory.
+    snapshots = consensus.sort_values("STATPERS").set_index("STATPERS", drop=False)
+    formation = ibes.month_end(events.target_ann) + pd.offsets.MonthEnd(1)
+    parts = []
+    for cutoff, rows in events.groupby(formation, sort=True):
+        known = snapshots.loc[rows.target_ann.min() : cutoff].reset_index(drop=True)
+        pairs = rows[["permno", "TICKER", "target_fpe", "target_ann"]].merge(
+            known, on="TICKER"
+        )
+        following = pairs.loc[
+            (pairs.FPEDATS > pairs.target_fpe)
+            & (pairs.FPEDATS <= pairs.target_fpe + pd.offsets.MonthEnd(4))
+            & (pairs.STATPERS > pairs.target_ann)
+        ]
+        post = following.loc[
+            following.FPEDATS == following.groupby(key).FPEDATS.transform("min")
+        ]
+        parts.append(post.sort_values("STATPERS").groupby(key).head(1))
+    post = pd.concat(parts, ignore_index=True)
     post["post_breadth"] = (post.NUMUP - post.NUMDOWN) / post.NUMEST.where(
         post.NUMEST > 0
     )

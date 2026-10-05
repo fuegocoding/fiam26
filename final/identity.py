@@ -6,8 +6,7 @@ to its last CRSP month (12/2025); after that it labels a stock-month only
 when the company filed an 8-K in that same month. Dropping the rest would
 restrict the 2026 book to that month's 8-K filers, about 60% of the stocks.
 
-For every unlabelled stock-month after the last CRSP month, with formation
-month-end E:
+For every missing or unsafe stock-month label, with formation month-end E:
   1. take the issuer's last verified panel label dated on or before E, if it
      is at most MAX_AGE_DAYS old;
   2. if the issuer's newest 8-K filed on or before E is newer than that label
@@ -69,29 +68,32 @@ def cover_symbol(text: str) -> str | None:
     return None
 
 
-def _carried_labels(panel_path: pathlib.Path) -> tuple[pd.DataFrame, pd.Timestamp]:
-    """Unlabelled post-CRSP stock-months with the last verified label."""
+def _carried_labels(panel_path: pathlib.Path) -> pd.DataFrame:
+    """Missing stock-month labels carried from evidence already known then."""
     panel = pd.read_parquet(panel_path, columns=["permno", "eom", *LABELS])
     panel["eom"] = pd.to_datetime(panel.eom)
     panel = panel.sort_values(["permno", "eom"]).reset_index(drop=True)
+    reference = pd.to_datetime(panel.ticker_name_reference_date)
     verified = (
         panel.ticker.notna()
         & panel.company_name.notna()
         & panel.ticker_name_status.ne(UNVERIFIED)
+        & reference.notna()
+        & reference.le(panel.eom)
     )
-    last_crsp = panel.loc[panel.ticker_name_status.eq(CRSP_STATUS), "eom"].max()
 
     known = panel[["ticker", "company_name"]].where(verified)
-    known["label_date"] = panel.eom.where(verified)
+    known["label_date"] = reference.where(verified)
     known["permno"] = panel.permno
     known = known.groupby("permno")[["ticker", "company_name", "label_date"]]
     known = known.ffill()
 
-    need = ~verified & (panel.eom > last_crsp)
+    # A future extension of CRSP coverage must not change earlier gap fills.
+    need = ~verified
     carried = panel.loc[need, ["permno", "eom"]].join(known.loc[need])
     age = (carried.eom - carried.label_date).dt.days
     fresh = carried.label_date.notna() & (age <= MAX_AGE_DAYS)
-    return carried[fresh], last_crsp
+    return carried[fresh]
 
 
 def _cover_symbols(
@@ -114,11 +116,11 @@ def _cover_symbols(
 
 
 def labels(panel_path: pathlib.Path, filings_path: pathlib.Path) -> pd.DataFrame:
-    """Agent labels keyed by (permno, eom) for unlabelled post-CRSP months."""
-    carried, last_crsp = _carried_labels(panel_path)
+    """Agent labels keyed by (permno, eom) for missing or unsafe panel labels."""
+    carried = _carried_labels(panel_path)
     if carried.empty:
         return carried.assign(**{column: None for column in LABELS})
-    since = last_crsp - pd.Timedelta(days=MAX_AGE_DAYS)
+    since = carried.label_date.min()
     filings = _cover_symbols(filings_path, carried.permno.unique().tolist(), since)
 
     out = pd.merge_asof(

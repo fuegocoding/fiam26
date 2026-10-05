@@ -57,9 +57,22 @@ def positions(portfolio: pd.DataFrame, universe: pd.DataFrame) -> pd.DataFrame:
     """Each position with its realized next-month return and P&L."""
     p = portfolio.copy()
     p["return_month"] = _period(p.return_month)
-    outcome = universe[["return_month", "permno", "ret_exc_lead1m", "me"]]
+    outcome = universe[
+        [
+            "return_month",
+            "permno",
+            "ret_exc_lead1m",
+            "me",
+            *[c for c in ("exit_price", "exit_price_date") if c in universe],
+        ]
+    ]
     p = p.merge(outcome, on=["return_month", "permno"], how="left")
-    p["ret"] = p.ret_exc_lead1m.fillna(0.0)
+    rates = evaluate.market().rf
+    p["ret"] = p.ret_exc_lead1m
+    for month, ids in p.groupby("return_month").groups.items():
+        p.loc[ids, "ret"] = evaluate.position_returns(
+            p.loc[ids], float(rates.get(month, np.nan))
+        )[0]
     p["pnl"] = p.target_weight * p.ret
     return p
 
@@ -317,7 +330,7 @@ def _plot_underwater(r, x, out, period) -> None:
     growth = _growth(r)
     fig, ax = plt.subplots(figsize=(8, 4.5))
     for name in ("Strategy", "S&P 500"):
-        drawdown = growth[name] / growth[name].cummax() - 1
+        drawdown = growth[name] / growth[name].cummax().clip(lower=1.0) - 1
         ax.fill_between(x, drawdown, 0, alpha=0.4, label=name)
     ax.set_ylabel("Drawdown")
     ax.legend()
@@ -440,6 +453,7 @@ def run(
         for month, g in p.groupby("return_month")
     }
     r = evaluate.evaluate(books, universe, market)
+    r.attrs["liquidations"].to_csv(out_dir / "liquidations.csv", index=False)
     holdings = write_submission(p, r, out_dir)
 
     stats = evaluate.metrics(r, evaluate.factors(universe))

@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 import xgboost as xgb
 
 import config
+import timing
 from sleeves import base
 
 SEEDS = (0, 1, 2, 3)
@@ -47,6 +48,7 @@ def build(context: base.Context) -> pathlib.Path:
         return output
     output.parent.mkdir(parents=True, exist_ok=True)
     features = list(pd.read_csv(context.data_dir / config.FACTOR_LIST_FILE)["variable"])
+    timing.validate_features(features)
     columns = ["permno", "eom", "ret_exc_lead1m", *features]
     table = pq.read_table(context.panel_path, columns=columns).to_pandas()
     table["eom"] = pd.to_datetime(table.eom)

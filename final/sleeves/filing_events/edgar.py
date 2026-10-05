@@ -17,6 +17,7 @@ import re
 
 import pandas as pd
 
+import config
 import external
 
 FAMILIES = {
@@ -66,7 +67,8 @@ _NAME_FORMS = (
 )
 _LOCKUP_DAYS = 180
 _FIRST_FEATURE_MONTH = pd.Period("2015-02", "M")
-_LAST_FEATURE_MONTH = pd.Period("2026-08", "M")
+FEATURE_COLUMNS = [f"{family}_{window}" for family in FAMILIES for window in WINDOWS]
+FEATURE_COLUMNS.append("lockup_m")
 _SUFFIX = re.compile(
     r"\b(INCORPORATED|INC|CORPORATION|CORP|COMPANY|CO|LIMITED|LTD|LLC|LP|L P"
     r"|PLC|NV|N V|SA|S A|AG|HOLDINGS|HOLDING|HLDGS|HLDG|GROUP|GRP|THE|NEW|DEL"
@@ -79,7 +81,9 @@ _SUFFIX = re.compile(
 
 
 def build(
-    panel_path: pathlib.Path, filings_path: pathlib.Path, work_dir: pathlib.Path
+    panel_path: pathlib.Path,
+    filings_path: pathlib.Path,
+    work_dir: pathlib.Path,
 ) -> pathlib.Path:
     """Writes features.parquet: permno, return_month and one count per column."""
     output = work_dir / "features.parquet"
@@ -87,9 +91,25 @@ def build(
         return output
     work_dir.mkdir(parents=True, exist_ok=True)
     index = external.read("edgar")
-    crosswalk = _crosswalk(panel_path, filings_path, index)
-    events = _events(index, crosswalk)
-    features = _monthly(events, _lockups(index, crosswalk))
+    index["date_filed"] = pd.to_datetime(index.date_filed)
+    panel, linked = _link_evidence(panel_path, filings_path)
+    families = FAMILIES
+    columns = [f"{family}_{window}" for family in families for window in WINDOWS] + [
+        "lockup_m"
+    ]
+    parts = []
+    for month in pd.period_range(
+        _FIRST_FEATURE_MONTH, config.LAST_TARGET.to_period("M"), freq="M"
+    ):
+        cutoff = (month - 1).to_timestamp("M")
+        known = index.loc[index.date_filed <= cutoff]
+        crosswalk = _crosswalk_frames(panel, linked, known, cutoff)
+        recent = known.loc[known.date_filed >= (month - 12).start_time]
+        features = _monthly(
+            _events(recent, crosswalk, families), _lockups(known, crosswalk), columns
+        )
+        parts.append(features.loc[features.return_month == month])
+    features = pd.concat(parts, ignore_index=True)
     features["return_month"] = features.return_month.dt.to_timestamp("M")
     features.to_parquet(output, index=False)
     return output
@@ -113,23 +133,54 @@ def kept_forms() -> set[str]:
     return forms | set(_NAME_FORMS)
 
 
-def _crosswalk(
-    panel_path: pathlib.Path, filings_path: pathlib.Path, index: pd.DataFrame
-) -> pd.DataFrame:
-    """permno, permco and cik: the 8-K links, then exact unique name matches."""
-    linked = pd.read_parquet(filings_path, columns=["permno", "permco", "cik"]).dropna(
-        subset=["permno"]
-    )
+def _link_evidence(
+    panel_path: pathlib.Path, filings_path: pathlib.Path
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Dated evidence retained for each month's independent company mapping."""
+    linked = pd.read_parquet(
+        filings_path, columns=["permno", "permco", "cik", "filing_date"]
+    ).dropna(subset=["permno"])
+    linked["filing_date"] = pd.to_datetime(linked.filing_date)
     linked["permno"] = linked.permno.astype(int)
     linked["cik"] = pd.to_numeric(linked.cik, errors="coerce")
     linked = linked.dropna(subset=["cik"]).astype({"cik": "int64"})
     linked = linked.drop_duplicates()
     panel = pd.read_parquet(
-        panel_path, columns=["permno", "permco", "company_name"]
+        panel_path,
+        columns=[
+            "permno",
+            "permco",
+            "company_name",
+            "eom",
+            "ticker_name_reference_date",
+        ],
     ).dropna(subset=["company_name"])
-    panel = panel.drop_duplicates(["permno", "company_name"])
+    panel["eom"] = pd.to_datetime(panel.eom)
+    reference = pd.to_datetime(panel.ticker_name_reference_date)
+    panel = panel.loc[reference.notna() & reference.le(panel.eom)].copy()
     panel["key"] = panel.company_name.map(normalise)
     panel = panel[panel.key.str.len() >= 4]
+    return panel, linked
+
+
+def _crosswalk(
+    panel_path: pathlib.Path,
+    filings_path: pathlib.Path,
+    index: pd.DataFrame,
+    cutoff: pd.Timestamp,
+) -> pd.DataFrame:
+    """Company links known at cutoff; later names and 8-Ks cannot backfill."""
+    panel, linked = _link_evidence(panel_path, filings_path)
+    return _crosswalk_frames(panel, linked, index, cutoff)
+
+
+def _crosswalk_frames(
+    panel: pd.DataFrame, linked: pd.DataFrame, index: pd.DataFrame, cutoff: pd.Timestamp
+) -> pd.DataFrame:
+    panel = panel.loc[panel.eom <= cutoff].drop_duplicates(["permno", "company_name"])
+    linked = linked.loc[linked.filing_date <= cutoff, ["permno", "permco", "cik"]]
+    linked = linked.drop_duplicates()
+    index = index.loc[index.date_filed <= cutoff]
     filers = index[index.form_type.isin(_NAME_FORMS)]
     names = filers.groupby(["cik", "company_name"]).size().reset_index()
     names["key"] = names.company_name.map(normalise)
@@ -145,9 +196,12 @@ def _crosswalk(
     return pd.concat([linked, matched[["permno", "permco", "cik"]]], ignore_index=True)
 
 
-def _events(index: pd.DataFrame, crosswalk: pd.DataFrame) -> pd.DataFrame:
+def _events(
+    index: pd.DataFrame, crosswalk: pd.DataFrame, families=None
+) -> pd.DataFrame:
     """One row per stock, filing and family, dated by filing month."""
-    family_of = {form: family for family, forms in FAMILIES.items() for form in forms}
+    families = FAMILIES if families is None else families
+    family_of = {form: family for family, forms in families.items() for form in forms}
     events = index[index.form_type.isin(family_of)].copy()
     events["family"] = events.form_type.map(family_of)
     events["cik"] = events.cik.astype("int64")
@@ -182,7 +236,7 @@ def _lockups(index: pd.DataFrame, crosswalk: pd.DataFrame) -> pd.DataFrame:
     return both.assign(lockup_m=1)[["permno", "return_month", "lockup_m"]]
 
 
-def _monthly(events: pd.DataFrame, lockups: pd.DataFrame) -> pd.DataFrame:
+def _monthly(events: pd.DataFrame, lockups: pd.DataFrame, columns=None) -> pd.DataFrame:
     """Event counts over the last 1, 3 and 12 months, by return month."""
     wide = None
     for family, group in events.groupby("family"):
@@ -197,6 +251,25 @@ def _monthly(events: pd.DataFrame, lockups: pd.DataFrame) -> pd.DataFrame:
             column = pd.concat(parts).groupby(["permno", "return_month"]).n
             column = column.sum().rename(f"{family}_{label}")
             wide = column.to_frame() if wide is None else wide.join(column, how="outer")
-    wide = wide.reset_index().merge(lockups, on=["permno", "return_month"], how="outer")
-    keep = wide.return_month.between(_FIRST_FEATURE_MONTH, _LAST_FEATURE_MONTH)
+    if wide is None:
+        wide = pd.DataFrame(
+            {
+                "permno": pd.Series(dtype="int64"),
+                "return_month": pd.Series(dtype="period[M]"),
+            }
+        )
+    else:
+        wide = wide.reset_index()
+    wide = wide.merge(lockups, on=["permno", "return_month"], how="outer")
+    wide = wide.reindex(
+        columns=[
+            "permno",
+            "return_month",
+            *(FEATURE_COLUMNS if columns is None else columns),
+        ],
+        fill_value=0,
+    )
+    keep = wide.return_month.between(
+        _FIRST_FEATURE_MONTH, config.LAST_TARGET.to_period("M")
+    )
     return wide.loc[keep].fillna(0)

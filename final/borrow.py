@@ -7,9 +7,9 @@ a stock with 15% or more of its shares already short cannot be shorted at the
 size or fee the cost model assumes.  `build` turns the files into one
 point-in-time table and `optimizer.py` keeps such stocks out of the shorts.
 
-Point-in-time rule: a settlement date is public about eight business days
-later, so it is used from 12 calendar days after settlement.  A month's table
-row uses the newest settlement public by that month's end.  Tickers come from
+Point-in-time rule: use publication dates when supplied, otherwise delay ten
+business days excluding federal holidays and Good Friday. A month's table
+row uses the newest settlement public by formation month-end. Tickers come from
 the panel, carried forward per stock so the 2026 gap in the supplied ticker
 column does not drop stocks.
 """
@@ -18,10 +18,31 @@ import pathlib
 
 import numpy as np
 import pandas as pd
+from pandas.tseries.holiday import GoodFriday, USFederalHolidayCalendar
 
 import external
 
-PUBLICATION_LAG_DAYS = 12
+
+class _PublicationCalendar(USFederalHolidayCalendar):
+    rules = [*USFederalHolidayCalendar.rules, GoodFriday]
+
+
+# The extract lacks publication dates. Ten business days excluding federal
+# holidays and Good Friday is a conservative delay beyond FINRA's schedule.
+PUBLICATION_DELAY = pd.offsets.CustomBusinessDay(10, calendar=_PublicationCalendar())
+
+
+def public_dates(raw: pd.DataFrame) -> pd.Series:
+    """Explicit publication dates when supplied, otherwise a conservative lag."""
+    settlement = pd.to_datetime(raw.settlement)
+    release = {date: date + PUBLICATION_DELAY for date in settlement.dropna().unique()}
+    dates = settlement.map(release)
+    if "publication_date" in raw:
+        supplied = pd.to_datetime(raw.publication_date)
+        if (supplied < settlement).any():
+            raise ValueError("Short-interest publication precedes settlement")
+        dates = supplied.fillna(dates)
+    return dates
 
 
 def build(work_dir: pathlib.Path, panel_path: pathlib.Path) -> pathlib.Path:
@@ -31,9 +52,14 @@ def build(work_dir: pathlib.Path, panel_path: pathlib.Path) -> pathlib.Path:
         return output
     output.parent.mkdir(parents=True, exist_ok=True)
     raw = external.read("finra")
-    panel = pd.read_parquet(panel_path, columns=["permno", "eom", "ticker", "shares"])
+    panel = pd.read_parquet(
+        panel_path,
+        columns=["permno", "eom", "ticker", "ticker_name_reference_date", "shares"],
+    )
     panel["eom"] = pd.to_datetime(panel.eom)
     panel = panel.sort_values(["permno", "eom"])
+    reference = pd.to_datetime(panel.ticker_name_reference_date)
+    panel.loc[reference.isna() | reference.gt(panel.eom), "ticker"] = None
     panel["ticker"] = panel.groupby("permno").ticker.ffill()
     panel["symbol"] = _alphanumeric(panel.ticker.astype("string"))
     shared = panel.groupby(["eom", "symbol"]).permno.transform("nunique") > 1
@@ -41,7 +67,7 @@ def build(work_dir: pathlib.Path, panel_path: pathlib.Path) -> pathlib.Path:
         ~shared & panel.symbol.notna(), ["permno", "eom", "symbol", "shares"]
     ]
     raw["symbol"] = _alphanumeric(raw.symbol)
-    raw["public"] = raw.settlement + pd.Timedelta(days=PUBLICATION_LAG_DAYS)
+    raw["public"] = public_dates(raw)
     months = []
     for month_end in sorted(panel.eom.unique()):
         known = raw.loc[raw.public <= month_end]

@@ -10,20 +10,27 @@ _MAX_REPORT_LAG = pd.Timedelta(days=180)
 _MAX_LINK_SCORE = 2
 
 
+def _unique_records(frame: pd.DataFrame, keys: list[str], source: str) -> pd.DataFrame:
+    """Identical duplicates are harmless; conflicting undated revisions fail."""
+    frame = frame.drop_duplicates()
+    if frame.duplicated(keys).any():
+        raise ValueError(f"Conflicting {source} records without revision timestamps")
+    return frame
+
+
 def month_end(values: pd.Series) -> pd.Series:
     """Rolls dates forward to their calendar month-end."""
     return pd.to_datetime(values) + pd.offsets.MonthEnd(0)
 
 
 def load_link() -> pd.DataFrame:
-    """Dated ticker-permno links; the latest links in the extract stay open."""
+    """Dated ticker-permno links, restricted to their supplied validity dates."""
     link = external.read("ibes_link")
     link = link.dropna(subset=["PERMNO"])
     link = link[link.SCORE <= _MAX_LINK_SCORE].copy()
     link["permno"] = link.PERMNO.astype(int)
     link["sdate"] = pd.to_datetime(link.sdate)
     link["edate"] = pd.to_datetime(link.edate)
-    link.loc[link.edate >= link.edate.max(), "edate"] = pd.Timestamp("2099-12-31")
     return link[["TICKER", "permno", "sdate", "edate", "SCORE"]]
 
 
@@ -35,7 +42,7 @@ def load_consensus() -> pd.DataFrame:
     )
     for column in ("STATPERS", "FPEDATS", "ANNDATS_ACT"):
         frame[column] = pd.to_datetime(frame[column])
-    frame = frame.drop_duplicates(["TICKER", "STATPERS", "FPEDATS"], keep="last")
+    frame = _unique_records(frame, ["TICKER", "STATPERS", "FPEDATS"], "consensus")
     frame["snap_month"] = frame.STATPERS.dt.to_period("M")
     last = frame.groupby(["TICKER", "snap_month"]).STATPERS.transform("max")
     return frame[frame.STATPERS == last].reset_index(drop=True)
@@ -46,13 +53,16 @@ def load_prices() -> pd.DataFrame:
     frame = external.read("ibes_price")
     frame = frame[(frame.USFIRM == 1) & (frame.CURR_PRICE == "USD") & (frame.PRICE > 0)]
     frame["STATPERS"] = pd.to_datetime(frame.STATPERS)
-    return frame.drop_duplicates(["TICKER", "STATPERS"], keep="last")[
-        ["TICKER", "STATPERS", "PRICE"]
-    ]
+    frame = frame[["TICKER", "STATPERS", "PRICE"]]
+    return _unique_records(frame, ["TICKER", "STATPERS"], "price")
 
 
 def load_surprises() -> pd.DataFrame:
-    """Quarterly EPS actuals and surprises, one row per ticker and quarter."""
+    """First reported EPS record per ticker and quarter; never a later revision.
+
+    The extract has no vintage timestamp. Same-date conflicting records cannot
+    be ordered safely and are rejected rather than silently keeping the last.
+    """
     frame = external.read("ibes_surprise")
     frame = frame[
         (frame.USFIRM == 1) & (frame.MEASURE == "EPS") & (frame.FISCALP == "QTR")
@@ -62,7 +72,13 @@ def load_surprises() -> pd.DataFrame:
         pd.to_datetime(dict(year=frame.PYEAR, month=frame.PMON, day=1))
     )
     frame["anndats"] = pd.to_datetime(frame.anndats)
-    frame = frame.sort_values("anndats").drop_duplicates(["TICKER", "fpe"], keep="last")
+    keys = ["TICKER", "fpe", "anndats"]
+    frame = frame.drop_duplicates(keys + ["actual", "surpmean", "suescore"])
+    if frame.duplicated(keys).any():
+        raise ValueError("Conflicting EPS records without revision timestamps")
+    frame = frame.sort_values("anndats").drop_duplicates(
+        ["TICKER", "fpe"], keep="first"
+    )
     frame = frame.sort_values(["TICKER", "anndats"])
     return frame[
         ["TICKER", "fpe", "anndats", "actual", "surpmean", "suescore"]
