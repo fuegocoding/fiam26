@@ -10,7 +10,6 @@ import tempfile
 from pathlib import Path
 
 # Embedded source strings preserve the original module text exactly.
-# ruff: noqa: E501
 
 SOURCES = {
     'borrow.py': (
