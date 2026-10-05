@@ -1,19 +1,4 @@
-"""Monthly evaluation of a book under the competition's rules.
-
-Returns are on NAV. Each month the book is set at the start of the month at its
-target weights; the previous book drifts with its realized returns first, so
-turnover is measured against what is actually held. Costs and conventions:
-
-* trading cost per unit traded, by size tier (5 to 60 bp; 25 bp if unknown);
-* borrow fee on short notional, by size tier (25 to 1,500 bp a year);
-* capital earns the 3-month T-bill (TB3MS / 100 / 12);
-* a holding with no next-month return is explicitly liquidated at its latest
-  dated panel quote in that month, including the exit fee; no zero-label fill;
-* benchmark = T-bill + 4% a year; active = total - benchmark;
-  information ratio = sqrt(12) * mean(active) / stdev(active).
-
-This is the evaluator behind every number in README.md.
-"""
+"""Calculates monthly portfolio returns, costs and performance metrics."""
 
 import pathlib
 

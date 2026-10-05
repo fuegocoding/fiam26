@@ -1,4 +1,4 @@
-"""Runs every sleeve and the graph, blends their scores and sizes the book."""
+"""Combines stock signals and graph forecasts into monthly scores."""
 
 import pathlib
 
@@ -35,9 +35,7 @@ _FORMATION_COLUMNS = [
     "beta_60m",
     *_LABELS,
 ]
-# Sleeves built for micro caps. A book too large to trade micro caps scores
-# stocks without them (`final_score_liquid`). The committed NAV switch is
-# retained in this timing-only comparison; it carries research-selection bias.
+# Exclude these sleeves from the blend above the fixed fund-size cutoff.
 MICRO_SLEEVES = ("gap_micro_best", "runway_micro")
 _PREDICTION_COLUMNS = [
     "return_month",

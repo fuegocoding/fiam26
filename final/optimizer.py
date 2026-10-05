@@ -1,4 +1,4 @@
-"""Builds a sector- and beta-neutral long/short book from monthly scores."""
+"""Selects and sizes long and short positions from monthly scores."""
 
 import json
 import pathlib
@@ -19,14 +19,12 @@ EXECUTION_DAYS = 5
 LONG_ADV_PARTICIPATION = 0.05
 SHORT_ADV_PARTICIPATION = 0.02
 REQUIRE_VERIFIED_LABELS = True
-# Names per GICS sector follow the sector's share of eligible stocks, with as
-# many shorts as longs, so the book is dollar neutral inside every sector.
+# Match long and short name counts within each GICS sector.
 SECTOR_NEUTRAL = True
 MIN_SECTOR_NAMES = 4
 # A holding stays while it still ranks within (1 + BUFFER) x its quota.
 BUFFER = 0.5
-# Restore the committed NAV switch for this timing-only comparison.
-# It was selected on test-period research results, a disclosed selection bias.
+# Use the liquid blend above the fixed $50M fund-size cutoff.
 ENABLE_MICRO_SLEEVE_SWITCH = True
 MICRO_SLEEVES_MAX_NAV = 50_000_000.0
 # A stock with this share of its shares outstanding already sold short cannot
@@ -67,11 +65,7 @@ def dollar_limits(nav: float = NAV) -> dict[str, float]:
 
 
 def scored_for_nav(predictions: pd.DataFrame, nav: float) -> pd.DataFrame:
-    """Copy of the predictions carrying the score set that fits the NAV.
-
-    Above the committed $50M threshold, use the score without the two
-    micro-cap sleeves. This fixed switch retains historical selection bias.
-    """
+    """Use the liquid score above $50M and the full score otherwise."""
     frame = predictions.copy()
     if (
         ENABLE_MICRO_SLEEVE_SWITCH

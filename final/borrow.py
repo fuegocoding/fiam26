@@ -1,18 +1,4 @@
-"""FINRA short interest as a borrow-availability screen for the short leg.
-
-FINRA publishes every U.S. equity's short interest twice a month
-(cdn.finra.org/equity/otcmarket/biweekly/shrtYYYYMMDD.csv).  Short shares as a
-share of shares outstanding is the standard proxy for how scarce a borrow is:
-a stock with 15% or more of its shares already short cannot be shorted at the
-size or fee the cost model assumes.  `build` turns the files into one
-point-in-time table and `optimizer.py` keeps such stocks out of the shorts.
-
-Point-in-time rule: use publication dates when supplied, otherwise delay ten
-business days excluding federal holidays and Good Friday. A month's table
-row uses the newest settlement public by formation month-end. Tickers come from
-the panel, carried forward per stock so the 2026 gap in the supplied ticker
-column does not drop stocks.
-"""
+"""Builds a short-interest screen using published FINRA data."""
 
 import pathlib
 

@@ -26,3 +26,15 @@ skills-lock.json
 output/time_series_*/
 output/time_series_search
 output/timesfm_safe/
+
+# final/: competition data is supplied by the user (final/data/README.md);
+# external parquet files stay out of git (I/B/E/S is WRDS-licensed); outputs are rebuilt
+final/data/*
+!final/data/README.md
+final/external_data/*.parquet
+final/external_data/raw/
+final/output/
+final/output_500M/
+final/submission/output_500M/
+final/.ruff_cache/
+output/final_cleanup_20261004/

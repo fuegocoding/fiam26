@@ -1,9 +1,4 @@
-"""Reads the external data: one parquet file, external_data/external.parquet.
-
-Every source table is stacked in the file with a `table` column. The file's
-metadata records each table's columns and types, so a read returns the frame
-the original source gave. external_data/build.py writes the file.
-"""
+"""Reads the source tables stored in external.parquet."""
 
 import functools
 import json

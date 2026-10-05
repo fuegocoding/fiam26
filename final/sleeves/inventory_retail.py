@@ -1,4 +1,4 @@
-"""Retail sales growth over inventory growth, in its original industries."""
+"""Scores retail stocks using sales growth minus inventory growth."""
 
 import typing
 

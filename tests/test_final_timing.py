@@ -503,12 +503,12 @@ def test_optimizer_earlier_book_ignores_future_scores_and_returns(
     )
     path = tmp_path / "panel.parquet"
     panel.to_parquet(path)
-    before, _ = optimizer.optimize(predictions, path)
+    before, _ = optimizer.optimize(predictions, path, nav=10_000_000)
     cutoff = pd.Timestamp("2020-12-31")
     panel.loc[panel.eom > cutoff, ["ret_exc", "rmax1_21d"]] = 999.0
     panel.to_parquet(path)
     predictions.loc[predictions.formation_date > cutoff, "final_score"] *= -999.0
-    after, _ = optimizer.optimize(predictions, path)
+    after, _ = optimizer.optimize(predictions, path, nav=10_000_000)
     first = pd.Period("2021-01", "M")
     expected = before.loc[before.return_month == first]
     assert len(expected) == 2

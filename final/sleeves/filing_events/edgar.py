@@ -1,16 +1,4 @@
-"""SEC EDGAR filing events as monthly stock features.
-
-The quarterly EDGAR form index lists every filing once per related company
-(a Schedule 13D appears under the target and under the filer).  Each filing
-form belongs to one event family; a stock's features count its family events
-over the last 1, 3 and 12 months.  A filing made in month m is usable from
-month m + 1, the same rule the characteristics panel follows.
-
-Companies are linked to the panel by CIK from the supplied 8-K file, then by
-exact unique name matches between panel and EDGAR company names (99.6%
-precise against the 8-K links where both exist).  An accession whose related
-companies resolve to two different panel companies is dropped as ambiguous.
-"""
+"""Maps dated SEC filing events to monthly stock features."""
 
 import pathlib
 import re

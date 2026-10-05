@@ -67,8 +67,8 @@ class GraphConfig:
     weights: dict[str, float] = dataclasses.field(
         default_factory=lambda: {
             "industry": 0.20,
-            "business": 0.42,
-            "fundamentals": 0.33,
+            "business": 0.40,
+            "fundamentals": 0.35,
             "events": 0.04,
             "returns": 0.01,
         }

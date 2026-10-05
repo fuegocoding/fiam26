@@ -1,21 +1,4 @@
-"""Identity agent: point-in-time ticker and company-name labels.
-
-The optimizer only trades stocks it can name, since the deck must identify
-every holding by ticker and full company name. The panel has CRSP labels up
-to its last CRSP month (12/2025); after that it labels a stock-month only
-when the company filed an 8-K in that same month. Dropping the rest would
-restrict the 2026 book to that month's 8-K filers, about 60% of the stocks.
-
-For every missing or unsafe stock-month label, with formation month-end E:
-  1. take the issuer's last verified panel label dated on or before E, if it
-     is at most MAX_AGE_DAYS old;
-  2. if the issuer's newest 8-K filed on or before E is newer than that label
-     and its cover page lists the same trading symbol, date the label to that
-     filing and take the SEC issuer name on it (a different symbol is more
-     likely another listed security, such as notes, so the label is kept);
-  3. record the label's source and reference date.
-Nothing dated after E is used and no later name is ever substituted.
-"""
+"""Assigns ticker and company names using dated source records."""
 
 import pathlib
 import re
@@ -116,7 +99,7 @@ def _cover_symbols(
 
 
 def labels(panel_path: pathlib.Path, filings_path: pathlib.Path) -> pd.DataFrame:
-    """Agent labels keyed by (permno, eom) for missing or unsafe panel labels."""
+    """Dated labels for stocks with missing or unsafe panel names."""
     carried = _carried_labels(panel_path)
     if carried.empty:
         return carried.assign(**{column: None for column in LABELS})
@@ -166,15 +149,15 @@ def label(
         found,
         on=["permno", "formation"],
         how="left",
-        suffixes=("", "_agent"),
+        suffixes=("", "_verified"),
         validate="many_to_one",
     )
-    fill = out.ticker_agent.notna() & out.ticker_name_status.eq(UNVERIFIED)
+    fill = out.ticker_verified.notna() & out.ticker_name_status.eq(UNVERIFIED)
     for column in LABELS:
         values = out[column].astype(object)
-        values[fill] = out.loc[fill, column + "_agent"]
+        values[fill] = out.loc[fill, column + "_verified"]
         if column == "ticker_name_reference_date":
             values = pd.to_datetime(values)
         out[column] = values.astype(predictions[column].dtype)
-    print(f"Identity agent: labelled {int(fill.sum()):,} stock-months")
+    print(f"Company labels: filled {int(fill.sum()):,} stock-months")
     return out[predictions.columns]

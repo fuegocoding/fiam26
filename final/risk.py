@@ -1,4 +1,4 @@
-"""Risk rules: squeeze sizing, run-up cap, tail-loss limit and edge throttle."""
+"""Adjusts portfolio weights using historical risk and signal strength."""
 
 import math
 

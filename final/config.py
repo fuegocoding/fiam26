@@ -1,4 +1,4 @@
-"""Paths and run settings. Edit here; every module imports them."""
+"""Sets file locations, fund size and evaluation dates."""
 
 import pathlib
 
@@ -20,7 +20,7 @@ EXTERNAL_DIR = FINAL / "external_data"
 WORK_DIR = FINAL / "output"
 
 # Fund size in dollars; every dollar limit in the optimizer derives from it.
-NAV = 10_000_000.0
+NAV = 500_000_000.0
 
 # Fitted sleeves and the graph model run on this device.
 DEVICE = "cuda"

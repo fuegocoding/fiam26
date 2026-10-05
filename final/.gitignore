@@ -1,0 +1,15 @@
+# Input data are provided separately.
+data/*
+!data/README.md
+external_data/*.parquet
+external_data/raw/
+
+# Generated models, reports and local caches.
+output/
+output_500M/
+submission/output_500M/
+__pycache__/
+*.pyc
+.ruff_cache/
+.venv/
+.env

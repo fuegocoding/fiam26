@@ -1,9 +1,8 @@
-# Python 3.13 runtime for MAIN.py / combiner.py: pip install -r final/requirements.txt
+# Python 3.13 runtime for main.py / combiner.py: pip install -r requirements.txt
 numpy==2.5.3
 pandas==3.0.2
 pyarrow==21.0.0
 scipy==1.17.1
 xgboost==3.4.1
 torch==2.14.0
-timesfm[torch]==3.0.2
 matplotlib==3.10.9

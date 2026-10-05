@@ -1,18 +1,4 @@
-"""Builds external.parquet, the one file holding every external table.
-
-    cd final && python -m external_data.build
-
-Tables (the `table` column):
-  ibes_consensus, ibes_price, ibes_surprise, ibes_link   WRDS I/B/E/S exports
-  fred                     FRED TB3MS and SP500, long format
-  finra                    every FINRA bi-monthly short-interest settlement
-  edgar                    SEC EDGAR form-index rows the filing sleeve uses
-
-The I/B/E/S and FRED tables come from the original CSV files in RAW_DIR;
-FINRA and EDGAR are downloaded (raw files are cached in RAW_DIR/downloads).
-Only the columns the pipeline reads are kept. Each table's columns and types
-are stored in the file's metadata, which external.py uses on read.
-"""
+"""Combines source files and public downloads into external.parquet."""
 
 import gzip
 import io

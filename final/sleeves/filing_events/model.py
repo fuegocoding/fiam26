@@ -1,5 +1,4 @@
-"""Walk-forward XGBoost ranking stocks within size group and sector from SEC
-filing events."""
+"""Trains annual XGBoost models to rank stocks using filing events."""
 
 import pathlib
 

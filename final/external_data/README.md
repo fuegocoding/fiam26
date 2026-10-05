@@ -3,7 +3,7 @@
 Every input that does not come from the competition toolkit is in one file,
 `external.parquet` (zstd, 150 MB). Its tables are stacked, and the `table`
 column says which one a row belongs to. The pipeline reads it only through
-`external.read(table)` (`final/external.py`), which returns each table with
+`external.read(table)` (`external.py`), which returns each table with
 the columns and types of the original source.
 
 | `table` | Source | Rows | Used by |
@@ -19,10 +19,13 @@ the columns and types of the original source.
 ## Rebuilding
 
 ```bash
-cd final && python -m external_data.build
+python -m external_data.build
 ```
 
 `build.py` reads the original files in `raw/` and writes `external.parquet`.
+Run this command from the project root. Place the raw source files in
+`external_data/raw/` before rebuilding. Paths in the table below are relative
+to `external_data/`.
 - **Original files:** the four WRDS exports (`*.csv.gz`) and FRED's
   `TB3MS.csv` and `SP500.csv`.
 - **Downloads:** FINRA and EDGAR are fetched from their public URLs and cached
@@ -66,9 +69,9 @@ month-end.
   - *Columns:* `symbol`, `short_shares`, `days_to_cover`, `settlement`.
   - *Join:* symbol → the panel's ticker, forward-filled per permno; a symbol
     shared by two permnos in a month is dropped.
-  - *Time rule:* a settlement is treated as public 12 days later (FINRA
-    publishes about eight business days after settlement), and the latest
-    public figure at each month-end is used.
+  - *Time rule:* an explicit publication date is used where supplied; otherwise
+    settlement is delayed ten business days, accounting for holidays. The
+    latest public figure at each month-end is used.
 - **EDGAR:**
   - *Columns:* `form_type`, `company_name`, `cik`, `date_filed`, `accession`.
     Only the form types the filing-events sleeve counts (offerings,
@@ -80,6 +83,4 @@ month-end.
 
 ## Not stored here
 
-- **TimesFM 3 weights** (`google/timesfm-3.0-pytorch`) download from Hugging
-  Face on the first full run, into the Hugging Face cache (`HF_HOME`).
 - **Competition files** are not included; see `../data/README.md`.

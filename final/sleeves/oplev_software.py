@@ -1,4 +1,4 @@
-"""Software operating leverage: sales growth over SG&A growth."""
+"""Scores software stocks using sales growth minus expense growth."""
 
 import typing
 

@@ -1,26 +1,4 @@
-"""Submission files and the performance pack the competition asks for.
-
-Writes into <work-dir>/report/:
-  holdings.csv                Date, PERMNO, TICKER, COMPANY NAME, WEIGHT (the
-                              exact submission schema; Date is the first day
-                              of the holding month, WEIGHT is signed % of NAV)
-  holdings_label_sources.csv  where each holding's ticker and name came from
-  returns.csv                 Date, RETURN (monthly total return on NAV, net
-                              of trading costs and borrow fees)
-  monthly_detail.csv          every monthly series behind the statistics
-  performance.json            the statistics of the performance pack
-  calendar_years.csv          strategy, benchmark and S&P 500 by year
-  top_average_holdings.csv    top 10 longs and shorts by average weight
-  contributors.csv            top 10 positive and negative P&L contributors
-  compliance.json             the trading rules, checked month by month
-  charts/*.png                cumulative, underwater, rolling active return
-                              and IR, rolling beta, histogram, contributors
-
-Conventions: weights are signed fractions of NAV set at the start of each
-month; capital (the short proceeds finance the longs) earns the 3-month
-T-bill; returns are net of size-tier trading costs and borrow fees (see
-evaluate.py). The S&P 500 series is the FRED price index (no dividends).
-"""
+"""Writes holdings, returns, performance tables and charts."""
 
 import json
 import pathlib
@@ -221,6 +199,42 @@ def calendar_years(r: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def comparison_metrics(r: pd.DataFrame) -> pd.DataFrame:
+    """Competition statistics on the same monthly NAV basis for each series."""
+    columns = {}
+    for name, values in (("Strategy", r.total), ("T-bill + 4%", r.benchmark),
+                         ("S&P 500", r.spx)):
+        curve = (1 + values).cumprod()
+        excess, active = values - r.rf, values - r.benchmark
+        columns[name] = {
+            "mean_monthly_return": float(values.mean()),
+            "geometric_monthly_return": float(
+                (1 + values).prod() ** (1 / len(values)) - 1
+            ),
+            "annual_arithmetic_return": float(values.mean() * 12),
+            "cagr": _annualized(values),
+            "cumulative_return": _compound(values),
+            "annual_volatility": float(values.std() * np.sqrt(12)),
+            "max_drawdown_month_end_nav": float(
+                (curve / curve.cummax().clip(lower=1.0) - 1).min()
+            ),
+            "best_month": str(values.idxmax()),
+            "best_month_return": float(values.max()),
+            "worst_month": str(values.idxmin()),
+            "worst_month_return": float(values.min()),
+            "hit_rate_vs_hurdle": float((active > 0).mean()),
+            "information_ratio": float(np.sqrt(12) * active.mean() / active.std())
+            if active.std() > 1e-12 else None,
+            "sharpe_above_t_bill": float(np.sqrt(12) * excess.mean() / excess.std())
+            if excess.std() > 1e-12 else None,
+        }
+    deployed = (1 + (r.total - r.rf) / r.gross).cumprod()
+    columns["Strategy"]["max_drawdown_deployed_capital_gross_normalized"] = float(
+        (deployed / deployed.cummax().clip(lower=1.0) - 1).min()
+    )
+    return pd.DataFrame(columns).rename_axis("metric")
+
+
 def label_history(p: pd.DataFrame) -> pd.DataFrame:
     """Last label held, plus every earlier label the stock carried while
     held, so a later name never stands in for an earlier holding period."""
@@ -381,12 +395,13 @@ def _plot_histogram(r, out, period) -> None:
 def _plot_contributors(contrib, out, period) -> None:
     c = contrib.sort_values("pnl_pct_nav")
     names = [
-        f"{ticker} ({str(name)[:28]})"
+        f"{ticker} ({name})"
         for ticker, name in zip(c.ticker, c.company_name, strict=True)
     ]
     colors = np.where(c.pnl_pct_nav > 0, "tab:green", "tab:red")
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(12, 9))
     ax.barh(names, c.pnl_pct_nav, color=colors)
+    ax.tick_params(axis="y", labelsize=8)
     ax.set_xlabel("Cumulative P&L contribution, % of NAV")
     ax.grid(alpha=0.3)
     title = "Top 10 positive and negative contributors"
@@ -461,11 +476,16 @@ def run(
     stats.update(exposure_stats(r, p))
     stats.update(short_book_stats(p, short_interest))
     stats.update(oos_r2(predictions, universe, p, score))
+    comparison = comparison_metrics(r)
+    stats["max_dd_deployed_capital"] = comparison.loc[
+        "max_drawdown_deployed_capital_gross_normalized", "Strategy"
+    ]
     stats["score_column"] = score
     (out_dir / "performance.json").write_text(
         json.dumps(stats, indent=2, default=str) + "\n"
     )
     calendar_years(r).to_csv(out_dir / "calendar_years.csv")
+    comparison.to_csv(out_dir / "comparison_metrics.csv")
     top_holdings(p, len(r)).to_csv(out_dir / "top_average_holdings.csv", index=False)
     contrib = contributors(p)
     contrib.to_csv(out_dir / "contributors.csv", index=False)

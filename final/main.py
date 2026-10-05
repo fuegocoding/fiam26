@@ -1,31 +1,4 @@
-"""FIAM 2026 long/short U.S. equity book, from data to report.
-
-    python final/main.py           # rebuild every model and recompute everything
-    python final/main.py --reuse   # keep what is already in output/
-
-Settings and paths are in config.py. The competition files go in data/;
-everything else ships in external_data/. Results are written to output/,
-the submission files and performance pack to output/report/.
-
-For every holding month from January 2021 to August 2026:
-
-1. Sleeves (combiner.py, sleeves/). Nine return signals score every stock at
-   month-end t for the return of month t+1, from data available at t.
-   Learned sleeves refit once a year on target months up to Y-3, validate on
-   Y-2..Y-1 and predict year Y. Scores become monthly ranks, averaged over
-   the sleeves that cover a stock.
-2. Graph overlay (graph/). A point-in-time company graph and a
-   peer-attention model forecast the next EPS surprise; 5% rank tilt.
-3. Identity agent (identity.py). Each stock-month gets a point-in-time
-   ticker and company name with its source.
-4. Borrow screen (borrow.py). No new short at 15% short interest or above;
-   use public dates or a conservative ten-business-day publication delay.
-5. Optimizer and risk rules (optimizer.py, risk.py). 100 longs and 100
-   shorts, sector-matched, with bounded beta sizing and liquidity caps, then the
-   tail-risk rules.
-6. Evaluation and report (evaluate.py, report.py). Net of trading costs and
-   borrow fees; cash earns the T-bill; benchmark T-bill + 4%.
-"""
+"""Runs signal training, portfolio construction and reporting."""
 
 import argparse
 import json

@@ -1,4 +1,4 @@
-"""Formation-time guards and provenance for resumable pipeline artifacts."""
+"""Checks prediction dates, feature safety and saved input manifests."""
 
 import hashlib
 import json
@@ -86,8 +86,10 @@ def prepare_cache(work_dir: pathlib.Path, data_dir: pathlib.Path, device: str) -
     """
     source = hashlib.sha256()
     for path in sorted(config.FINAL.rglob("*.py")):
-        if "output" in path.relative_to(config.FINAL).parts:
+        if {"output", "submission"} & set(path.relative_to(config.FINAL).parts):
             continue
+        if path == config.FINAL / "MAIN.py":
+            continue  # Generated single-file copy; the original modules are hashed.
         source.update(str(path.relative_to(config.FINAL)).encode())
         source.update(path.read_bytes())
     inputs = [
