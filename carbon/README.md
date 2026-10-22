@@ -8,6 +8,8 @@ payloads look like, and how this folder's code turns them into DataFrames.
 |---|---|
 | `client.py` | `CarbonClient` — Bearer auth, GET/POST JSON, pagination, slow-query job polling |
 | `parse.py` | Payload parsers: catalogue, block pricing, entity map, data dictionary, query results |
+| `survey.py` | Library survey: joins the screening workbook, scopes the assets, pulls data dictionaries into `out/` |
+| `DATA_MAP.md` | What we can use from the library and for which of our signals |
 | `smoke.py` | End-to-end check: connect, fetch, parse, print a masked summary |
 
 ```bash
@@ -146,7 +148,36 @@ The API gives the knobs a leak-free backtest needs; using them is on us:
 - **Publication lag is metric-specific** within one asset; a blanket monthly lag
   is wrong in both directions.
 
-## 8. Known quirks
+## 8. MCP through opencode
+
+The MCP server is live at `https://mcp.carbonarc.co/` (same Bearer key as the
+REST API; Streamable HTTP, MCP protocol `2025-03-26`) and exposes 15 tools:
+`text_to_insight`, `framework_to_insight`, `data_library`, `ontology`,
+`search_docs`, `search_entities`, `search_insights`, `search_events`,
+`get_insights_from_entity`, `get_entities_from_insight`, `get_filter_options`
+and the event/entity/insight cross-links.
+
+It is wired into this workspace via `../opencode.json`:
+
+```json
+"mcp": {
+  "carbonarc": {
+    "type": "remote",
+    "url": "https://mcp.carbonarc.co/",
+    "headers": { "Authorization": "Bearer {file:carbon/.carbontoken}" },
+    "oauth": false,
+    "timeout": 30000
+  }
+}
+```
+
+`carbon/.carbontoken` holds the key alone (gitignored, no trailing newline);
+`{file:}` is used because `{env:CARBON_API_KEY}` resolves to an empty string
+when the variable is not exported. Restart opencode after editing the config —
+it is not hot-reloaded. This is also the route to **CA0032 (EDGAR)**, which the
+REST API does not serve (`api_available=False, mcp_available=True`).
+
+## 9. Known quirks
 
 - **CA0032 (SEC EDGAR filings) is `api_available=False, builder_available=False`
   but `mcp_available=True`** — the survivorship-clean text channel is reachable

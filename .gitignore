@@ -42,3 +42,4 @@ output/final_cleanup_20261004/
 # Local opencode tooling config and Carbon Arc API token
 opencode.json
 carbon/.carbontoken
+carbon/out/
