@@ -478,6 +478,7 @@ def test_optimizer_earlier_book_ignores_future_scores_and_returns(
                 "ticker_name_source": "test",
                 "ticker_name_status": identity.CRSP_STATUS,
                 "prc": 10.0,
+                "me": 2000.0,
                 "size_grp": "large",
                 "dolvol_126d": 1e8,
                 "sector": "45",

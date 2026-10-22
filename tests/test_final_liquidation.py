@@ -87,6 +87,7 @@ def test_liquidated_holding_is_not_kept_in_next_retention_buffer(tmp_path, monke
                 "ticker_name_source": "test",
                 "ticker_name_status": "verified",
                 "prc": 10.0,
+                "me": 2000.0,
                 "size_grp": "large",
                 "dolvol_126d": 1e8,
                 "sector": "45",

@@ -296,3 +296,133 @@ def metrics(r: pd.DataFrame, factor_returns: pd.DataFrame | None = None) -> dict
                 }
             )
     return out
+
+
+# --- Daily frequency (Instructions 9.1 and 9.4) -----------------------------
+#
+# The mandate supplies daily returns and asks for daily beta and the maximum
+# one-day loss. The book is set monthly, so the daily series is built by
+# carrying each month's book across its trading days and letting the weights
+# drift exactly as evaluate() does from month to month.
+
+DSF_FILE = "dsf_mini_from_2014.csv"
+TRADING_DAYS = 252
+
+
+def load_dsf(
+    data_dir: pathlib.Path, permnos: set[int], first: pd.Timestamp, last: pd.Timestamp
+) -> pd.DataFrame:
+    """Daily returns for `permnos` between `first` and `last`, memory-lean."""
+    import pyarrow.csv as pv
+
+    path = data_dir / DSF_FILE
+    table = pv.read_csv(
+        path,
+        convert_options=pv.ConvertOptions(
+            column_types={"permno": "int64", "date": "int64"}
+        ),
+    )
+    d = table.to_pandas()
+    d["day"] = pd.to_datetime(d.date, format="%Y%m%d")
+    d = d.loc[d.permno.isin(permnos) & d.day.between(first, last)]
+    return d.sort_values(["permno", "day"]).reset_index(drop=True)
+
+
+def daily_spx(fred: pd.DataFrame) -> pd.Series:
+    """Daily S&P 500 total-of-price returns from the FRED SP500 series."""
+    s = fred[fred.series == "SP500"].dropna(subset=["value"]).copy()
+    s["day"] = pd.to_datetime(s.date)
+    close = s.set_index("day").value.sort_index()
+    return close.pct_change().dropna()
+
+
+def daily_metrics(
+    books: dict,
+    dsf: pd.DataFrame,
+    fred: pd.DataFrame,
+) -> dict:
+    """Daily book returns, maximum one-day loss and daily beta vs the S&P 500.
+
+    Each month's book is held at its target weights and drifts with the
+    realized daily returns until the next rebalance, which matches the monthly
+    convention in evaluate(). Cash earns the daily T-bill.
+    """
+    tbill = fred[fred.series == "TB3MS"].dropna(subset=["value"]).copy()
+    tbill["day"] = pd.to_datetime(tbill.date)
+    rf_daily = (tbill.set_index("day").value / 100 / 252).sort_index()
+    px = dsf.pivot(index="day", columns="permno", values="daily_return")
+    total, book_ids = [], {}
+    for month in sorted(books):
+        w = books[month]
+        if not w:
+            continue
+        days = px.loc[px.index.to_period("M") == month]
+        if days.empty:
+            continue
+        book_ids[month] = list(w)
+        weights = pd.Series(w, dtype=float)
+        cols = [c for c in weights.index if c in days.columns]
+        for day, row in days[cols].iterrows():
+            r = row.fillna(0.0)
+            rfd = float(rf_daily.get(day, np.nan))
+            if not np.isfinite(rfd):
+                rfd = float(rf_daily.asof(day))
+            pnl = float((weights[cols] * r).sum())
+            total.append({"day": day, "month": month, "total": rfd + pnl, "rf": rfd})
+            denom = 1.0 + pnl + rfd
+            if denom > 0:
+                weights[cols] = weights[cols] * (1.0 + r + rfd) / denom
+    if not total:
+        return {}
+    d = pd.DataFrame(total).set_index("day")
+    spx = daily_spx(fred)
+    d = d.join(spx.rename("spx"), how="inner").dropna(subset=["spx"])
+    ex = d.total - d.rf
+    mkt = d.spx - d.rf
+    worst = d.total.idxmin()
+    out = {
+        "days": int(len(d)),
+        "max_one_day_loss": float(d.total.min()),
+        "max_one_day_loss_date": str(pd.Timestamp(worst).date()),
+        "best_one_day_return": float(d.total.max()),
+        "ann_volatility_daily": float(d.total.std() * np.sqrt(TRADING_DAYS)),
+    }
+    if len(d) > 20:
+        b, se = ols(ex.to_numpy(), mkt.to_numpy()[:, None])
+        _, th, _ = ols_hac(ex.to_numpy(), mkt.to_numpy()[:, None])
+        out.update(
+            {
+                "beta_daily": float(b[1]),
+                "beta_daily_se": float(se[1]),
+                "beta_daily_t_hac": float(th[1]),
+                "alpha_daily_ann": float(b[0] * TRADING_DAYS),
+                "alpha_daily_t": float(b[0] / se[0]),
+            }
+        )
+    return out
+
+
+def capital_at(nav: float | pd.Series, months: pd.Series) -> pd.Series:
+    """Capital at each month's formation date.
+
+    A scalar is the endowed amount. A Series indexed by holding month is the
+    compounding path the mandate requires (Instructions 3.1, 3.3): month t is
+    sized on the endowment grown by every prior month's net return.
+    """
+    if not isinstance(nav, pd.Series):
+        return pd.Series(float(nav), index=months.index)
+    return pd.Series(months.map(nav).astype(float).to_numpy(), index=months.index)
+
+
+def adv_days_exhibit(p: pd.DataFrame, nav: float | pd.Series) -> pd.DataFrame:
+    """Position size in days of average daily volume, long and short apart.
+
+    `dolvol_126d` is the 126-day average of daily dollar volume, so a position
+    of D dollars is D / dolvol_126d days of volume (Instructions 9.4). Dollars
+    come from the capital the month was sized on, which compounds over the
+    out-of-sample period.
+    """
+    q = p[["return_month", "permno", "side", "target_weight", "dolvol_126d"]].copy()
+    q["position_dollars"] = q.target_weight.abs() * capital_at(nav, q.return_month)
+    q["adv_days"] = q.position_dollars / q.dolvol_126d.replace(0, np.nan)
+    return q.dropna(subset=["adv_days"])

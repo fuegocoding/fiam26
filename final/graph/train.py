@@ -43,6 +43,18 @@ def train(
     torch.set_num_threads(4)
     torch.use_deterministic_algorithms(True)
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Finished folds are reused, so if every fold is already on disk the run
+    # needs no tensors and no device at all. Building _Tokens first would put
+    # the features on `device` before this check and make --reuse require the
+    # GPU that trained them.
+    if all(
+        (output_dir / f"{variant}_{year}_seed{seed}{ext}").exists()
+        for seed in seeds
+        for year in years
+        for variant in VARIANTS
+        for ext in (".parquet", ".pt")
+    ):
+        return output_dir
     tokens = _Tokens(data_dir, device)
     for seed in seeds:
         for year in years:

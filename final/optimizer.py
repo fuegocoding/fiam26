@@ -31,6 +31,12 @@ MICRO_SLEEVES_MAX_NAV = 50_000_000.0
 # be borrowed at the size or fee the cost model assumes, so it is never
 # shorted (FINRA short interest, see borrow.py).  Unknown short interest passes.
 SHORT_INTEREST_CAP = 0.15
+# The shortable universe is restricted to names with a market capitalisation of
+# at least US$500m at the formation date (Instructions 3.1). At a $1bn book a
+# micro-cap short is unborrowable in the size the mandate requires, so the
+# floor is a hard rule on the short leg only; the long leg is unrestricted.
+# `me` is market equity in millions of dollars.
+SHORT_ME_FLOOR = 500.0
 # Long and short notionals are scaled so their 60-month betas offset; each
 # side stays within BETA_TILT of half the gross, keeping net exposure small.
 BETA_NEUTRAL = True
@@ -46,6 +52,7 @@ _ATTRIBUTES = [
     "ticker_name_source",
     "ticker_name_status",
     "prc",
+    "me",
     "size_grp",
     "dolvol_126d",
     "sector",
@@ -64,12 +71,17 @@ def dollar_limits(nav: float = NAV) -> dict[str, float]:
     }
 
 
-def scored_for_nav(predictions: pd.DataFrame, nav: float) -> pd.DataFrame:
-    """Use the liquid score above $50M and the full score otherwise."""
+def scored_for_nav(predictions: pd.DataFrame, nav: float | pd.Series) -> pd.DataFrame:
+    """Use the liquid score above $50M and the full score otherwise.
+
+    The cutoff keys off the endowed fund size, not the compounded path, so
+    the blend is fixed for the whole out-of-sample period.
+    """
     frame = predictions.copy()
+    endowment = float(nav) if not isinstance(nav, pd.Series) else float(nav.iloc[0])
     if (
         ENABLE_MICRO_SLEEVE_SWITCH
-        and nav > MICRO_SLEEVES_MAX_NAV
+        and endowment > MICRO_SLEEVES_MAX_NAV
         and "final_score_liquid" in frame
     ):
         frame["final_score"] = frame.final_score_liquid
@@ -80,7 +92,7 @@ def scored_for_nav(predictions: pd.DataFrame, nav: float) -> pd.DataFrame:
 def optimize(
     predictions: pd.DataFrame,
     panel_path: pathlib.Path,
-    nav: float = NAV,
+    nav: float | pd.Series = NAV,
     short_interest: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Builds each month's book from the final score, then applies risk rules.
@@ -92,7 +104,10 @@ def optimize(
         predictions: One row per stock-month with return_month, permno,
             final_score, price, liquidity, sector, beta and labels.
         panel_path: Characteristics panel holding the risk rules' history.
-        nav: Net asset value that sets every dollar size.
+        nav: Capital that sets every dollar size. A scalar is the endowed
+            amount; a Series indexed by holding month is the compounding
+            capital the mandate requires (Instructions 3.1, 3.3), so the
+            liquidity limits tighten as the fund grows.
         short_interest: Optional borrow.build table (permno, return_month,
             short_pct); stocks at or above SHORT_INTEREST_CAP are not shorted.
 
@@ -122,11 +137,12 @@ def optimize(
     previous: dict[int, float] = {}
     positions, diagnostics = [], []
     for month, current in frame.groupby("return_month", sort=True):
+        capital = float(nav.loc[month]) if isinstance(nav, pd.Series) else float(nav)
         # Only settled prior-month closures can clear the retention buffer.
         previous = {p: w for p, w in previous.items() if (month - 1, p) not in closed}
         prev_long = {p for p, w in previous.items() if w > 0}
         prev_short = {p for p, w in previous.items() if w < 0}
-        weights, coverage = _book(current, nav, prev_long, prev_short)
+        weights, coverage = _book(current, capital, prev_long, prev_short)
         weights, squeeze, rules = risk.protect(weights, month, panel, scores)
         attributes = current.set_index("permno")[_ATTRIBUTES]
         for permno, weight in weights.items():
@@ -141,14 +157,16 @@ def optimize(
                     "ticker_name_source": row.ticker_name_source,
                     "ticker_name_status": row.ticker_name_status,
                     "prc": float(row.prc),
+                    "me": float(row.me),
                     "size_grp": row.size_grp,
                     "sector": row.sector,
                     "beta_60m": float(row.beta_60m),
                     "dolvol_126d": float(row.dolvol_126d),
                     "final_score": float(row.final_score),
                     "target_weight": weight,
-                    "target_dollars": weight * nav,
+                    "target_dollars": weight * capital,
                     "side": "long" if weight > 0 else "short",
+                    "capital": capital,
                     **squeeze.loc[permno].to_dict(),
                 }
             )
@@ -202,6 +220,7 @@ def write(
         "sector_neutral": SECTOR_NEUTRAL,
         "rank_buffer": BUFFER,
         "short_interest_cap": SHORT_INTEREST_CAP,
+        "short_me_floor_musd": SHORT_ME_FLOOR,
         "micro_sleeves_max_nav": MICRO_SLEEVES_MAX_NAV,
         "micro_sleeve_switch_enabled": ENABLE_MICRO_SLEEVE_SWITCH,
         "parameter_source": "committed_fixed_recipe_with_timing_and_liquidation_fixes",
@@ -256,6 +275,7 @@ def _book(
     ]
     short_ok = valid[
         (valid.prc >= MIN_PRICE)
+        & (valid.me >= SHORT_ME_FLOOR)
         & (valid.dolvol_126d * SHORT_ADV_PARTICIPATION * EXECUTION_DAYS >= one)
     ]
     scarce = short_ok.short_pct >= SHORT_INTEREST_CAP  # NaN compares False
@@ -285,6 +305,7 @@ def _book(
         "selected_longs": len(longs),
         "selected_shorts": len(shorts),
         "short_blocked": int(scarce.sum()),
+        "short_floor_blocked": int((valid.me < SHORT_ME_FLOOR).sum()),
     }
     if not longs or not shorts:
         return {}, coverage

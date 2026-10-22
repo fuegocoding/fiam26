@@ -20,7 +20,9 @@ EXTERNAL_DIR = FINAL / "external_data"
 WORK_DIR = FINAL / "output"
 
 # Fund size in dollars; every dollar limit in the optimizer derives from it.
-NAV = 500_000_000.0
+# The final mandate endows US$1bn at the start of the out-of-sample period and
+# the fund compounds from there (Instructions 3.1, 3.3).
+NAV = 1_000_000_000.0
 
 # Fitted sleeves and the graph model run on this device.
 DEVICE = "cuda"

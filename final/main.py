@@ -35,7 +35,12 @@ HEADLINE = [
 
 
 def check_inputs() -> None:
-    names = [config.PANEL_FILE, config.FACTOR_LIST_FILE, config.FILINGS_FILE]
+    names = [
+        config.PANEL_FILE,
+        config.FACTOR_LIST_FILE,
+        config.FILINGS_FILE,
+        evaluate.DSF_FILE,
+    ]
     missing = [n for n in names if not (config.DATA_DIR / n).exists()]
     if missing:
         raise SystemExit(
@@ -60,6 +65,27 @@ def build_predictions() -> pd.DataFrame:
 
     timing.validate_predictions(labelled)
     return labelled
+
+
+def nav_schedule(
+    portfolio: pd.DataFrame,
+    universe: pd.DataFrame,
+    market: pd.DataFrame,
+    endowment: float,
+) -> pd.Series:
+    """Capital at the formation of each holding month.
+
+    The mandate endows US$1bn at the start of the out-of-sample period and the
+    fund compounds from there (Instructions 3.1, 3.3): month t is sized on the
+    endowment grown by every prior month's net return, so a successful fund
+    tightens its own liquidity limits.
+    """
+    books = {
+        month: dict(zip(g.permno.astype(int), g.target_weight, strict=True))
+        for month, g in portfolio.groupby("return_month")
+    }
+    returns = evaluate.evaluate(books, universe, market).total
+    return (1 + returns).cumprod().shift(1).fillna(1.0) * float(endowment)
 
 
 def score_column(predictions: pd.DataFrame) -> str:
@@ -91,19 +117,37 @@ def main() -> None:
     predictions.to_parquet(config.WORK_DIR / "predictions.parquet", index=False)
 
     crowded = pd.read_parquet(borrow.build(config.WORK_DIR, panel))
-    portfolio, diagnostics = optimizer.optimize(
-        predictions, panel, nav=config.NAV, short_interest=crowded
-    )
+    universe = evaluate.load_universe(panel)
+    market = evaluate.market()
+
+    # Dollar limits follow the compounding fund, so the book and the capital
+    # path have to agree. Iterate until the book stops changing; in practice
+    # this settles in about nine passes.
+    nav: float | pd.Series = config.NAV
+    previous = None
+    for _ in range(16):
+        portfolio, diagnostics = optimizer.optimize(
+            predictions, panel, nav=nav, short_interest=crowded
+        )
+        key = portfolio[
+            ["return_month", "permno", "target_weight"]
+        ].reset_index(drop=True)
+        nav = nav_schedule(portfolio, universe, market, config.NAV)
+        if previous is not None and key.equals(previous):
+            break
+        previous = key
     optimizer.write(portfolio, diagnostics, config.WORK_DIR, nav=config.NAV)
 
     stats = report.run(
         portfolio,
         predictions,
-        evaluate.load_universe(panel),
-        evaluate.market(),
+        universe,
+        market,
         crowded,
         config.WORK_DIR / "report",
         score_column(predictions),
+        nav=nav,
+        data_dir=config.DATA_DIR,
     )
     headline = {key: stats.get(key) for key in HEADLINE}
     print(json.dumps(headline, indent=2, default=str))

@@ -66,6 +66,6 @@ def test_holdings_schema_and_compliance():
     assert h.Date.iloc[0] == "2021-01-01" and np.isclose(h.WEIGHT.abs().max(), 0.5)
     r = pd.DataFrame({"names": 200, "gross": 1.0, "net": 0.0}, index=m)
     checks = report.compliance(r, h, pd.DataFrame(columns=["return_month", "permno", "final_score"]))
-    assert checks["names_between_100_and_500"] and checks["net_within_50pct"]
+    assert checks["names_between_200_and_500"] and checks["net_within_50pct"]
     assert checks["predictions_carry_no_outcomes"]
     assert not checks["covers_the_test_window"]  # only two months here

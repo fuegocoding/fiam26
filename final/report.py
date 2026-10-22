@@ -9,6 +9,7 @@ import pandas as pd
 
 import config
 import evaluate
+import external
 
 FIRST = pd.Period(f"{config.TEST_YEARS[0]}-01", "M")
 LAST = config.LAST_TARGET.to_period("M")
@@ -35,6 +36,9 @@ def positions(portfolio: pd.DataFrame, universe: pd.DataFrame) -> pd.DataFrame:
     """Each position with its realized next-month return and P&L."""
     p = portfolio.copy()
     p["return_month"] = _period(p.return_month)
+    # `me` is already on the portfolio from the optimizer; the universe copy is
+    # the same formation-date market equity, so take it from there.
+    p = p.drop(columns=["me"], errors="ignore")
     outcome = universe[
         [
             "return_month",
@@ -298,7 +302,8 @@ def compliance(
     checks = {
         "covers_the_test_window": months[0] == FIRST and months[-1] == LAST,
         "no_missing_month": len(months) == len(pd.period_range(FIRST, LAST)),
-        "names_between_100_and_500": bool(r.names.between(100, 500).all()),
+        # Instructions 3.1: at least 200 and at most 500 names, both legs.
+        "names_between_200_and_500": bool(r.names.between(200, 500).all()),
         "gross_at_most_200pct": bool((r.gross <= 2.0).all()),
         "net_within_50pct": bool((r.net.abs() <= 0.5).all()),
         "every_holding_has_ticker_and_name": bool(labels.notna().all().all()),
@@ -311,6 +316,87 @@ def compliance(
     }
     checks["all_pass"] = all(checks.values())
     return checks
+
+
+def compliance_positions(p: pd.DataFrame) -> dict:
+    """Rules that can only be checked on the positions themselves."""
+    short_me = p.loc[p.target_weight < 0, "me"]
+    return {
+        # Instructions 3.1: shortable universe is market cap >= US$500m at
+        # formation; `me` is market equity in millions of dollars.
+        "short_book_above_500m_floor": bool((short_me >= 500.0).all()),
+        "short_book_min_market_cap_musd": float(short_me.min())
+        if len(short_me)
+        else np.nan,
+        "short_book_names_below_floor": int((short_me < 500.0).sum()),
+        # Instructions 3.1: maximum 5% of capital in any one name.
+        "single_position_at_most_5pct": bool((p.target_weight.abs() <= 0.05).all()),
+        "largest_position_pct_of_capital": float(p.target_weight.abs().max()),
+    }
+
+
+def holding_period(p: pd.DataFrame) -> dict:
+    """Average time a name stays in the book (Instructions 9.3).
+
+    Measured directly: for every name, the number of months it is held
+    consecutively, weighted by the capital it carried, converted to trading
+    days at 21 days a month. A name that re-enters later starts a new run.
+    """
+    held = p.sort_values(["permno", "return_month"]).copy()
+    # Periods have no numeric diff; their integer ordinal does.
+    held["seq"] = held.return_month.astype("int64")
+    gap = held.groupby("permno").seq.diff()
+    held["run"] = gap.ne(1).groupby(held.permno).cumsum()
+    spans = (
+        held.groupby(["permno", "run"])
+        .agg(
+            months=("seq", "size"),
+            weight=("target_weight", lambda s: s.abs().mean()),
+        )
+        .reset_index()
+    )
+    months = float((spans.months * spans.weight).sum() / spans.weight.sum())
+    return {
+        "avg_holding_period_months": months,
+        "avg_holding_period_trading_days": months * 21.0,
+    }
+
+
+def mandate_stats(r: pd.DataFrame, p: pd.DataFrame, nav: float | pd.Series) -> dict:
+    """The rows of the standardised table that the base statistics omit."""
+    turnover_oneway = r.traded / 2.0
+    ann_turnover = float(turnover_oneway.mean() * 12)
+    gross = float(r.gross.mean())
+    capital = evaluate.capital_at(nav, p.return_month)
+    size = p.target_weight.abs() * capital / 1e6
+    endowment = float(nav) if not isinstance(nav, pd.Series) else float(nav.iloc[0])
+    names = r.longs + r.shorts
+    out = {
+        "ending_endowment_busd": float(
+            endowment * (1 + _compound(r.total)) / 1e9
+        ),
+        "start_endowment_busd": float(endowment / 1e9),
+        "ann_volatility": float(r.total.std() * np.sqrt(12)),
+        "tracking_error": float(r.active.std() * np.sqrt(12)),
+        "max_one_month_loss": float(r.total.min()),
+        "positions_avg": float(names.mean()),
+        "positions_min": int(names.min()),
+        "positions_max": int(names.max()),
+        "turnover_one_way_per_rebalance": float(turnover_oneway.mean()),
+        "turnover_one_way_annualised": ann_turnover,
+        "position_size_avg_musd": float(size.mean()),
+        "gross_exposure_avg_pct": gross * 100,
+        "gross_exposure_max_pct": float(r.gross.max() * 100),
+        "net_exposure_avg_pct": float(r.net.mean() * 100),
+        "net_exposure_min_pct": float(r.net.min() * 100),
+        "net_exposure_max_pct": float(r.net.max() * 100),
+    }
+    out.update(holding_period(p))
+    # The gross/turnover approximation the Instructions offer as a cross-check.
+    out["holding_period_gross_over_turnover_days"] = float(
+        gross / max(ann_turnover, 1e-12) * 252
+    )
+    return out
 
 
 def _growth(r: pd.DataFrame) -> pd.DataFrame:
@@ -459,6 +545,8 @@ def run(
     short_interest: pd.DataFrame | None,
     out_dir: pathlib.Path,
     score: str = "final_score",
+    nav: float | pd.Series = 1e9,
+    data_dir: pathlib.Path | None = None,
 ) -> dict:
     """Evaluates the book, writes every report file, returns the statistics."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -480,7 +568,27 @@ def run(
     stats["max_dd_deployed_capital"] = comparison.loc[
         "max_drawdown_deployed_capital_gross_normalized", "Strategy"
     ]
+    stats.update(mandate_stats(r, p, nav))
     stats["score_column"] = score
+
+    if data_dir is not None:
+        dsf = evaluate.load_dsf(
+            data_dir,
+            set(p.permno.astype(int)),
+            pd.Period(FIRST, "M").to_timestamp(),
+            pd.Period(LAST, "M").to_timestamp(how="end"),
+        )
+        daily = evaluate.daily_metrics(books, dsf, external.read("fred"))
+        stats.update(daily)
+        exhibit = evaluate.adv_days_exhibit(p, nav)
+        exhibit.to_csv(out_dir / "position_adv_days.csv", index=False)
+        stats["adv_days_long_median"] = float(
+            exhibit.loc[exhibit.side == "long", "adv_days"].median()
+        )
+        stats["adv_days_short_median"] = float(
+            exhibit.loc[exhibit.side == "short", "adv_days"].median()
+        )
+
     (out_dir / "performance.json").write_text(
         json.dumps(stats, indent=2, default=str) + "\n"
     )
@@ -489,7 +597,13 @@ def run(
     top_holdings(p, len(r)).to_csv(out_dir / "top_average_holdings.csv", index=False)
     contrib = contributors(p)
     contrib.to_csv(out_dir / "contributors.csv", index=False)
-    checks = compliance(r, holdings, predictions)
-    (out_dir / "compliance.json").write_text(json.dumps(checks, indent=2) + "\n")
+    checks = {
+        **compliance(r, holdings, predictions),
+        **compliance_positions(p),
+    }
+    checks["all_pass"] = all(v for v in checks.values() if isinstance(v, bool))
+    (out_dir / "compliance.json").write_text(
+        json.dumps(checks, indent=2, default=str) + "\n"
+    )
     charts(r, contrib, out_dir / "charts")
     return {**stats, "compliance_all_pass": checks["all_pass"]}
