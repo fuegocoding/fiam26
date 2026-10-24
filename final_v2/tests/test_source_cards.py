@@ -72,7 +72,14 @@ def test_ca0056_vintage_reweighting_is_recorded():
     card = _card("CA0056_card_spend.json")
     assert card.screen.vintage.status == AssessmentStatus.UNRESOLVED
     assert any("reweight" in q.lower() for q in card.unresolved_questions)
-    assert card.screen.metric_lag.status == AssessmentStatus.UNRESOLVED
+    assert card.screen.metric_lag.status == AssessmentStatus.ESTABLISHED
+    assert "T + 3" in card.screen.metric_lag.evidence_id
+
+
+def test_ca0056_tearsheet_bias_recorded():
+    card = _card("CA0056_card_spend.json")
+    assert any("bias" in q.lower() for q in card.unresolved_questions)
+    assert any("iowa" in q.lower() for q in card.unresolved_questions)
 
 
 def test_ca0097j_has_the_best_clocks_but_still_open_vintage():
