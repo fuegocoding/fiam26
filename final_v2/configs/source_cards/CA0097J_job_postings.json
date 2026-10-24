@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "owner": "data",
+  "created_at": "2026-10-24T12:00:00Z",
+  "source_id": "carbon_ca0097j_job_postings",
+  "dataset_id": "CA0097J",
+  "topic": "U.S. job postings (Lightcast, block panel)",
+  "snapshot_id": "carbonarc_library_2026_10_24",
+  "status": "ASSESSED",
+  "access_confirmed": true,
+  "formation_eligible": false,
+  "entity_grain": ["posting", "employer", "ticker", "occupation", "county"],
+  "screen": {
+    "history": {
+      "status": "established",
+      "evidence_id": "block_pricing_CA0097J: 2010-Present; posted_date partitions by year (ca_partition_folder)"
+    },
+    "metric_lag": {
+      "status": "established",
+      "evidence_id": "dictionary_CA0097J: ca_receipt_date = date Carbon Arc received the vendor delivery; vendor_extraction_at; ca_processing_ts"
+    },
+    "vintage": {
+      "status": "unresolved",
+      "evidence_id": null
+    },
+    "coverage": {
+      "status": "sample_only",
+      "evidence_id": "dictionaries/CA0097J.csv (95 fields inspected, incl. Supplemental Mapping Block)"
+    }
+  },
+  "unresolved_questions": [
+    "VINTAGE (binding): the row carries last_updated_timestamp (vendor edits) and _meta_is_deleted (soft deletes), so delivered rows are mutated. The as-of rule must state whether a posting first observed at posted_date can be reconstructed with the values known at that time, or whether only the latest vendor state is available.",
+    "IDENTITY: mapping runs employer raw name -> ca_ticker via Supplemental Mapping Block; a brand/employer name is not a share class. Dated resolution and materiality (is hiring at this employer material to this issuer?) must be tested separately (spec 9.6).",
+    "CAUSAL DE-DUP: filter ca_include = true for counts; the dedup rule itself is a vendor transform with unknown retroactivity.",
+    "COVERAGE: postings skew to large employers with digital recruiting; covered-vs-uncovered test not yet run."
+  ]
+}
