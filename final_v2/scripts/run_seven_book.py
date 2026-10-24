@@ -58,7 +58,10 @@ COST_BP_PER_SIDE = 20.0
 BORROW_ANNUAL = 0.05
 USE_RISK_OVERLAY = "--risk-overlay" in sys.argv
 USE_GAP = "--with-gap" in sys.argv
-OUT = ROOT / "artifacts" / ("risk_book" if USE_RISK_OVERLAY else "seven_book")
+BLEND_RENORM = "--blend-renorm" in sys.argv
+OUT = ROOT / "artifacts" / (
+    ("risk_book_renorm" if BLEND_RENORM else "risk_book") if USE_RISK_OVERLAY else "seven_book"
+)
 GAP_WORK = ROOT / "artifacts" / "valuation_work"
 FAMILIES = (
     "inventory_retail",
@@ -275,7 +278,9 @@ def main() -> None:
                     fams.append(FamilyEstimate(name, sid, value, 0.1))
             if not fams:
                 continue
-            alpha = sum(f.expected_excess_return for f in fams) / len(FAMILIES)
+            alpha = sum(f.expected_excess_return for f in fams) / (
+                len(fams) if BLEND_RENORM else len(FAMILIES)
+            )
             candidates_alpha[sid] = alpha
             row = merged.loc[idx]
             candidates.append(
@@ -422,7 +427,8 @@ def main() -> None:
     }
     print()
     label = "WITH RISK OVERLAY" if USE_RISK_OVERLAY else "no risk overlay"
-    print(f"=== seven sleeves (5 deterministic + 2 trained) — {label} ===")
+    blend = "coverage-renormalized (challenger)" if BLEND_RENORM else "family-equal (C2 baseline)"
+    print(f"=== seven sleeves (5 deterministic + 2 trained) — {label} | blend: {blend} ===")
     if overlay_log:
         scales = [o["risk_scale"] for o in overlay_log]
         edges = [o["edge_scale"] for o in overlay_log]
