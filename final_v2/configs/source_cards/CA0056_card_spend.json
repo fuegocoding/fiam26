@@ -9,15 +9,21 @@
   "status": "ASSESSED",
   "access_confirmed": true,
   "formation_eligible": false,
-  "entity_grain": ["company_id", "brand_id", "ticker_id", "category_id", "month"],
+  "entity_grain": [
+    "company_id",
+    "brand_id",
+    "ticker_id",
+    "category_id",
+    "month"
+  ],
   "screen": {
     "history": {
       "status": "established",
       "evidence_id": "block_pricing_CA0056: 2019-Present, 5.5y per panel; Core Panel = cards with >=1 txn/quarter"
     },
     "metric_lag": {
-      "status": "unresolved",
-      "evidence_id": null
+      "status": "established",
+      "evidence_id": "Carbon Arc tearsheet (MCP describe, 2026-10-24): official lag 'T + 3 Days' documented in the vendor listing; Core Panel date semantics still to be pinned per feature at ingestion"
     },
     "vintage": {
       "status": "unresolved",
@@ -30,9 +36,10 @@
   },
   "unresolved_questions": [
     "VINTAGE (binding): vendor description states the panel is reweighted monthly when the vendor restates its panel and removes inactive cards. Historical values shown today may differ from values visible at the original date. Until historical versions can be reconstructed or a lag past the reweight window is evidenced, this source cannot feed formation (spec 9.2). POSITIVE EVIDENCE 2026-10-24: the downloaded sample exposes drop_partition_id (invisible in the dictionary alone), so delivered drops may be identifiable - the next step is a real pull to test whether historical drop states can be reconstructed from partition boundaries.",
-    "METRIC LAG: DATA_MAP claims T+3 but the Core Panel dictionary exposes only `date` described as 'calendar date of data collection or reporting' — an ambiguous clock with no per-row receipt/delivery timestamp. The publication rule must be evidenced before features can be dated.",
     "CLOCK AMBIGUITY: Core Panel `date` mixes collection and reporting semantics; the transaction-level 'US Card Block' `date` ('date the transaction occurred') is a different clock. Which date anchors monthly aggregation must be declared per feature.",
     "COVERAGE/IDENTITY: `ticker` is a Bloomberg ticker join — present-day ticker maps cannot join a 2019-2026 history (spec 9.5). Dated ticker links and the 6.3 delisting test (Sears, Bon-Ton, Pier 1, GNC, Ascena, J.C. Penney must resolve) are required before formation use.",
-    "Panel composition drift: covered-vs-uncovered return comparison (spec 9.8.4) not yet run; a covered-only signal may be survivorship in disguise."
+    "Panel composition drift: covered-vs-uncovered return comparison (spec 9.8.4) not yet run; a covered-only signal may be survivorship in disguise.",
+    "BIAS (new, from tearsheet): the vendor discloses 'Higher spend than expected in Iowa, Ohio and Washington vs. state population'. Any cross-sectional use must control for geographic panel skew or rank within region; state the treatment in the deck (brief 6.2).",
+    "COVERAGE numbers now known from tearsheet: 5.2k companies, 2k brands, 1.6k retailers, 3k service brands - use these for the delisting and covered-vs-uncovered tests (spec 6.3, 9.8)."
   ]
 }
