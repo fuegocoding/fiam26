@@ -25,22 +25,31 @@ def _card(name: str) -> SourceCard:
 
 def test_all_s1_source_cards_validate():
     cards = sorted(CARDS.glob("*.json"))
-    assert len(cards) == 6
+    assert len(cards) == 8
     for path in cards:
         card = _card(path.name)
-        assert card.dataset_id.startswith("CA")
+        assert card.dataset_id.startswith(("CA", "COMP"))
         assert card.owner == "data"
 
 
-def test_no_card_is_formation_eligible_yet():
-    for path in sorted(CARDS.glob("*.json")):
+def test_competition_panel_is_formation_eligible():
+    panel = _card("COMP_chars_panel.json")
+    assert panel.formation_eligible is True
+    assert panel.screen.vintage.status == AssessmentStatus.ESTABLISHED
+    filings = _card("COMP_8k_filings.json")
+    assert filings.formation_eligible is False
+    assert any("survivorship" in q.lower() for q in filings.unresolved_questions)
+
+
+def test_no_carbon_card_is_formation_eligible_yet():
+    for path in sorted(CARDS.glob("CA*.json")):
         card = _card(path.name)
         assert card.formation_eligible is False, f"{card.dataset_id} claims formation eligibility without full screens"
         assert card.broker_rejects_formation() is True
 
 
 def test_binding_questions_are_unresolved_not_hidden():
-    for path in sorted(CARDS.glob("*.json")):
+    for path in sorted(CARDS.glob("CA*.json")):
         card = _card(path.name)
         screens = card.screen
         unresolved = [
