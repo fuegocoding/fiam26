@@ -57,7 +57,9 @@ LAST_TARGET = pd.Timestamp("2026-08-31")
 COST_BP_PER_SIDE = 20.0
 BORROW_ANNUAL = 0.05
 USE_RISK_OVERLAY = "--risk-overlay" in sys.argv
+USE_GAP = "--with-gap" in sys.argv
 OUT = ROOT / "artifacts" / ("risk_book" if USE_RISK_OVERLAY else "seven_book")
+GAP_WORK = ROOT / "artifacts" / "valuation_work"
 FAMILIES = (
     "inventory_retail",
     "oplev_software",
@@ -66,7 +68,7 @@ FAMILIES = (
     "conf_revision_gated",
     "xgb_rank",
     "filing_events",
-)
+) + (("gap_micro",) if USE_GAP else ())
 
 
 def load_tb3ms() -> dict[str, float]:
@@ -145,6 +147,42 @@ def get_forecasts(panel_full, factor_columns, reuse: bool):
     return xgb_fc, filing_fc, audits
 
 
+def get_gap_map():
+    """Trains the valuation family once, returns {(sid, date): gap score}."""
+    import json as _json
+
+    from pod_platform.signals import valuation as val
+    from pod_platform.signals.ibes_state import set_external_path
+
+    set_external_path(str(EXTERNAL))
+    GAP_WORK.mkdir(parents=True, exist_ok=True)
+    out = val.directory(GAP_WORK)
+    if not (out / val.SELECTION_FILE).exists():
+        print("training valuation family (gap_micro) - long run...", flush=True)
+        val.build(PANEL, GAP_WORK, device="cpu")
+    selection = _json.loads((out / val.SELECTION_FILE).read_text())
+    xs = pd.read_parquet(out / val.XS_FILE)
+    pooled = pd.read_parquet(out / val.POOLED_FILE)
+    gap_map = {}
+    for year_s, fold in selection["folds"].items():
+        year = int(year_s)
+        model = fold["best_pricing_model"]
+        print(f"  gap_micro {year}: selected {model} (mdae {min(fold['validation_mdae'].values()):.3f})", flush=True)
+        if model in val.POOLED_MODELS or model == "M9":
+            needed = [c for c in val.ENSEMBLE if c not in val.POOLED_MODELS]
+            block = pooled[pooled.fold_year == year][["permno", "eom", "M6", "M8"]].merge(
+                xs[["permno", "eom", "y", *needed]], on=["permno", "eom"], how="left"
+            )
+            if model == "M9":
+                block["M9"] = block[list(val.ENSEMBLE)].mean(axis=1, skipna=False)
+        else:
+            block = xs
+        block = block.dropna(subset=[model, "y"])
+        for row in block.itertuples():
+            gap_map[(str(int(row.permno)), row.eom.date())] = float(getattr(row, model) - row.y)
+    return gap_map
+
+
 def main() -> None:
     reuse = "--reuse-forecasts" in sys.argv
     OUT.mkdir(parents=True, exist_ok=True)
@@ -165,6 +203,7 @@ def main() -> None:
     overlay_panel["permno"] = overlay_panel["permno"].astype(int).astype(str)
 
     xgb_fc, filing_fc, audits = get_forecasts(panel_full, factor_columns, reuse)
+    gap_map = get_gap_map() if USE_GAP else {}
     xgb_map = {
         (str(int(r.permno)), r.eom.date()): float(r.pred_xgb_rank) for r in xgb_fc.itertuples()
     }
@@ -211,6 +250,12 @@ def main() -> None:
         keys = [(sid, month_date) for sid in merged["sid"]]
         merged["xgb_rank"] = [xgb_map.get(k) for k in keys]
         merged["filing_events"] = [filing_map.get(k) for k in keys]
+        if USE_GAP:
+            merged["gap_micro"] = [gap_map.get(k) for k in keys]
+            micro = merged["size_grp"].eq("micro") & merged["gap_micro"].notna()
+            ranked = merged.loc[micro, "gap_micro"].rank(pct=True)
+            scaled["gap_micro"] = ((ranked - 0.5) * (12 ** 0.5)).reindex(merged.index).fillna(0.0)
+            coverage["gap_micro"] = int(micro.sum())
         coverage["xgb_rank"] = int(merged["xgb_rank"].notna().sum())
         coverage["filing_events"] = int(merged["filing_events"].notna().sum())
         coverage_log.append({"month": str(month_date), "coverage": coverage})
