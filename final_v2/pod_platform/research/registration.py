@@ -74,8 +74,13 @@ class ResearchLedger:
                 )
             )
         self._registrations[experiment.registration_id] = experiment
-        self._registry.count_trial(
-            f"trial_{len(self._trials)}", "registered_specification", experiment.spec_content_hash
+        self.record_trial(
+            TrialRecord(
+                kind="registered_specification",
+                spec_hash=experiment.spec_content_hash,
+                detail=f"registered {experiment.registration_id}",
+                counted_at=experiment.registered_at,
+            )
         )
         return experiment.registration_id
 

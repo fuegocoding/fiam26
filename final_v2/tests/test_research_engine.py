@@ -192,7 +192,8 @@ def test_trial_counters_by_kind(ledger):
     ledger.record_trial(
         TrialRecord(kind="seed_restart", spec_hash=spec_hash, detail="restart", counted_at=_when(days=9))
     )
-    assert ledger.trial_count() == 5
+    assert ledger.trial_count() == 6
+    assert ledger.trial_count("registered_specification") == 1
     assert ledger.trial_count("hyperparameter_config") == 4
     assert ledger.trial_count("seed_restart") == 1
     assert ledger.trial_count("hypothesis") == 0
