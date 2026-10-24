@@ -25,14 +25,14 @@ def _card(name: str) -> SourceCard:
 
 def test_all_s1_source_cards_validate():
     cards = sorted(CARDS.glob("*.json"))
-    assert len(cards) == 3
+    assert len(cards) == 6
     for path in cards:
         card = _card(path.name)
         assert card.dataset_id.startswith("CA")
         assert card.owner == "data"
 
 
-def test_no_s1_card_is_formation_eligible_yet():
+def test_no_card_is_formation_eligible_yet():
     for path in sorted(CARDS.glob("*.json")):
         card = _card(path.name)
         assert card.formation_eligible is False, f"{card.dataset_id} claims formation eligibility without full screens"
@@ -113,3 +113,43 @@ def test_hypothesis_has_kill_conditions_not_just_success():
     joined = " ".join(hypo.falsification).lower()
     for word in ("baseline", "composition", "sector", "cost"):
         assert word in joined
+
+
+def test_ca0032_edgar_clocks_established():
+    card = _card("CA0032_edgar_filings.json")
+    assert card.screen.history.status == AssessmentStatus.ESTABLISHED
+    assert card.screen.metric_lag.status == AssessmentStatus.ESTABLISHED
+    assert card.screen.vintage.status == AssessmentStatus.ESTABLISHED
+    assert card.screen.coverage.status == AssessmentStatus.SAMPLE_ONLY
+    assert any("extract" in q.lower() for q in card.unresolved_questions)
+
+
+def test_ca0092_drop_partition_vintage_evidence():
+    card = _card("CA0092_securities_ratings.json")
+    assert card.screen.vintage.status == AssessmentStatus.ESTABLISHED
+    assert "ca_drop_partition" in card.screen.vintage.evidence_id
+    assert any("backfill" in q.lower() for q in card.unresolved_questions)
+    assert card.screen.metric_lag.status == AssessmentStatus.ESTABLISHED
+
+
+def test_ca0035_events_pin_tagging_question():
+    card = _card("CA0035_benzinga_events.json")
+    assert card.screen.metric_lag.status == AssessmentStatus.ESTABLISHED
+    assert card.screen.vintage.status == AssessmentStatus.UNRESOLVED
+    assert any("tag" in q.lower() or "retag" in q.lower() for q in card.unresolved_questions)
+
+
+def test_blocked_panels_record_the_rewrite_evidence():
+    card = _card("CA0056_card_spend.json")
+    assert card.screen.vintage.status == AssessmentStatus.UNRESOLVED
+    assert any("reweight" in q.lower() for q in card.unresolved_questions)
+    traffic = _card("CA0060_foot_traffic.json")
+    assert traffic.screen.vintage.status == AssessmentStatus.UNRESOLVED
+
+
+def test_status_doc_exists_and_covers_all_cards():
+    doc = (CONFIGS.parent / "CARBON_DATA_STATUS.md").read_text(encoding="utf-8")
+    for dataset_id in ("CA0032", "CA0035", "CA0056", "CA0060", "CA0092", "CA0097J"):
+        assert dataset_id in doc
+    for section in ("What we can use", "What we can't use", "Identity and coverage"):
+        assert section in doc

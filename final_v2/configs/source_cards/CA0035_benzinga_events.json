@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "owner": "data",
+  "created_at": "2026-10-24T14:00:00Z",
+  "source_id": "carbon_ca0035_benzinga_events",
+  "dataset_id": "CA0035",
+  "topic": "Financial news event tags (Benzinga)",
+  "snapshot_id": "carbonarc_library_2026_10_24",
+  "status": "ASSESSED",
+  "access_confirmed": true,
+  "formation_eligible": false,
+  "entity_grain": ["ticker", "event_category", "date"],
+  "screen": {
+    "history": {
+      "status": "established",
+      "evidence_id": "DATA_MAP 2.1: 2011-present; dictionary CA0035.csv - 25 event-category tables (M&A, IPOs, Insider Trading, Legal, Earnings, SEC Filings...)"
+    },
+    "metric_lag": {
+      "status": "established",
+      "evidence_id": "spec 9.2: the Benzinga historical baseline follows source publication under the brief; DATA_MAP: T+1 weekly delivery"
+    },
+    "vintage": {
+      "status": "unresolved",
+      "evidence_id": null
+    },
+    "coverage": {
+      "status": "sample_only",
+      "evidence_id": "dictionary CA0035.csv (139 fields, 25 tables inspected); event tags only - no article text"
+    }
+  },
+  "unresolved_questions": [
+    "VINTAGE (binding): event rows carry only an ambiguous `date` ('calendar date of data collection or reporting'). Whether category labels or the ticker_exclusively_mentioned flag can be retagged after publication is not evidenced. Events are published once (low rewrite risk), but the tagging is a vendor transform.",
+    "CLOCK: per-table `date` semantics must be pinned per category; a date-only event follows the t+1 execution convention (spec 2.2) even if it occurred pre-open.",
+    "MATERIALITY: ticker_exclusively_mentioned is the proposed materiality filter - its computation must be documented before it is trusted as a weight.",
+    "No text by construction: this card is event tags only; text-based materiality claims are out of scope (DATA_MAP 2.1)."
+  ]
+}

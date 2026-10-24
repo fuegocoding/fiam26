@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "owner": "data",
+  "created_at": "2026-10-24T14:00:00Z",
+  "source_id": "carbon_ca0092_securities_ratings",
+  "dataset_id": "CA0092",
+  "topic": "Securities ratings and valuation (New Constructs)",
+  "snapshot_id": "carbonarc_library_2026_10_24",
+  "status": "ASSESSED",
+  "access_confirmed": true,
+  "formation_eligible": false,
+  "entity_grain": ["ticker_on_event_date", "event_date"],
+  "screen": {
+    "history": {
+      "status": "established",
+      "evidence_id": "DATA_MAP 2.2: ratings block 2016-present, aggregated 2017-present; dictionary CA0092.csv (46 fields, 3 tables inspected)"
+    },
+    "metric_lag": {
+      "status": "established",
+      "evidence_id": "dictionary: vendor_published_at = when the source published to the feed; ca_receipt_date = when the file was received - both are delivery clocks"
+    },
+    "vintage": {
+      "status": "established",
+      "evidence_id": "dictionary: ca_drop_partition identifies the vendor drop a record arrived in, including explicit full-backfill markers (e.g. Full-backfill-2022-12-31) vs dated drops - vintage identity is recorded per row"
+    },
+    "coverage": {
+      "status": "sample_only",
+      "evidence_id": "dictionary CA0092.csv inspected; per-record identity is point-in-time by design (ticker_on_event_date, cik_on_event_date, company_name_on_event_date, stock_exchange_on_event_date, MIC on event date)"
+    }
+  },
+  "unresolved_questions": [
+    "BACKFILL TREATMENT (binding): rows arriving in Full-backfill-* partitions carry older event_dates but were knowable only at the drop date. Availability rule must be ca_receipt_date/vendor_published_at, never event_date. The backfill-marker set must be enumerated before features run.",
+    "COVERAGE: the delisting test and covered-vs-uncovered comparison (spec 6.3, 9.8) are not yet run.",
+    "INTERPRETATION: rating_gap, rating_roic, rating_fcf_yield and rating_price_to_ebv_ratio are vendor-computed composites; they are baseline/vendor features (DATA_MAP 2.2: 'not assumed novel alpha') and must beat cheap public style controls to be admitted (spec 4.3).",
+    "Aggregated series (2017-) and block series (2016-) may differ in construction; which series a feature uses must be declared per experiment."
+  ]
+}
