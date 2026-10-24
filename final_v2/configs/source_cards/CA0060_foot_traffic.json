@@ -29,7 +29,7 @@
     }
   },
   "unresolved_questions": [
-    "METRIC LAG (binding): DATA_MAP claims T+5, but the dictionary exposes only `local_date` / `month_ending` measurement windows — no delivery or receipt timestamp. Modelled visits are also denormalized/restated (seasonality, weather, holiday adjustments), so the delivered vintage question is open.",
+    "METRIC LAG (binding): DATA_MAP claims T+5, but the dictionary exposes only `local_date` / `month_ending` measurement windows — no delivery or receipt timestamp. Modelled visits are also denormalized/restated (seasonality, weather, holiday adjustments), so the delivered vintage question is open. CONFIRMED 2026-10-24 on the downloaded sample: no partition/receipt/delivery/revision field exists anywhere in the sample rows — this panel carries no vintage identity at all, the worst case of the three S1 panels.",
     "VINTAGE: visits are a modelled estimate, not a counted fact; re-estimation of historical months cannot be excluded without vendor evidence.",
     "CAUSAL AGGREGATION: store->POI->company attribution uses present-day mappings; dated attribution is required (spec 9.5-9.6).",
     "COVERAGE: retail/restaurant skew means the panel's cross-section is a sector bet in disguise unless ranked within sector (DATA_MAP 4)."
