@@ -33,6 +33,8 @@ from pod_platform.allocation import (  # noqa: E402
 from pod_platform.data.competition import CharsPanelLoader  # noqa: E402
 from pod_platform.reporting.compliance import ActualHolding, ComplianceEngine  # noqa: E402
 from pod_platform.reporting.tables import RequiredTable  # noqa: E402
+from pod_platform.risk.overlay import PANEL_COLUMNS as OVERLAY_COLUMNS  # noqa: E402
+from pod_platform.risk.overlay import protect  # noqa: E402
 from pod_platform.signals import (  # noqa: E402
     PortedSignals,
     build_filing_event_features,
@@ -46,8 +48,7 @@ PANEL = REPO / "final" / "data" / "chars_final_with_names.parquet"
 FACTORS = REPO / "final" / "data" / "factor_char_list.csv"
 EXTERNAL = REPO / "final" / "external_data" / "external.parquet"
 FILINGS = REPO / "final" / "data" / "8k_20150101_20260831_identified.parquet"
-OUT = ROOT / "artifacts" / "seven_book"
-CACHE = OUT / "forecasts"
+CACHE = ROOT / "artifacts" / "seven_book" / "forecasts"
 
 TEST_START = dt.date(2021, 1, 31)
 TEST_END = dt.date(2026, 8, 31)
@@ -55,6 +56,8 @@ TEST_YEARS = list(range(2021, 2027))
 LAST_TARGET = pd.Timestamp("2026-08-31")
 COST_BP_PER_SIDE = 20.0
 BORROW_ANNUAL = 0.05
+USE_RISK_OVERLAY = "--risk-overlay" in sys.argv
+OUT = ROOT / "artifacts" / ("risk_book" if USE_RISK_OVERLAY else "seven_book")
 FAMILIES = (
     "inventory_retail",
     "oplev_software",
@@ -152,10 +155,14 @@ def main() -> None:
     tb3ms = load_tb3ms()
 
     factor_columns = pd.read_csv(FACTORS)["variable"].tolist()
-    panel_full = pd.read_parquet(
-        PANEL, columns=["permno", "eom", "ret_exc_lead1m", "size_grp", "gics", *factor_columns]
+    panel_columns = list(
+        dict.fromkeys(["permno", "eom", "ret_exc_lead1m", "ret_exc", "rmax1_21d", "size_grp", "gics", *factor_columns])
     )
+    panel_full = pd.read_parquet(PANEL, columns=panel_columns)
     panel_full["eom"] = pd.to_datetime(panel_full["eom"])
+    overlay_panel = panel_full[OVERLAY_COLUMNS].copy()
+    overlay_panel["eom"] = overlay_panel["eom"].dt.to_period("M")
+    overlay_panel["permno"] = overlay_panel["permno"].astype(int).astype(str)
 
     xgb_fc, filing_fc, audits = get_forecasts(panel_full, factor_columns, reuse)
     xgb_map = {
@@ -178,6 +185,8 @@ def main() -> None:
     last_holdings = []
     prev_weights: dict[str, float] = {}
     coverage_log = []
+    score_history: list[pd.DataFrame] = []
+    overlay_log = []
 
     for month_date in months:
         month_ts = pd.Timestamp(month_date)
@@ -212,6 +221,7 @@ def main() -> None:
             scaled[name] = ((ranked - 0.5) * (12 ** 0.5)).where(series.notna()).fillna(0.0)
 
         candidates = []
+        candidates_alpha = {}
         for sid, idx in zip(merged["sid"], merged.index):
             fams = []
             for name in FAMILIES:
@@ -221,6 +231,7 @@ def main() -> None:
             if not fams:
                 continue
             alpha = sum(f.expected_excess_return for f in fams) / len(FAMILIES)
+            candidates_alpha[sid] = alpha
             row = merged.loc[idx]
             candidates.append(
                 Candidate(
@@ -250,6 +261,24 @@ def main() -> None:
         )
 
         weights = {p.security_id: float(p.target_weight) for p in book.positions}
+
+        ret_month = (month_ts + pd.offsets.MonthEnd(1)).to_period("M")
+        for sid, idx in zip(merged["sid"], merged.index):
+            score_history.append(
+                {
+                    "return_month": ret_month,
+                    "permno": sid,
+                    "final_score": float(candidates_alpha.get(sid, 0.0)),
+                    "prc": float(merged.loc[idx, "prc"]),
+                }
+            )
+
+        if USE_RISK_OVERLAY and weights:
+            scores_df = pd.DataFrame(score_history)
+            overlay_result = protect(weights, ret_month, overlay_panel, scores_df)
+            weights = overlay_result.weights
+            overlay_log.append({"month": str(month_date), **overlay_result.summary})
+
         turnover = 0.5 * sum(
             abs(weights.get(k, 0.0) - prev_weights.get(k, 0.0))
             for k in set(weights) | set(prev_weights)
@@ -335,6 +364,8 @@ def main() -> None:
     (OUT / "monthly.json").write_text(json.dumps(monthly, indent=2), encoding="utf-8")
     (OUT / "required_table.json").write_text(json.dumps(table, indent=2), encoding="utf-8")
     (OUT / "coverage.json").write_text(json.dumps(coverage_log, indent=2), encoding="utf-8")
+    if overlay_log:
+        (OUT / "overlay_log.json").write_text(json.dumps(overlay_log, indent=2, default=str), encoding="utf-8")
     if compliance_report is not None:
         (OUT / "compliance.json").write_text(
             json.dumps(compliance_report.as_dict(), indent=2), encoding="utf-8"
@@ -345,7 +376,15 @@ def main() -> None:
         for name in FAMILIES
     }
     print()
-    print("=== seven sleeves (5 deterministic + 2 trained) through the engine ===")
+    label = "WITH RISK OVERLAY" if USE_RISK_OVERLAY else "no risk overlay"
+    print(f"=== seven sleeves (5 deterministic + 2 trained) — {label} ===")
+    if overlay_log:
+        scales = [o["risk_scale"] for o in overlay_log]
+        edges = [o["edge_scale"] for o in overlay_log]
+        flagged = sum(o["peer_flagged_shorts"] for o in overlay_log)
+        capped = sum(o["runup_capped_shorts"] for o in overlay_log)
+        print(f"overlay: avg risk_scale={sum(scales)/len(scales):.3f} avg edge_scale={sum(edges)/len(edges):.3f}")
+        print(f"overlay: peer-flagged shorts={flagged} runup-capped={capped}")
     print(f"months evaluated        : {len(monthly)}")
     print(f"avg coverage per sleeve : " + ", ".join(f"{k}={v:.0f}" for k, v in avg_coverage.items()))
     print(f"ending NAV              : ${nav:,.0f}")
