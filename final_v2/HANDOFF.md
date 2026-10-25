@@ -4,6 +4,8 @@ Start here: [BUILD_STATUS.md](BUILD_STATUS.md), [SPEC_COVERAGE.md](SPEC_COVERAGE
 [VERIFICATION.md](VERIFICATION.md), then [README.md](README.md).
 The governing `../POD_FRAMEWORK_IMPLEMENTATION_SPEC.md` remains unchanged.
 
+Latest research work: [RESEARCH_PROGRESSION.md](RESEARCH_PROGRESSION.md) documents partial-paper/original-hypothesis probes, separate research data, fixed-pod MCP tools and offline replay commands. Three captured Groq ideas now reach bounded real-data diagnostics; none is admitted. The strict integrated-design/check/trading path remains in place.
+
 ## Continue from the integrated application
 
 Read [AUTONOMOUS_PLATFORM.md](AUTONOMOUS_PLATFORM.md), then run the complete offline CLI below. Research, sealed check, publication, covariance/shared-hedge sizing, actual fills/NAV and diagnostic scheduling now share the same backend services. The latest official design campaign still rejects all four real candidates; no production strategy is admitted.

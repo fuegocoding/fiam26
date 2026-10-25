@@ -10,6 +10,8 @@ dossiers and freeze evidence. Synthetic certificates authorize test books only. 
 
 [2025 trial results](YEAR_TRIAL_2025.md): full-year synthetic execution passed; live paper research produced proposals, but the real ideas remain unadmitted. See the report for provider failures, registered design follow-ups and remaining automation/data gaps.
 
+[Component research](RESEARCH_PROGRESSION.md) now permits partial paper ideas and original hypotheses to run small registered diagnostics before a complete strategy/data build. Three saved research ideas were replayed on real data without new model API calls; trading gates remain separate.
+
 ## Complete application
 
 [Source-to-book commands and remaining gates](AUTONOMOUS_PLATFORM.md). The complete offline run uses the actual four-pod scheduler, registered paper adaptations, frozen independent checks, publications, covariance/shared-hedge CIO, fills/NAV and feedback:

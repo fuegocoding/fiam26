@@ -22,12 +22,36 @@ from ..contracts.base import StrictModel, require_aware
 from ..contracts.sources import SourceCard
 from ..research.evaluation import ComparisonPlan, ForecastOutcome, RegisteredEvaluator
 from ..research.features import FeatureObservation, FeatureRecipe, materialize
+from ..research.progression import HypothesisRequest
 from ..strategies.base import Charter
 from .mcp import MCPServer, Tool
 
 
 class Empty(StrictModel):
     pass
+
+
+class ComponentSelection(StrictModel):
+    component_kind: Literal['mechanism', 'feature', 'method', 'diagnostic']
+    component_name: str = Field(min_length=1, max_length=300)
+    paper_id: str = Field(min_length=1, max_length=300)
+    version_key: str = Field(min_length=1, max_length=32)
+    claim_ids: list[str] = Field(min_length=1, max_length=8)
+    source: Literal['abstract', 'full_text']
+    unavailable_controls: list[str] = Field(default_factory=list, max_length=8)
+
+
+class ComponentSubmission(StrictModel):
+    grant_id: str = Field(pattern=r'^[a-z][a-z0-9_]{0,63}$')
+    component: ComponentSelection
+
+
+class ComponentQuote(StrictModel):
+    paper_id: str = Field(min_length=1, max_length=300)
+    version_key: str = Field(min_length=1, max_length=32)
+    source: Literal['abstract', 'full_text']
+    kind: str = Field(min_length=1, max_length=50)
+    quote: str = Field(min_length=1, max_length=2000)
 
 
 class CatalogueQuery(StrictModel):
@@ -163,7 +187,7 @@ def _papers_guard(fn):
 
 def _build_strategy_server(state_dir: str | Path, pod: Charter | str, *, online: bool = False,
                  source_cards_dir: str | Path | None = None, clock=None,
-                 papers_db: str | Path | None = None, transport=None) -> MCPServer:
+                 papers_db: str | Path | None = None, transport=None, papers_service=None) -> MCPServer:
     """State layout matches scripts/run_pod_research.py: queue.sqlite and memory/<namespace>.sqlite
     are shared with the CLI worker; every MCP read/write is pinned to this process's namespace."""
     # Imports are lazy so the transport itself has no optional data/ML dependencies.
@@ -189,7 +213,9 @@ def _build_strategy_server(state_dir: str | Path, pod: Charter | str, *, online:
     cards_dir = Path(source_cards_dir) if source_cards_dir else Path(__file__).parents[2] / "configs/source_cards"
     cards = [SourceCard.model_validate_json(p.read_text()) for p in sorted(cards_dir.glob("*.json"))]
     cards_by_id = {card.source_id: card for card in cards}
-    papers = PaperService(Path(papers_db) if papers_db else shared / "papers.sqlite", clock=clock,
+    # Share cached records, while retaining this server's own online/offline policy.
+    papers = PaperService(papers_service.store if papers_service else
+                          Path(papers_db) if papers_db else shared / "papers.sqlite", clock=clock,
                           online=online, transport=(transport or UrllibTransport()) if online else None,
                           openalex_api_key=os.environ.get("OPENALEX_API_KEY"),
                           openalex_mailto=os.environ.get("OPENALEX_MAILTO"))
@@ -314,7 +340,7 @@ def _build_strategy_server(state_dir: str | Path, pod: Charter | str, *, online:
     ]
     server = MCPServer(tools, name=f"fiam-{pod.value}")
     # The stdio launcher closes persistent handles on EOF/interrupt.
-    server.close = lambda: (papers.store.close(), evaluator.close())
+    server.close = lambda: (papers.store.close() if papers_service is None else None, evaluator.close())
     return server
 
 
@@ -349,7 +375,8 @@ def build_server(state_dir, pod=None, *, role='strategy', online=False, source_c
     ctx=RoleContext(role,namespace,'mcp',clock())
     gateway=RoleGateway();state=Path(state_dir).resolve()
     server=(_build_strategy_server(state,pod,online=online,source_cards_dir=source_cards_dir,clock=clock,
-        papers_db=papers_db,transport=transport) if role=='strategy' else MCPServer([],name=f'fiam-{role}'))
+        papers_db=papers_db,transport=transport, papers_service=research_runtime.papers if research_runtime else None)
+        if role=='strategy' else MCPServer([],name=f'fiam-{role}'))
     if role!='strategy':server.close=lambda:None
     methods=default_registry()
     def runs():
@@ -436,10 +463,26 @@ def build_server(state_dir, pod=None, *, role='strategy', online=False, source_c
                            lambda a: discovery.propose_source(ctx,namespace,a.query_fingerprint,a.provider_ref,a.rationale),False)]:
             server.tools[tool.name] = tool
         if research_runtime is not None:
+            from ..papers.components import ComponentEvidenceService
+            components = ComponentEvidenceService(papers=research_runtime.papers, namespace=namespace, clock=clock)
+            server.tools['papers.component_quote'] = Tool('papers.component_quote',
+                'Select one exact cached excerpt; grants no replication or execution approval', ComponentQuote,
+                lambda a: components.quote(**a.model_dump()), False)
             server.tools['scheduler.status'] = Tool('scheduler.status','Read this pod research schedule',Empty,
                 lambda a: research_runtime.scheduler.status(namespace))
             server.tools['research.cycle_status'] = Tool('research.cycle_status','Read own bounded research outcomes and budgets',Empty,
                 lambda a: research_runtime.status(namespace))
+            server.tools['research.component_capabilities'] = Tool('research.component_capabilities',
+                'Read own host-reviewed diagnostic grants and remaining research budget', Empty,
+                lambda a: research_runtime.component_capabilities(namespace))
+            server.tools['research.component_submit'] = Tool('research.component_submit',
+                'Test one cached quoted paper component using a reviewed diagnostic grant; research only', ComponentSubmission,
+                lambda a: research_runtime.submit_component(namespace, {'grant_id': a.grant_id,
+                    'component': {**a.component.model_dump(mode='json'), 'namespace': namespace,
+                                  'as_of': research_runtime.clock().isoformat()}}), False)
+            server.tools['research.hypothesis_submit'] = Tool('research.hypothesis_submit',
+                'Test an unverified own-reasoning hypothesis using a reviewed diagnostic grant; research only', HypothesisRequest,
+                lambda a: research_runtime.submit_hypothesis(namespace, a.model_dump(mode='json')), False)
     return server
 
 # Replaces the earlier launcher while preserving build_server's legacy pod API.

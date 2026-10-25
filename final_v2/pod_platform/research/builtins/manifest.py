@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 
 from ...contracts.base import StrictModel, canonical_digest, require_aware
 from ...contracts.sources import CardStatus, SourceCard
@@ -96,6 +96,11 @@ class EvaluationSpec(StrictModel):
     max_rows: int = Field(default=2_000_000, ge=1000, le=20_000_000)
 
 
+class ComponentEvaluationSpec(StrictModel):
+    """Only metadata used by native component transforms; no financial assumptions."""
+    sector_digits: int = Field(default=2, ge=1, le=6)
+
+
 class DatasetSpec(StrictModel):
     universe_id: Optional[str] = Field(default=None, pattern=IDENT)
     approved: bool
@@ -111,7 +116,7 @@ class DatasetSpec(StrictModel):
     time_column: str = Field(pattern=COLUMN)
     frequency: Literal["monthly"] = "monthly"
     availability: AvailabilitySpec
-    label: LabelSpec
+    label: Optional[LabelSpec] = None
     columns: dict[str, ColumnSpec] = Field(min_length=1)
     sector_column: Optional[str] = None
     market_cap_column: Optional[str] = None
@@ -122,11 +127,14 @@ class DatasetSpec(StrictModel):
     partitions: dict[str, PartitionSpec] = Field(
         default_factory=lambda: {DESIGN: PartitionSpec(start=DEFAULT_DESIGN_WINDOW[0], end=DEFAULT_DESIGN_WINDOW[1])}
     )
-    evaluation: EvaluationSpec
+    evaluation: EvaluationSpec | ComponentEvaluationSpec = Field(default_factory=ComponentEvaluationSpec)
     notes: Optional[str] = None
 
     @model_validator(mode="after")
-    def _check(self) -> "DatasetSpec":
+    def _check(self, info: ValidationInfo) -> "DatasetSpec":
+        research_only = bool(info.context and info.context.get('research_only'))
+        if not research_only and (self.label is None or not isinstance(self.evaluation, EvaluationSpec)):
+            raise ValueError('financial execution requires a declared label and complete evaluation/cost assumptions')
         for name in self.columns:
             if not _COL_RE.match(name):
                 raise ValueError(f"invalid column name {name!r}")
@@ -134,11 +142,12 @@ class DatasetSpec(StrictModel):
             raise ValueError("security_column and time_column are structural and must not be listed in columns")
         if (self.source_card_path is None) == (self.source_card is None):
             raise ValueError("exactly one of source_card_path or source_card is required")
-        label = self.columns.get(self.label.column)
-        if label is None or label.role != "label":
-            raise ValueError("label.column must be declared in columns with role=label")
-        if sum(1 for c in self.columns.values() if c.role == "label") != 1:
-            raise ValueError("exactly one label column may be declared")
+        if self.label is not None:
+            label = self.columns.get(self.label.column)
+            if label is None or label.role != "label":
+                raise ValueError("label.column must be declared in columns with role=label")
+        if sum(1 for c in self.columns.values() if c.role == "label") != (1 if self.label else 0):
+            raise ValueError("exactly one label column may be declared when a label is specified")
         if self.sector_column is not None:
             spec = self.columns.get(self.sector_column)
             if spec is None or spec.dtype != "str" or spec.role != "context":
@@ -267,14 +276,16 @@ def _confined_path(raw: str, base: Path, roots: list[Path], what: str) -> Path:
     return resolved
 
 
-def check_source_gate(spec: DatasetSpec, card: SourceCard) -> None:
+def check_source_gate(spec: DatasetSpec, card: SourceCard, *, allow_research_only: bool = False) -> None:
     """Fail closed unless the card is APPROVED, access-confirmed and formation-eligible for exactly this snapshot."""
     problems = []
-    if card.status != CardStatus.APPROVED:
+    if allow_research_only and card.status in (CardStatus.REJECTED, CardStatus.QUARANTINED):
+        problems.append(f"status is {card.status.value}; research access is denied")
+    elif not allow_research_only and card.status != CardStatus.APPROVED:
         problems.append(f"status is {card.status.value}, not APPROVED")
     if not card.access_confirmed:
         problems.append("access is not confirmed")
-    if card.broker_rejects_formation():
+    if not allow_research_only and card.broker_rejects_formation():
         problems.append("source is not formation-eligible")
     if card.source_id != spec.source_id:
         problems.append(f"card source_id {card.source_id!r} != declared {spec.source_id!r}")
@@ -291,14 +302,14 @@ def _load_json(path: Path, what: str) -> Any:
         raise BuiltinConfigError(f"{what} is not readable JSON: {exc}") from None
 
 
-def load_manifest(manifest_path: "str | Path | None" = None) -> LoadedManifest:
+def load_manifest(manifest_path: "str | Path | None" = None, *, allow_research_only: bool = False) -> LoadedManifest:
     """Parse and gate the manifest. No dataset rows are read here."""
     path = resolve_manifest_path(manifest_path)
     raw = _load_json(path, "dataset manifest")
     if not isinstance(raw, dict):
         raise BuiltinConfigError("dataset manifest must be a JSON object")
     try:
-        manifest = DatasetManifest.model_validate(raw)
+        manifest = DatasetManifest.model_validate(raw, context={'research_only': allow_research_only})
     except ValueError as exc:
         raise BuiltinConfigError(f"invalid dataset manifest: {exc}") from None
     base = path.parent
@@ -322,7 +333,7 @@ def load_manifest(manifest_path: "str | Path | None" = None) -> LoadedManifest:
             card = SourceCard.model_validate(card_raw)
         except ValueError as exc:
             raise BuiltinConfigError(f"source card of {dataset_id} is invalid: {exc}") from None
-        check_source_gate(spec, card)
+        check_source_gate(spec, card, allow_research_only=allow_research_only)
         card_hash = card.digest()
         approved[dataset_id] = ApprovedDataset(
             dataset_id=dataset_id,

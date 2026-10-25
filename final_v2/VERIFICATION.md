@@ -1,6 +1,6 @@
 # Verification — 2026-10-25
 
-The final integrated source-to-book workspace passed **847 tests**, with one sandbox-dependent socket check skipped and three existing NumPy/pandas deprecation warnings (80.69 seconds). This includes the final live-clock restart/default-publication assertion.
+The integrated source-to-book workspace passed **890 tests**, with one sandbox-dependent socket check skipped and three existing NumPy/pandas deprecation warnings. The component-research follow-up adds 43 functional checks to the previous 847-test suite.
 
 - Actual four-pod paper/evidence -> structured extractor/lead/challenger -> reviewed adaptation -> registration before data access -> executor -> frozen independent check -> scoped publication -> coordinated CIO -> risk -> partial fills -> NAV/dossier -> feedback review is exercised in `test_autonomous_pods.py` and `test_complete_platform.py`.
 - Positive fixtures measure two admissions. Valuation stays shadow after a timing-placebo failure; events fails design evidence sufficiency. No fixture certificate authorizes a competition book.
@@ -29,4 +29,12 @@ This laptop uses `local/carbonarc-venv/bin/python` with locally cached pytest/py
 
 ## One-year follow-up
 
-The final suite now passes **847 tests**, with one socket-dependent skip and three existing warnings, in 80.69 seconds. [The 2025 trial report](YEAR_TRIAL_2025.md) and [compact receipts](artifacts/year_trial_2025/summary.json) distinguish 72 calendar ticks, actual public-paper/Groq research, four operator-only design comparisons and 12 synthetic accounted periods. The shared Groq ledger stopped at 39 of 40 allowed attempts, including failures; no budget was reset.
+At completion of the original year trial, the suite passed 847 tests. [The 2025 trial report](YEAR_TRIAL_2025.md) and [compact receipts](artifacts/year_trial_2025/summary.json) distinguish 72 calendar ticks, actual public-paper/Groq research, four operator-only design comparisons and 12 synthetic accounted periods. The shared Groq ledger stopped at 39 of 40 allowed attempts, including failures; no budget was reset.
+
+## Component-research follow-up
+
+[Policy and commands](RESEARCH_PROGRESSION.md), [compact real-data receipts](artifacts/component_research/summary.json). Functional checks cover one pinned abstract/full-text excerpt, quote/version/date integrity, original hypotheses without papers, registration/reservation before row reads, minimal manifests without financial labels/costs, namespace privacy, immutable budgets and failed attempts, measured negative/noisy outcomes, replay idempotency and same-measurement reuse across wording and papers. Challenger `review`/`reject` with a testable reviewed comparison can run only a diagnostic; unmatched model features never become an integrated strategy. Fixed-pod MCP uses the runtime paper cache while retaining its own offline policy. A separate research manifest remains unavailable to financial execution.
+
+The saved contemporary Groq research was replayed through a probe-only host policy on real 2015 DESIGN observations: earnings negative, valuation/dynamics noisy; at most 100 names and 12 months, 1,195 loaded rows each. A separate physical four-column earnings file and a minimal manifest also produced a measured negative diagnostic. No new model API call, protected check, admission, publication or order was made. Source caches are copied for replay, preserving original research history. Missing authentic sentiment, CAPE and factor mechanisms remain untested. These descriptive comparisons cannot establish investment performance.
+
+The available Claude coding session was quota-limited, including Haiku; no repeated paid inference or Groq allowance was spent on this follow-up.

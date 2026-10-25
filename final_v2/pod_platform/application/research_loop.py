@@ -26,15 +26,17 @@ from ..papers import PaperService, PaperStore
 from ..papers.adaptations import AdaptationReview, PaperAdapter
 from ..pods.charters import POD_SPECS, pod_spec
 from ..pods.runner import ExecutorRegistry, PodResearchRunner, PodWorker
-from ..pods.schema import ResearchProposal, normalise_evidence, filter_eligible
+from ..pods.schema import ResearchProposal, normalise_evidence, filter_eligible, scan_injection
 from ..research.builtins import register_executors
 from ..research.builtins.catalog import DEFAULT_RECIPE, RECIPES
+from ..research.builtins.manifest import load_manifest
 from ..research.builtins.executors import EXECUTOR_IDS
 from ..research.builtins.timeutil import month_index
 from ..research.challenge_bridge import ChallengeBridge, CheckAuthority
 from ..research.evaluation import RegisteredEvaluator
 from ..research.jobs import ResearchQueue, open_sqlite
 from ..research.memory import PodMemory
+from ..research.progression import ComponentGrant, HypothesisRequest, ProgressionPolicy, ResearchProgression
 from ..research.registration import ResearchLedger
 from ..research.registry import Registry
 from ..research.scheduler import PodPolicy, ResearchScheduler
@@ -82,7 +84,7 @@ class ProposalChallenge(StrictModel):
     evidence_refs: list[str] = Field(min_length=1, max_length=30)
     competing_explanation: str = Field(min_length=10, max_length=800)
     falsification_test: str = Field(min_length=10, max_length=800)
-    reason_category: Literal['testable', 'incomplete_evidence', 'unknown_method', 'unsupported_source', 'duplicate_hypothesis']
+    reason_category: Literal['testable', 'incomplete_evidence', 'unknown_method', 'unsupported_source', 'duplicate_hypothesis', 'unsafe', 'malformed']
 
 
 class _Runner(PodResearchRunner):
@@ -112,7 +114,8 @@ class AutonomousResearchLoop:
     def __init__(self, state_dir, *, providers: RoleProviders, manifest_path, clock=utc_now,
                  run_id='research', on_publication=None, on_cycle=None, max_role_calls=8,
                  max_role_tokens=200000, check_start=dt.date(2019, 1, 1), check_end=dt.date(2019, 6, 30),
-                 publication_dates=None, discovery=None, papers=None, scheduler_clock=None):
+                 publication_dates=None, discovery=None, papers=None, scheduler_clock=None, progression_policy=None,
+                 component_manifest_path=None):
         self.state_dir = Path(state_dir).resolve()
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.state_dir, 0o700)
@@ -148,6 +151,7 @@ class AutonomousResearchLoop:
         self.executors = ExecutorRegistry()
         self.builtin = register_executors(self.executors, manifest_path=manifest_path,
             state_dir=self.state_dir / 'builtin', clock=clock, research_asof=self.started_at, variant_budget=4)
+        self.component_manifest = load_manifest(component_manifest_path or manifest_path, allow_research_only=True)
         # Immutable source/data/code/profile binding, checked even when the queue is already complete.
         self.profile = {'run_id': run_id, 'providers': identities, 'manifest_hash': file_sha256(manifest_path),
             'research_started_at': self.started_at.isoformat(),
@@ -156,8 +160,15 @@ class AutonomousResearchLoop:
             'max_role_tokens': max_role_tokens, 'check_start': str(check_start), 'check_end': str(check_end),
             'publication_dates': [require_aware(p, 'publication date').isoformat() for p in self.publication_dates]}
         self.profile['calendar_mode'] = 'separate_study_calendar' if scheduler_clock else 'research_clock'
+        self.profile['progression_policy'] = dataclasses.asdict(progression_policy or ProgressionPolicy())
+        self.profile['component_manifest_hash'] = self.component_manifest.manifest_hash
+        self.profile['component_data'] = {k: file_sha256(v.path) for k, v in self.component_manifest.datasets.items()}
         self._verify()
         self._event('profile', 'host', 'profile', self.profile)
+        self.progression = ResearchProgression(self.state_dir / 'progression.sqlite',
+            policy=progression_policy, code_digest=self.profile['code'], clock=clock)
+        from ..research.component_probe import ComponentProbeService
+        self.component_probes = ComponentProbeService(self.component_manifest.path, self.state_dir / 'component_probes', clock=clock)
         self.authority = CheckAuthority.load_or_init(self.state_dir / 'private' / 'check_authority.key')
         self.bridge = ChallengeBridge(self.state_dir / 'bridge', authority=self.authority)
         self.registry = Registry(self.state_dir / 'registry.sqlite')
@@ -291,6 +302,147 @@ class AutonomousResearchLoop:
             'feedback:' + diagnosis_id, 'Review permitted failure category ' + category + ' before selecting a new hypothesis.',
             SCORES, cohort_month=cohort_month, line_id='feedback_' + digest(diagnosis_id)[:16])
 
+    def review_component(self, namespace, grant):
+        """Trusted host only: bind a reusable diagnostic capability to reviewed ids."""
+        self._namespace(namespace)
+        value = ComponentGrant.model_validate(grant)
+        if value.namespace != namespace or value.reviewed_at > self.clock():
+            raise ValueError('foreign/future component grant')
+        if value.code_digest != self.profile['code']:
+            raise ValueError('component grant code digest differs from running policy')
+        recipe = RECIPES.get(value.recipe_id)
+        if recipe is None or recipe.digest() != value.recipe_digest or recipe.charter != pod_spec(namespace).charter.value:
+            raise ValueError('component grant requires an unchanged reviewed charter recipe')
+        allowed = {f.name for _, fs in recipe.feature_sets for f in fs}
+        if len(set(value.feature_names)) != len(value.feature_names) or not set(value.feature_names) <= allowed:
+            raise ValueError('component grant features must belong to reviewed recipe')
+        dataset = self.component_manifest.dataset(value.dataset_id)
+        if dataset.spec.approved_recipes and value.recipe_id not in dataset.spec.approved_recipes:
+            raise ValueError('component grant recipe is not approved for dataset')
+        return self._event('component_grant:' + namespace + ':' + value.grant_id, namespace,
+                           'component_grant', value.model_dump(mode='json'))
+
+    def submit_component(self, namespace, request):
+        """Safe fixed-namespace entry: cached excerpts and host grant ids only."""
+        self._namespace(namespace)
+        if not isinstance(request, dict) or set(request) != {'grant_id', 'component'}:
+            raise ValueError('component submission accepts exactly grant_id and component')
+        grant = self._get('component_grant:' + namespace + ':' + str(request['grant_id']))
+        if grant is None:
+            raise ValueError('component requires an explicit trusted host grant')
+        # Revalidate every capability against live recipe/data/code metadata on reuse.
+        self.review_component(namespace, grant)
+        from ..papers.components import ComponentEvidenceService
+        service = ComponentEvidenceService(papers=self.papers, namespace=namespace, clock=self.clock)
+        component = service.resolve(request['component'])
+        component = service.verify(component)
+        raw = component.model_dump(mode='json')
+        self._event('component:' + component.component_id, namespace, 'component', raw)
+        lineage = {'component': raw, 'claim_limitations': list(component.limitations),
+                   'tested_subset': grant['feature_names'], 'untested_core_dependencies': [
+                       'The excerpt mechanism is unresolved unless its measurement equals the selected reviewed feature transforms.'],
+                   'replication_status': 'not_replication', 'claim_status': 'mechanism_unresolved',
+                   'host_grant_id': grant['grant_id']}
+        route = self._bounded_probe(namespace, grant, [component.component_id], lineage)
+        key = 'component_route:' + digest([namespace, grant['grant_id'], component.content_hash])
+        prior = self._get(key)
+        if prior:
+            return prior
+        return self._event(key, namespace, 'component_route', route)
+
+    def component_capabilities(self, namespace):
+        """Read the host-reviewed measurements available to this pod."""
+        self._namespace(namespace)
+        return {'grants': self._events('component_grant', namespace),
+                'progression': self.progression.snapshot(namespace)}
+
+    def submit_hypothesis(self, namespace, request):
+        """Test own reasoning as a diagnostic, without inventing paper evidence."""
+        self._namespace(namespace)
+        value = HypothesisRequest.model_validate(request)
+        if scan_injection(json.dumps(value.model_dump(mode='json'))):
+            raise ValueError('unsafe_instruction_content_requires_review')
+        grant = self._get('component_grant:' + namespace + ':' + value.grant_id)
+        if grant is None:
+            raise ValueError('hypothesis requires an explicit trusted host grant')
+        self.review_component(namespace, grant)
+        raw = value.model_dump(mode='json')
+        hypothesis_id = 'hypothesis_' + digest([namespace, raw])[:24]
+        self._event(hypothesis_id, namespace, 'hypothesis', raw)
+        lineage = {'origin': 'own_reasoning', 'hypothesis_id': hypothesis_id, 'hypothesis': raw,
+                   'claim_status': 'unverified_hypothesis', 'replication_status': 'not_replication',
+                   'claim_limitations': ['Own reasoning is an unverified hypothesis, not published evidence.'] +
+                       ['Unavailable control: ' + c for c in value.unavailable_controls],
+                   'untested_core_dependencies': ['Only the explicitly selected canonical component is measured.']}
+        key = 'hypothesis_route:' + hypothesis_id
+        prior = self._get(key)
+        if prior:
+            return prior
+        return self._event(key, namespace, 'component_route',
+                           self._bounded_probe(namespace, grant, [hypothesis_id], lineage))
+
+    def _bounded_probe(self, ns, reviewed, evidence_ids, lineage):
+        """No adapter/financial registration: results remain component diagnostics."""
+        from ..research.component_probe import ComponentProbeSpec, ProbeBudgets
+        recipe = RECIPES[reviewed['recipe_id']]
+        features = reviewed.get('feature_names') or [f.name for f in recipe.features(reviewed['feature_set'])]
+        features = sorted(set(features[:self.progression.policy.max_probe_features]))
+        dataset = self.component_manifest.dataset(reviewed['dataset_id'])
+        start, design_end = dataset.design_window
+        year, month = start.year + (start.month + self.progression.policy.max_probe_months - 2) // 12, (start.month + self.progression.policy.max_probe_months - 2) % 12 + 1
+        import calendar
+        end = min(design_end, dt.date(year, month, calendar.monthrange(year, month)[1]))
+        tested = {'recipe_id': recipe.recipe_id, 'recipe_digest': recipe.digest(), 'dataset_id': reviewed['dataset_id'],
+                  'dataset_descriptor_hash': dataset.descriptor_hash, 'feature_names': features,
+                  'feature_definitions': [dataclasses.asdict({f.name: f for _, fs in recipe.feature_sets for f in fs}[n]) for n in features],
+                  'target': dataclasses.asdict(recipe.target), 'baseline': dataclasses.asdict(recipe.baseline),
+                  'partition': 'design', 'start': str(start), 'end': str(end)}
+        # Exclude arbitrary proposal words from evidence/mechanism trial accounting.
+        mechanism = digest([ns, recipe.recipe_id, reviewed['dataset_id'], recipe.target.target_id, sorted(features)])
+        # The same executable test is reused even when another paper or wording inspires it.
+        fingerprint = digest(tested)
+        lineage = {**lineage, 'tested_canonical_component': tested,
+                   'proxy_assumptions': list(recipe.proxy_labels),
+                   'omitted_controls': list(recipe.limitations),
+                   'claim_limitations': list(dict.fromkeys(lineage.get('claim_limitations', []) + list(recipe.limitations) +
+                       ['This is a bounded component diagnostic, not a replication or integrated strategy test.']))}
+        reservation = self.progression.reserve(ns, stage='component_probe', fingerprint=fingerprint,
+            mechanism_key=mechanism, cases=len(features), lineage=lineage)
+        if reservation['status'] not in ('reserved', 'reused'):
+            return {'status': reservation['status'], 'reason': reservation['reason'], 'stage': 'component_probe',
+                    'admitted': False, 'check_opened': False, 'lineage': lineage}
+        if reservation.get('result'):
+            return {**reservation['result']['result'], 'lineage': lineage, 'measurement_reused': True}
+        policy = self.progression.policy
+        spec = ComponentProbeSpec(namespace=ns, probe_name=reservation['attempt_id'], dataset_id=reviewed['dataset_id'],
+            recipe_id=recipe.recipe_id, feature_names=features, start=start, end=end, research_asof=self.started_at,
+            evidence_refs=sorted(evidence_ids), budgets=ProbeBudgets(max_trials=policy.max_probes_per_pod,
+                max_months=policy.max_probe_months, max_names=policy.max_probe_names, max_rows=policy.max_probe_rows))
+        registered = self.component_probes.register(spec)
+        report = self.component_probes.run(registered['probe_id'])
+        route = {'status': 'component_probe_completed', 'reason': 'bounded_diagnostic_only', 'stage': 'component_probe',
+                 'probe_id': registered['probe_id'], 'probe_report': report, 'lineage': lineage,
+                 'claim_status': 'mechanism_unresolved', 'admitted': False, 'check_opened': False,
+                 'graduation': 'A complete integrated design and existing independent check authority are required.'}
+        self.progression.complete(reservation['attempt_id'], route, negative=report['status'] == 'negative')
+        self._event('probe:' + registered['probe_id'], ns, 'component_probe', route)
+        return route
+
+    @staticmethod
+    def _canonical_draft(proposal, recipe, feature_set):
+        # The explicit legacy sentinel requests the reviewed recipe itself.
+        if len(proposal.features) == 1 and proposal.features[0].name == 'reviewed_features' and proposal.features[0].definition == 'Use only the host reviewed registered feature recipe.':
+            return True
+        canonical = {f.name: f for f in recipe.features(feature_set)}
+        if {f.name for f in proposal.features} != set(canonical):
+            return False
+        for feature in proposal.features:
+            f = canonical[feature.name]
+            definition = f'{f.op} transform of column {f.column}' + (f' with {f.column2}' if f.column2 else '') + ' (reviewed builtin recipe)'
+            if feature.definition != definition:
+                return False
+        return True
+
     def _route_proposals(self):
         for ns in NAMESPACES:
             for job in self.queue.list(namespace=ns, state='succeeded', limit=100):
@@ -300,6 +452,8 @@ class AutonomousResearchLoop:
                 draft = self.memory(ns).get(draft_id)
                 proposal = ResearchProposal.model_validate(draft.content['proposal'])
                 evidence_ids = [i['evidence_id'] for i in draft.content['evidence']]
+                lineage = {'raw_proposal': proposal.model_dump(mode='json'), 'draft_entry_id': draft_id,
+                           'evidence': draft.content['evidence'], 'claim_limitations': proposal.limitations}
                 def validate(value):
                     if not set(value.evidence_refs) <= set(evidence_ids):
                         raise ValueError('challenger cited unavailable evidence')
@@ -307,32 +461,57 @@ class AutonomousResearchLoop:
                     critique = self.challengers[ns].run({'proposal': proposal.model_dump(mode='json'), 'evidence_ids': evidence_ids},
                         role='challenger', namespace=ns, research_asof=self.clock(), mode=ResearchMode.CONTEMPORARY,
                         validator=validate)
+                    critic = critique.value.model_dump(mode='json')
+                    lineage['critic'] = critic
                     self._event('critique:' + job.job_id, ns, 'critique', {'draft_entry_id': draft_id,
-                        'value': critique.value.model_dump(mode='json'), 'provider': critique.provider, 'model': critique.model})
-                    if critique.value.disposition != 'proceed':
-                        raise ValueError('review_required')
-                    # Lead cannot introduce new methods/data or expand the reviewed one-variant budget.
+                        'value': critic, 'provider': critique.provider, 'model': critique.model})
+                    if any(i.get('injection_flags') for i in draft.content['evidence']) or scan_injection(json.dumps(proposal.model_dump(mode='json'))) or scan_injection(json.dumps(critic)):
+                        raise ValueError('unsafe_instruction_content_requires_review')
+                    if critique.value.reason_category != 'testable':
+                        raise ValueError('challenger_' + critique.value.reason_category + '_requires_review')
+                    # Lead can select only a previously reviewed exact executable comparison.
                     plan = proposal.experiment_plan
                     keys = ('dataset_id','recipe_id','method_id','feature_set','ridge_lambda')
                     reviews = [r for r in self._events('review', ns)
                         if len(plan.variants) == 1 and plan.variants[0].params == {k:r[k] for k in keys if r.get(k) is not None}]
-                    # The matching paper must actually be in this private draft;
-                    # multiple host reviews never grant an uncited method.
                     import re
                     reviews = [r for r in reviews if re.sub(r'[^A-Za-z0-9_.:\-]', '_',
                         r['paper_id'] + '.' + r['version_key'])[:128] in evidence_ids or r['paper_id'] in evidence_ids]
-                    if len(reviews) != 1 or plan.executor_id != EXECUTOR_IDS[pod_spec(ns).charter.value]:
+                    if len(reviews) != 1 or plan.executor_id != EXECUTOR_IDS[pod_spec(ns).charter.value] or plan.data_partition != 'design':
                         raise ValueError('unknown_method_review_required')
                     rv = reviews[0]
-                    rec = self.adapters[ns].adapt(rv)  # registers hypothesis/spec BEFORE executor data access
-                    self._event('adaptation:' + rec['adaptation_id'], ns, 'adaptation', rec)
-                    trigger = self.scheduler.add_trigger(ns, 'replication', 'execute:' + rec['adaptation_id'],
-                        'Execute the reviewed evidence-grounded adaptation on design only.', SCORES,
-                        payload={'draft_entry_id': rec['draft_entry_id'], 'variants': [rec['variant']]},
-                        line_id='line_' + digest(rec['adaptation_id'])[:16])
-                    route = {'status': 'scheduled', 'adaptation_id': rec['adaptation_id'], 'trigger_id': trigger['trigger_id']}
+                    recipe = RECIPES[rv['recipe_id']]
+                    if recipe.digest() != rv['recipe_digest']:
+                        raise ValueError('reviewed_recipe_digest_changed')
+                    # Revalidate grounded reviewed source, without registering a full design.
+                    self.adapters[ns]._grounded_paper(AdaptationReview.model_validate(rv), rv, self.clock())
+                    canonical = self._canonical_draft(proposal, recipe, rv['feature_set'])
+                    lineage.update({'host_review': rv, 'deviations': rv['deviations'],
+                        'draft_features_implemented': canonical,
+                        'untested_core_dependencies': [] if canonical else [f.model_dump(mode='json') for f in proposal.features],
+                        'replication_status': 'not_replication' if not canonical else rv['label']})
+                    if critique.value.disposition != 'proceed' or not canonical or self.progression.policy.probe_only:
+                        route = self._bounded_probe(ns, rv, evidence_ids, lineage)
+                        route = {**route, 'route_reason': ('host_probe_only' if self.progression.policy.probe_only else
+                            'challenger_testable_falsification_probe' if canonical else 'canonical_component_diagnostic_draft_mechanism_unresolved')}
+                    else:
+                        # Only an accepted canonical full design can reach the strict bridge.
+                        reservation = self.progression.reserve(ns, stage='integrated_design',
+                            fingerprint=digest(rv), mechanism_key=digest([ns, recipe.recipe_id, rv['dataset_id'], recipe.target.target_id]),
+                            lineage=lineage)
+                        if reservation['status'] not in ('reserved', 'reused'):
+                            raise ValueError(reservation['reason'])
+                        rec = self.adapters[ns].adapt(rv)
+                        self._event('adaptation:' + rec['adaptation_id'], ns, 'adaptation', rec)
+                        trigger = self.scheduler.add_trigger(ns, 'replication', 'execute:' + rec['adaptation_id'],
+                            'Execute the reviewed evidence-grounded adaptation on design only.', SCORES,
+                            payload={'draft_entry_id': rec['draft_entry_id'], 'variants': [rec['variant']]},
+                            line_id='line_' + digest(rec['adaptation_id'])[:16])
+                        route = {'status': 'scheduled', 'stage': 'integrated_design', 'adaptation_id': rec['adaptation_id'],
+                                 'trigger_id': trigger['trigger_id'], 'lineage': lineage}
                 except Exception as exc:
-                    route = {'status': 'review_required', 'reason': type(exc).__name__}
+                    route = {'status': 'review_required', 'reason': str(exc)[:800] or type(exc).__name__,
+                             'error_type': type(exc).__name__, 'lineage': lineage}
                     self.scheduler.add_trigger(ns, 'paper', 'review:' + job.job_id,
                         'Review incomplete evidence or unreviewed method before any experiment.', SCORES)
                 self._event('route:' + job.job_id, ns, 'route', route)
@@ -471,6 +650,9 @@ class AutonomousResearchLoop:
         selected = [namespace] if namespace else NAMESPACES
         return {'run_id': self.run_id, 'providers': self.providers.identities(),
             'pods': {ns: {'scheduler': self.scheduler.status(ns), 'outcomes': self._events('outcome', ns),
+                         'component_probes': self._events('component_probe', ns),
+                         'component_routes': self._events('component_route', ns),
+                         'progression': self.progression.snapshot(ns),
                          'budgets': {r: self.budgets[ns,r].snapshot() for r in ('lead','challenger','extractor')}} for ns in selected}}
 
 
@@ -518,6 +700,7 @@ def build_fixture_loop(state_dir, *, on_publication=None, on_cycle=None, year=No
         if not panel.exists():
             write_csv(rows, panel)
         ds = fixture_manifest(panel.name, dataset_id)['datasets'][dataset_id]
+        ds['sha256'] = file_sha256(panel)
         ds['universe_id'] = 'fixture_universe'
         ds['source_card']['created_at'] = approval
         ds['source_id'] = 'fixture_' + spec.pod_id + '_source'

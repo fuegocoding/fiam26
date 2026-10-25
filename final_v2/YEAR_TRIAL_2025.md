@@ -48,7 +48,7 @@ The original burst hit provider rate limits. One later critique also ended in a 
 
 ## Remaining work
 
-The tested live loop still stops at review for these ideas. Reliable paper-to-feature mapping, the requested controls, authentic sentiment/factor/valuation inputs and source approvals are needed before more automatic execution is justified. The original exact-model roster was not used: the user explicitly authorized Groq for this bounded trial. Source/model/candidate admission and prospective investment validation remain separate requirements.
+The original live trial stopped at review. A subsequent [component-research improvement](RESEARCH_PROGRESSION.md) replayed three saved proposals/critiques through bounded real-data diagnostics with zero new API calls: earnings was negative, valuation/dynamics were noisy. Partial paper ideas and original hypotheses can now be tested before building a complete strategy. These native panel diagnostics leave unmatched sentiment/CAPE/factor mechanisms untested. Reliable paper-to-feature mapping, authentic core measurements, integrated controls and source approvals remain necessary for those original strategies. The original exact-model roster was not used: the user explicitly authorized Groq for this bounded trial. Source/model/candidate admission and prospective investment validation remain separate requirements.
 
 ## Reproduce the offline year
 

@@ -180,7 +180,9 @@ def target_values(panel: Panel, recipe: Recipe, month: int, dataset: ApprovedDat
 
 
 def target_resolve_at(recipe: Recipe, month: int, dataset: ApprovedDataset) -> dt.datetime:
-    lag = dataset.spec.label.resolve_lag_days
+    # Native lead targets can be measured without a financial return label in a
+    # research-only manifest. Their observed future row is known at month end.
+    lag = dataset.spec.label.resolve_lag_days if dataset.spec.label else 0
     t = recipe.target
     if t.kind == "lead":
         return month_end_known_at(month + t.months, lag)
