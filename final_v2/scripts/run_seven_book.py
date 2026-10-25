@@ -63,9 +63,10 @@ USE_GAP = "--with-gap" in sys.argv
 BLEND_RENORM = "--blend-renorm" in sys.argv
 USE_GRAPH = "--with-graph" in sys.argv
 USE_DEMAND = "--with-demand" in sys.argv
+GATE_E7_DEMAND = "--gate-e7-demand" in sys.argv
 _out_name = "seven_book"
 if USE_RISK_OVERLAY:
-    _out_name = "risk_book" + ("_renorm" if BLEND_RENORM else "") + ("_graph" if USE_GRAPH else "") + ("_demand" if USE_DEMAND else "")
+    _out_name = "risk_book" + ("_renorm" if BLEND_RENORM else "") + ("_graph" if USE_GRAPH else "") + ("_demand" if USE_DEMAND else "") + ("_gate" if GATE_E7_DEMAND else "")
 OUT = ROOT / "artifacts" / _out_name
 GRAPH_WORK = ROOT / "artifacts" / "graph_work"
 GAP_WORK = ROOT / "artifacts" / "valuation_work"
@@ -258,8 +259,8 @@ def main() -> None:
     xgb_fc, filing_fc, audits = get_forecasts(panel_full, factor_columns, reuse)
     gap_map = get_gap_map() if USE_GAP else {}
     graph_map = get_graph_map() if USE_GRAPH else {}
-    demand_map = get_demand_map() if USE_DEMAND else {}
-    if USE_DEMAND:
+    demand_map = get_demand_map() if (USE_DEMAND or GATE_E7_DEMAND) else {}
+    if USE_DEMAND or GATE_E7_DEMAND:
         print(f"demand scores: {len(demand_map):,}")
 
     si_table = build_short_interest(str(EXTERNAL), str(PANEL))
@@ -342,6 +343,17 @@ def main() -> None:
             series = merged[name]
             ranked = series.rank(pct=True)
             scaled[name] = ((ranked - 0.5) * (12 ** 0.5)).where(series.notna()).fillna(0.0)
+
+        if GATE_E7_DEMAND:
+            e7s = scaled["e7_surprise_breadth"]
+            gate_dropped = 0
+            for idx in merged.index:
+                e7 = float(e7s.get(idx, 0.0))
+                d = demand_map.get((str(merged.loc[idx, "ticker"]).upper(), month_date))
+                if e7 != 0.0 and d is not None and d != 0.0 and (e7 > 0) != (d > 0):
+                    e7s[idx] = 0.0
+                    gate_dropped += 1
+            coverage["e7_gate_dropped"] = gate_dropped
 
         raw_alpha = {}
         for sid, idx in zip(merged["sid"], merged.index):
