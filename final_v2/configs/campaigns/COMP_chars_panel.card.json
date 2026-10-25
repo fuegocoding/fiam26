@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "owner": "data",
+  "created_at": "2026-10-24T15:00:00Z",
+  "source_id": "comp_chars_panel",
+  "dataset_id": "COMP_CHARS",
+  "topic": "Competition characteristics panel (mandate input)",
+  "snapshot_id": "competition_first_challenge_final",
+  "status": "APPROVED",
+  "access_confirmed": true,
+  "formation_eligible": true,
+  "entity_grain": ["permno", "month_end"],
+  "screen": {
+    "history": {
+      "status": "established",
+      "evidence_id": "chars_final_with_names.parquet metadata: 529,082 rows, eom 2015-01-31..2026-08-31, 3,497-4,391 names/month"
+    },
+    "metric_lag": {
+      "status": "established",
+      "evidence_id": "brief convention: characteristics at month end; ret_exc_lead1m is the next-month return; formation at close t+1 per spec 2.2"
+    },
+    "vintage": {
+      "status": "established",
+      "evidence_id": "static competition-supplied artifact with fixed hash (timing manifest in first-round run); a supplied file cannot be restated"
+    },
+    "coverage": {
+      "status": "established",
+      "evidence_id": "the panel defines the mandate universe; coverage is the universe definition, not a sampled subset"
+    }
+  },
+  "unresolved_questions": []
+}

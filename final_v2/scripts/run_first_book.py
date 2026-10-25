@@ -37,9 +37,9 @@ from pod_platform.reporting.compliance import ActualHolding, ComplianceEngine  #
 from pod_platform.reporting.tables import RequiredTable  # noqa: E402
 
 REPO = ROOT.parent
-PANEL = REPO / "final" / "data" / "chars_final_with_names.parquet"
-FACTORS = REPO / "final" / "data" / "factor_char_list.csv"
-EXTERNAL = REPO / "final" / "external_data" / "external.parquet"
+PANEL = REPO / "data" / "chars_final_with_names.parquet"
+FACTORS = REPO / "data" / "factor_char_list.csv"
+EXTERNAL = REPO / "external_data" / "external.parquet"
 OUT = ROOT / "artifacts" / "first_book"
 
 TEST_START = dt.datetime(2021, 1, 31, tzinfo=dt.timezone.utc)

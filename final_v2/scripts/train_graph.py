@@ -23,13 +23,13 @@ SEEDS = (7, 19, 43)
 
 
 def main() -> None:
-    set_external_path(str(REPO / "final" / "external_data" / "external.parquet"))
+    set_external_path(str(REPO / "external_data" / "external.parquet"))
     OUT.mkdir(parents=True, exist_ok=True)
 
     profiles = OUT / "text_profiles.parquet"
     t = time.time()
     business_text.build_profiles(
-        REPO / "final" / "data" / "8k_20150101_20260831_identified.parquet", profiles
+        REPO / "data" / "8k_20150101_20260831_identified.parquet", profiles
     )
     print(f"[1] profiles ready in {time.time()-t:.0f}s", flush=True)
 
@@ -37,12 +37,12 @@ def main() -> None:
     snapshots.mkdir(exist_ok=True)
     t = time.time()
     builder.build_snapshots(
-        REPO / "final" / "data" / "chars_final_with_names.parquet", profiles, snapshots
+        REPO / "data" / "chars_final_with_names.parquet", profiles, snapshots
     )
     print(f"[2] snapshots ready in {time.time()-t:.0f}s", flush=True)
 
     t = time.time()
-    dataset.build(OUT, REPO / "final" / "data" / "chars_final_with_names.parquet", snapshots)
+    dataset.build(OUT, REPO / "data" / "chars_final_with_names.parquet", snapshots)
     print(f"[3] dataset ready in {time.time()-t:.0f}s", flush=True)
 
     t = time.time()

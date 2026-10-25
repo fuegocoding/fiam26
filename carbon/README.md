@@ -18,7 +18,7 @@ cd carbon && python smoke.py
 
 Competition context: the mandate's §5.2/§6 (what the platform is for, the four
 screening questions, survivorship discipline) is mapped in
-`../final/docs/final_mandate_rules_map.md`. This folder is only the plumbing.
+`../docs/final_mandate_rules_map.md`. This folder is only the plumbing.
 
 ---
 

@@ -76,8 +76,12 @@ def freeze_run(
     incidents_disclosed: Sequence[str] = (),
     trial_count: int = 0,
     evaluation_access_count: int = 0,
+    material_agent_interventions: int = 0,
+    agent_counterfactual_present: bool = False,
 ) -> FreezeResult:
     frozen_at = require_aware(frozen_at, "frozen_at")
+    if material_agent_interventions < 0:
+        raise ValueError("material_agent_interventions cannot be negative")
     checks: list[AcceptanceCheck] = []
 
     missing = [name for name in REQUIRED_OUTPUTS if name not in outputs]
@@ -132,10 +136,12 @@ def freeze_run(
     checks.append(
         AcceptanceCheck(
             item="agent counterfactual generated for material agent interventions",
-            satisfied=True,
-            evidence="bounded C1 scope: no material agent intervention in this run"
-            if not incidents_disclosed
-            else "twin comparison attached to run artifacts",
+            satisfied=material_agent_interventions == 0 or agent_counterfactual_present,
+            evidence="no material agent intervention in this run"
+            if material_agent_interventions == 0
+            else "twin comparison attached to run artifacts"
+            if agent_counterfactual_present
+            else "material agent interventions have no counterfactual evidence",
         )
     )
     checks.append(

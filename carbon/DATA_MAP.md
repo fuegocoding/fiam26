@@ -5,7 +5,7 @@ pricing, entity map, 34 data dictionaries) joined to the competition's screening
 workbook. Reproduce with `cd carbon && python survey.py`; raw pulls and parsed
 tables land in `carbon/out/`.
 
-Mandate context: [final/docs/final_mandate_rules_map.md](../final/docs/final_mandate_rules_map.md)
+Mandate context: [docs/final_mandate_rules_map.md](../docs/final_mandate_rules_map.md)
 (§6.6 four screening questions, §6.3 survivorship, §7 point-in-time).
 
 ---
@@ -28,7 +28,7 @@ balance and the review burden, not list price.
 
 ## 2. Mapping: dataset → fields → our model
 
-Our channels (`final/README.md`): `e7` (earnings + revisions), `gap_micro_best`
+Our channels (`README.md`): `e7` (earnings + revisions), `gap_micro_best`
 (valuation gap), `runway_micro` (cash burn), `conf_lm_gated` (consensus),
 `inventory_retail` (sales−inventory), `oplev_software` (sales−SG&A), `xgb_rank`
 (147 characteristics), `filing_events` (SEC events), graph overlay (peer text).
@@ -94,55 +94,55 @@ event studies; none survive the pre-2021 training-history test.
 
 ## 3. What feature, where in the code
 
-How a Carbon asset becomes a signal in `final/`, end to end:
+How a Carbon asset becomes a signal in ``, end to end:
 
 ```
 carbon pull (client.py / survey.py / MCP)
-  -> dated parquet in final/external_data/  (tables registry, like external.parquet)
-  -> external.read("carbon_ca00XX")          final/external.py
-  -> sleeve build()/load()                   final/sleeves/<name>/
+  -> dated parquet in external_data/  (tables registry, like external.parquet)
+  -> external.read("carbon_ca00XX")          external.py
+  -> sleeve build()/load()                   sleeves/<name>/
   -> score() monthly ranks                   sleeves/base.formation_output
-  -> blend                                   final/combiner.py (make_sleeves)
+  -> blend                                   combiner.py (make_sleeves)
   -> graph overlay (5%) / optimizer / report  unchanged stages
 ```
 
 Every candidate feature gets the same treatment as the existing ones: monthly
 cross-sectional ranks inside its native universe, point-in-time availability
-checked in `final/timing.py`, one hypothesis at a time with the denominator
+checked in `timing.py`, one hypothesis at a time with the denominator
 reported (Instructions 5.2).
 
 ### 3.1 Priority assets: candidate features and their landing spots
 
 | Asset | What to build (first candidates) | Where it plugs in | Stage / horizon |
 |---|---|---|---|
-| **CA0032 EDGAR** | (1) Item-type event counts over 1/3/12 months keyed on **CIK** — the same feature family `filing_events` already computes; (2) filing text for the company graph's business description | Input swap in `final/sleeves/filing_events/edgar.py` (EDGAR index → CA0032 tables) and `final/graph/business_text.py` (8-K text → CA0032 text). Model code unchanged | Signal + graph; monthly formation, text dated ≤ formation |
-| **CA0035 events** | Event counts by category over 1/5/21 days with the `ticker_exclusively_mentioned` share as a materiality weight; earnings/M&A/IPO calendar dummies | New sleeve `final/sleeves/news_events/` (mirror `filing_events`: counts → rank or xgb), registered in `combiner.make_sleeves()`; calendar dummies feed `final/arcana.py`'s earnings-vs-ex-earnings lens and `final/risk.py` event sizing | Signal; monthly book, counts computed daily then aggregated |
-| **CA0056 card core panel** | Ticker-level card spend 3m/12m growth, share-of-wallet change, retention-cohort decay | Extend `final/sleeves/inventory_retail.py` (its score is one column, `dsale_dinv`, today) or a new `consumer_demand` sleeve that loads the carbon table in `load()` | Signal; monthly, spend aggregated to month and lagged T+3 |
+| **CA0032 EDGAR** | (1) Item-type event counts over 1/3/12 months keyed on **CIK** — the same feature family `filing_events` already computes; (2) filing text for the company graph's business description | Input swap in `sleeves/filing_events/edgar.py` (EDGAR index → CA0032 tables) and `graph/business_text.py` (8-K text → CA0032 text). Model code unchanged | Signal + graph; monthly formation, text dated ≤ formation |
+| **CA0035 events** | Event counts by category over 1/5/21 days with the `ticker_exclusively_mentioned` share as a materiality weight; earnings/M&A/IPO calendar dummies | New sleeve `sleeves/news_events/` (mirror `filing_events`: counts → rank or xgb), registered in `combiner.make_sleeves()`; calendar dummies feed `arcana.py`'s earnings-vs-ex-earnings lens and `risk.py` event sizing | Signal; monthly book, counts computed daily then aggregated |
+| **CA0056 card core panel** | Ticker-level card spend 3m/12m growth, share-of-wallet change, retention-cohort decay | Extend `sleeves/inventory_retail.py` (its score is one column, `dsale_dinv`, today) or a new `consumer_demand` sleeve that loads the carbon table in `load()` | Signal; monthly, spend aggregated to month and lagged T+3 |
 | **CA0060 foot traffic / CA0047 supermarket** | Foot-traffic growth (DMA-weighted); sell-through growth | Same consumer sleeve as corroborating features; keep one combined score rather than three sleeves | Signal; monthly |
-| **CA0065C actuals** | Revenue and `sg_a_value` surprise vs 4-quarter trailing; segment-revenue breadth | Extend `final/sleeves/e7/panel.py` (post-report revision breadth) or `final/sleeves/oplev_software.py` (it reads `sale_gr1`/`dsale_dsga` from the panel today) | Slow overlay; quarterly, from the release date only |
-| **CA0092 ratings** | Rating change 1/3m, `rating_fcf_yield`, `rating_roic`, `rating_gap` | Extra predictor columns in `final/sleeves/xgb_rank/model.py` beside the 147 characteristics, or a standalone low-turnover overlay sleeve | Overlay; monthly, `ca_receipt_date` governs availability |
+| **CA0065C actuals** | Revenue and `sg_a_value` surprise vs 4-quarter trailing; segment-revenue breadth | Extend `sleeves/e7/panel.py` (post-report revision breadth) or `sleeves/oplev_software.py` (it reads `sale_gr1`/`dsale_dsga` from the panel today) | Slow overlay; quarterly, from the release date only |
+| **CA0092 ratings** | Rating change 1/3m, `rating_fcf_yield`, `rating_roic`, `rating_gap` | Extra predictor columns in `sleeves/xgb_rank/model.py` beside the 147 characteristics, or a standalone low-turnover overlay sleeve | Overlay; monthly, `ca_receipt_date` governs availability |
 | **CA0043A + CA0097J job postings** | Posting-count growth 3/6m, salary inflation, occupation-mix shift (CA0097J reaches back to 2010) | New `hiring_demand` sleeve, or extend `oplev_software.py` (sales−SG&A is a cost-side cousin of hiring) | Signal; monthly |
-| **CA0098 open source** | Commit/PR velocity growth, developer-count growth, AI-tool dependency share (`langchain_files`, `cursor_files`, `copilot_files`) | Tech-demand features in `final/sleeves/oplev_software.py` or a new sleeve; AI adoption as a slow theme score | Signal; monthly from daily/weekly tables |
+| **CA0098 open source** | Commit/PR velocity growth, developer-count growth, AI-tool dependency share (`langchain_files`, `cursor_files`, `copilot_files`) | Tech-demand features in `sleeves/oplev_software.py` or a new sleeve; AI adoption as a slow theme score | Signal; monthly from daily/weekly tables |
 | **CA0049 medical claims** | Claim-count growth by drug/manufacturer (`ticker_id`), lagged beyond the published completion curve | Sector sleeve for healthcare names only; rank within sector to avoid the §6.2.6 sector-bet trap | Signal; monthly |
-| **CA0065S stock prices** | Dollar ADV from 1990 daily prices — replaces/augments the panel's `dolvol_126d` | `final/combiner.py` `_FORMATION_COLUMNS` and the liquidity filter in `final/optimizer.py` (`dolvol_126d * participation * days`); also `final/report.py`'s §9.4 ADV-days exhibit | Infrastructure (not alpha); improves tradability and capacity honesty |
+| **CA0065S stock prices** | Dollar ADV from 1990 daily prices — replaces/augments the panel's `dolvol_126d` | `combiner.py` `_FORMATION_COLUMNS` and the liquidity filter in `optimizer.py` (`dolvol_126d * participation * days`); also `report.py`'s §9.4 ADV-days exhibit | Infrastructure (not alpha); improves tradability and capacity honesty |
 
 ### 3.2 Secondary uses (no new sleeve)
 
 | Need | Asset | Where |
 |---|---|---|
-| Earnings-window tagging for the §11 lens | CA0035 Earnings table / CA0065C release dates | `final/arcana.py` |
-| Sector/industry corroboration for `xgb_rank` | CA0043 firmographics (NAICS) | feature columns in `final/sleeves/xgb_rank/model.py` |
-| Macro conditioning (regime labels, never retroactive) | CA0015 FRED (already used), CA0077 commodities | `final/external.py` tables; risk layer only |
-| Borrow/crowding context for shorts | CA0069G government contracts, CA0069B trade flows (large backlogs = capacity story) | discussion only; `final/risk.py` stays rule-based |
+| Earnings-window tagging for the §11 lens | CA0035 Earnings table / CA0065C release dates | `arcana.py` |
+| Sector/industry corroboration for `xgb_rank` | CA0043 firmographics (NAICS) | feature columns in `sleeves/xgb_rank/model.py` |
+| Macro conditioning (regime labels, never retroactive) | CA0015 FRED (already used), CA0077 commodities | `external.py` tables; risk layer only |
+| Borrow/crowding context for shorts | CA0069G government contracts, CA0069B trade flows (large backlogs = capacity story) | discussion only; `risk.py` stays rule-based |
 
 ### 3.3 Registration checklist for anything new
 
 1. Land the pull as a dated parquet with an as-of column; register it like the
-   existing `external.parquet` tables (`final/external_data/build.py` pattern).
+   existing `external.parquet` tables (`external_data/build.py` pattern).
 2. Implement `build()` (cached artifacts under `output/`) and `load()` on a
    `sleeves.base.Sleeve`, then add it to `combiner.make_sleeves()`.
 3. Availability: every feature column dated ≤ formation month; add the join
-   assertion `final/timing.py` expects (max feature date ≤ formation date).
+   assertion `timing.py` expects (max feature date ≤ formation date).
 4. Walk-forward only: train through Y−3, validate Y−2..Y−1, predict Y — no
    feature selection on the full sample (Instructions 7).
 5. A test in `tests/` proving the timing rule (mirror `test_final_timing.py`).

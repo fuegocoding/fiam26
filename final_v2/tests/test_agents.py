@@ -148,7 +148,10 @@ def test_policy_b_allowed_when_explicitly_enabled():
             eligibility_certificate_id="cert_b",
         )
     )
-    assert registry.route("lead", dt.datetime(2021, 6, 1, tzinfo=UTC)) == "ckpt_1"
+    assert registry.route(
+        "lead", dt.datetime(2021, 6, 1, tzinfo=UTC),
+        policy=TemporalPolicy.CUTOFF_QUALIFIED_BACKCAST,
+    ) == "ckpt_1"
 
 
 def test_checkpoint_registry_rejects_duplicates():

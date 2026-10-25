@@ -1,11 +1,11 @@
-"""Fast synthetic checks for final/evaluate.py, final/identity.py and final/report.py."""
+"""Fast synthetic checks for evaluate.py, identity.py and report.py."""
 import pathlib
 import sys
 
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "final"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import evaluate  # noqa: E402
 import identity  # noqa: E402
 import report  # noqa: E402

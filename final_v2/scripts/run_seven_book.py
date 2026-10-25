@@ -4,14 +4,28 @@ Trains xgb_rank (walk-forward on 147 chars) and filing_events (walk-forward
 on EDGAR event counts with dated cik links), caches the forecasts, blends
 all seven as families, and runs the engine end to end.
 
-Usage: python final_v2/scripts/run_seven_book.py [--reuse-forecasts]
+Hardened replay controls (pod_platform.orchestration.replay):
+* sources need APPROVED formation-eligible cards (--source-cards FILE) or an
+  explicit --research-only run, which is labeled and can never claim freeze;
+* every period is compliance-checked (formation target, post-risk, post-trade
+  actual, period-end drifted) with pre and post weights recorded;
+* no missing-return zero-fill: a held name without an outcome stops the run
+  unless dated liquidation evidence is supplied (--liquidations FILE);
+* turnover/cost use drifted actual holdings on the real AccountingLedger;
+* output goes to a fresh directory (--out-dir) or needs --overwrite.
+
+Monthly inputs only: no daily path, quotes or liquidity realism is claimed.
+
+Usage: python final_v2/scripts/run_seven_book.py (--source-cards FILE | --research-only)
+           [--reuse-forecasts] [--out-dir DIR] [--overwrite] [--liquidations FILE]
+           [--allow-terminal-unevaluated] [--no-hash-inputs]
+           [--trial-count N] [--evaluation-access-count N]
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
-import math
 import sys
 import time
 from decimal import Decimal
@@ -22,6 +36,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from pod_platform.accounting.ledger import BorrowSchedule  # noqa: E402
 from pod_platform.allocation import (  # noqa: E402
     Candidate,
     ConstructionEngine,
@@ -30,9 +45,27 @@ from pod_platform.allocation import (  # noqa: E402
     InternalPolicy,
     OfficialLimits,
 )
-from pod_platform.contracts.errors import PodPlatformError  # noqa: E402
+from pod_platform.contracts.base import canonical_digest  # noqa: E402
+from pod_platform.contracts.errors import ErrorCode, PodPlatformError  # noqa: E402
 from pod_platform.data.competition import CharsPanelLoader  # noqa: E402
-from pod_platform.reporting.compliance import ActualHolding, ComplianceEngine  # noqa: E402
+from pod_platform.orchestration.replay import (  # noqa: E402
+    MONTHLY_LIMITATIONS,
+    ArtifactWriter,
+    CoreSourceLineage,
+    LiquidationEvidence,
+    MonthlyAccountingReplay,
+    PeriodComplianceLog,
+    SourceEligibilityGate,
+    account_period,
+    assess_freeze,
+    environment_lock_hash,
+    fail,
+    legacy_source_uses,
+    load_source_cards,
+    utc_close,
+    validate_contiguous_periods,
+)
+from pod_platform.reporting.dossier import HoldingsRow, holdings_csv, returns_csv  # noqa: E402
 from pod_platform.reporting.tables import RequiredTable  # noqa: E402
 from pod_platform.risk.overlay import PANEL_COLUMNS as OVERLAY_COLUMNS  # noqa: E402
 from pod_platform.risk.overlay import protect  # noqa: E402
@@ -46,10 +79,10 @@ from pod_platform.signals import (  # noqa: E402
 from pod_platform.signals.short_interest import build_short_interest  # noqa: E402
 
 REPO = ROOT.parent
-PANEL = REPO / "final" / "data" / "chars_final_with_names.parquet"
-FACTORS = REPO / "final" / "data" / "factor_char_list.csv"
-EXTERNAL = REPO / "final" / "external_data" / "external.parquet"
-FILINGS = REPO / "final" / "data" / "8k_20150101_20260831_identified.parquet"
+PANEL = REPO / "data" / "chars_final_with_names.parquet"
+FACTORS = REPO / "data" / "factor_char_list.csv"
+EXTERNAL = REPO / "external_data" / "external.parquet"
+FILINGS = REPO / "data" / "8k_20150101_20260831_identified.parquet"
 CACHE = ROOT / "artifacts" / "seven_book" / "forecasts"
 
 TEST_START = dt.date(2021, 1, 31)
@@ -58,16 +91,37 @@ TEST_YEARS = list(range(2021, 2027))
 LAST_TARGET = pd.Timestamp("2026-08-31")
 COST_BP_PER_SIDE = 20.0
 BORROW_ANNUAL = 0.05
+START_NAV = Decimal("1000000000")
 USE_RISK_OVERLAY = "--risk-overlay" in sys.argv
 USE_GAP = "--with-gap" in sys.argv
 BLEND_RENORM = "--blend-renorm" in sys.argv
 USE_GRAPH = "--with-graph" in sys.argv
 USE_DEMAND = "--with-demand" in sys.argv
 GATE_E7_DEMAND = "--gate-e7-demand" in sys.argv
+RESEARCH_ONLY = "--research-only" in sys.argv
+OVERWRITE = "--overwrite" in sys.argv
+ALLOW_TERMINAL = "--allow-terminal-unevaluated" in sys.argv
+HASH_INPUTS = "--no-hash-inputs" not in sys.argv
 _out_name = "seven_book"
 if USE_RISK_OVERLAY:
     _out_name = "risk_book" + ("_renorm" if BLEND_RENORM else "") + ("_graph" if USE_GRAPH else "") + ("_demand" if USE_DEMAND else "") + ("_gate" if GATE_E7_DEMAND else "")
-OUT = ROOT / "artifacts" / _out_name
+
+
+def _arg_value(flag: str):
+    if flag in sys.argv:
+        index = sys.argv.index(flag)
+        if index + 1 >= len(sys.argv):
+            raise SystemExit(f"{flag} needs a value")
+        return sys.argv[index + 1]
+    return None
+
+
+SOURCE_CARDS = _arg_value("--source-cards")
+LIQUIDATIONS = _arg_value("--liquidations")
+TRIAL_COUNT = int(_arg_value("--trial-count") or 0)
+EVAL_ACCESS_COUNT = int(_arg_value("--evaluation-access-count") or 0)
+# Never default onto an existing artifact directory; a non-empty target needs --overwrite.
+OUT = Path(_arg_value("--out-dir") or (ROOT / "artifacts" / f"{_out_name}_hardened"))
 GRAPH_WORK = ROOT / "artifacts" / "graph_work"
 GAP_WORK = ROOT / "artifacts" / "valuation_work"
 FAMILIES = (
@@ -102,6 +156,12 @@ def get_forecasts(panel_full, factor_columns, reuse: bool):
         if audits_path.exists():
             audits = json.loads(audits_path.read_text(encoding="utf-8"))
         return xgb_fc, filing_fc, audits
+    if (xgb_path.exists() or filing_path.exists()) and not OVERWRITE:
+        fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            f"forecast cache already exists at {CACHE}",
+            "Existing forecast artifacts are preserved: pass --reuse-forecasts or an explicit --overwrite.",
+        )
 
     t0 = time.time()
     print("training xgb_rank (24 fits)...", flush=True)
@@ -237,14 +297,80 @@ def get_graph_map():
     return {(str(int(r.permno)), r.eom.date()): float(r.pred_eps) for r in ens.itertuples()}
 
 
+def gate_sources() -> tuple:
+    """Source eligibility gate + explicit lineage; runs before any heavy work."""
+    if not SOURCE_CARDS and not RESEARCH_ONLY:
+        fail(
+            ErrorCode.SOURCE_NOT_FORMATION_ELIGIBLE,
+            "no source cards supplied",
+            "Pass --source-cards FILE for a formation run, or --research-only for a labeled exploratory run that cannot claim freeze.",
+        )
+    cards = load_source_cards(Path(SOURCE_CARDS)) if SOURCE_CARDS else {}
+    components = list(FAMILIES) + ["short_interest", "risk_free_benchmark"]
+    if GATE_E7_DEMAND:
+        components += ["gate_e7_demand"]
+    if USE_GRAPH:
+        components += ["graph_tilt"]
+    gate = SourceEligibilityGate(research_only=RESEARCH_ONLY).evaluate(legacy_source_uses(components, cards))
+    lineage = CoreSourceLineage()
+    for source_id, path, role in (
+        ("core_chars_panel", PANEL, "core"),
+        ("core_factor_list", FACTORS, "core"),
+        ("external_parquet", EXTERNAL, "external"),
+        ("filings_8k", FILINGS, "external"),
+    ):
+        if path.exists():
+            lineage.add(source_id, path, role=role, hash_content=HASH_INPUTS)
+    return gate, lineage
+
+
+def load_liquidations() -> dict:
+    """{formation date: {security_id: LiquidationEvidence}} from explicit dated evidence only."""
+    if not LIQUIDATIONS:
+        return {}
+    out: dict = {}
+    for record in json.loads(Path(LIQUIDATIONS).read_text(encoding="utf-8")):
+        record = dict(record)
+        day = dt.date.fromisoformat(record.pop("period_formation_date"))
+        evidence = LiquidationEvidence.model_validate(record)
+        out.setdefault(day, {})[evidence.security_id] = evidence
+    return out
+
+
 def main() -> None:
     reuse = "--reuse-forecasts" in sys.argv
-    OUT.mkdir(parents=True, exist_ok=True)
+    gate, lineage = gate_sources()  # fails closed before any training or heavy IO
+    print(f"source policy: {gate.run_label}; blocked sources: {sorted(gate.blocked) or 'none'}", flush=True)
+    writer = ArtifactWriter(OUT, overwrite=OVERWRITE)
+    compliance = PeriodComplianceLog(OfficialLimits())
+    monthly: list[dict] = []
+    try:
+        run(reuse, gate, lineage, writer, compliance, monthly)
+    except Exception as error:  # persist evidence for a fail-closed stop, then re-raise
+        code = error.response.error.code.value if isinstance(error, PodPlatformError) else type(error).__name__
+        writer.write_json(
+            "failure.json",
+            {
+                "status": "FAILED_CLOSED",
+                "error": code,
+                "summary": str(error),
+                "periods_completed": len(monthly),
+                "frozen": False,
+                "run_label": gate.run_label,
+            },
+        )
+        writer.write_json("compliance.partial.json", compliance.as_dict())
+        writer.write_json("monthly.partial.json", monthly)
+        raise
+
+
+def run(reuse, gate, lineage, writer, compliance, monthly) -> None:
     loader = CharsPanelLoader(PANEL, FACTORS)
     panel = loader.load()
     panel["eom"] = pd.to_datetime(panel["eom"])
     signals = PortedSignals(EXTERNAL)
     tb3ms = load_tb3ms()
+    liquidations_by_day = load_liquidations()
 
     factor_columns = pd.read_csv(FACTORS)["variable"].tolist()
     panel_columns = list(
@@ -280,19 +406,44 @@ def main() -> None:
 
     integrator = FamilyIntegrator(FAMILIES, neutral_uncertainty=0.1)
     engine = ConstructionEngine(OfficialLimits(), InternalPolicy(target_positions=300))
-    compliance = ComplianceEngine(OfficialLimits())
 
     months = sorted({m for m in panel["eom"].dt.date.unique() if TEST_START <= m <= TEST_END})
     print(f"formation months: {len(months)} ({months[0]} .. {months[-1]})")
 
-    nav = 1_000_000_000.0
-    nav_path = [{"month": "start", "nav": nav}]
-    monthly = []
-    last_holdings = []
-    prev_weights: dict[str, float] = {}
+    # Every formation month must have realized outcomes; none is skipped silently.
+    labelled = panel_full.groupby("eom")["ret_exc_lead1m"].apply(lambda s: int(s.notna().sum()))
+    unlabelled = [m for m in months if int(labelled.get(pd.Timestamp(m), 0)) == 0]
+    excluded_terminal: list[str] = []
+    if unlabelled:
+        if ALLOW_TERMINAL and unlabelled == [months[-1]]:
+            excluded_terminal = [str(months[-1])]
+            months = months[:-1]
+            print(f"explicitly excluding unevaluable terminal formation month {excluded_terminal[0]}", flush=True)
+        else:
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"no realized outcomes for formation months: {', '.join(str(m) for m in unlabelled)}",
+                "Months without outcomes are never skipped silently; shorten TEST_END or pass --allow-terminal-unevaluated for the final month only.",
+            )
+    validate_contiguous_periods([(m, (pd.Timestamp(m) + pd.offsets.MonthEnd(1)).date()) for m in months])
+
+    replay = MonthlyAccountingReplay(
+        START_NAV,
+        borrow_schedule=BorrowSchedule(
+            schedule_id="legacy_flat_borrow",
+            large_cap_threshold_usd=Decimal("0"),
+            large_cap_annual_rate=Decimal(str(BORROW_ANNUAL)),
+            other_annual_rate=Decimal(str(BORROW_ANNUAL)),
+        ),
+    )
+    nav_path = [{"month": "start", "nav": float(replay.nav())}]
+    holdings_rows: list[list] = []
+    caps: dict[str, Decimal] = {}
+    identities: dict[str, tuple[str, str]] = {}
     coverage_log = []
     score_history: list[pd.DataFrame] = []
     overlay_log = []
+    last_drifted: dict = {}
 
     for month_date in months:
         month_ts = pd.Timestamp(month_date)
@@ -300,7 +451,11 @@ def main() -> None:
             dt.datetime(month_date.year, month_date.month, month_date.day, tzinfo=dt.timezone.utc)
         )
         if len(month_df) < 250:
-            continue
+            fail(
+                ErrorCode.INSUFFICIENT_HISTORY,
+                f"formation universe too small at {month_date}: {len(month_df)} rows",
+                "A thin month is reported, never skipped.",
+            )
 
         ret_date = (month_ts + pd.offsets.MonthEnd(1)).date()
         results = {
@@ -316,8 +471,11 @@ def main() -> None:
         merged = month_df.copy()
         merged["sid"] = merged["permno"].astype(int).astype(str)
         if merged["ret_exc_lead1m"].notna().sum() == 0:
-            print(f"skip {month_date}: no forward labels for the return month", flush=True)
-            continue
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"no forward labels for the return month after {month_date}",
+                "A formation month without outcomes is never skipped.",
+            )
         keys = [(sid, month_date) for sid in merged["sid"]]
         merged["xgb_rank"] = [xgb_map.get(k) for k in keys]
         merged["filing_events"] = [filing_map.get(k) for k in keys]
@@ -382,6 +540,8 @@ def main() -> None:
         else:
             candidates_alpha = dict(raw_alpha)
 
+        # Incumbents are the drifted actual holdings, not raw prior target weights.
+        held_before = replay.held()
         candidates = []
         for sid, idx in zip(merged["sid"], merged.index):
             if sid not in candidates_alpha:
@@ -396,14 +556,18 @@ def main() -> None:
                     alpha=alpha,
                     market_cap_usd=float(row["me_usd"]),
                     tradable=True,
-                    incumbent=sid in prev_weights,
+                    incumbent=sid in held_before,
                     sector=str(row["gics"])[:2] if row["gics"] else "unknown",
                     beta=float(beta_value) if beta_value == beta_value and beta_value is not None else 1.0,
                     short_interest_pct=si_value if si_value is not None else float("nan"),
                 )
             )
         if len(candidates) < 250:
-            continue
+            fail(
+                ErrorCode.INSUFFICIENT_HISTORY,
+                f"too few candidates at {month_date}: {len(candidates)}",
+                "A thin candidate set is reported, never skipped.",
+            )
 
         try:
             book = engine.build(
@@ -425,7 +589,8 @@ def main() -> None:
             print(f"construction failed at {month_date}: candidates={len(candidates)} neg_alpha={neg} si_blocked={si_blocked}", flush=True)
             raise
 
-        weights = {p.security_id: float(p.target_weight) for p in book.positions}
+        construction_weights = {p.security_id: p.target_weight for p in book.positions}
+        post_risk_weights = {k: float(v) for k, v in construction_weights.items()}
 
         ret_month = (month_ts + pd.offsets.MonthEnd(1)).to_period("M")
         for sid, idx in zip(merged["sid"], merged.index):
@@ -438,77 +603,75 @@ def main() -> None:
                 }
             )
 
-        if USE_RISK_OVERLAY and weights:
+        if USE_RISK_OVERLAY and post_risk_weights:
             scores_df = pd.DataFrame(score_history)
-            overlay_result = protect(weights, ret_month, overlay_panel, scores_df)
-            weights = overlay_result.weights
+            overlay_result = protect(post_risk_weights, ret_month, overlay_panel, scores_df)
+            post_risk_weights = dict(overlay_result.weights)
             overlay_log.append({"month": str(month_date), **overlay_result.summary})
 
-        turnover = 0.5 * sum(
-            abs(weights.get(k, 0.0) - prev_weights.get(k, 0.0))
-            for k in set(weights) | set(prev_weights)
-        )
+        # Caps for every name ever held or targeted (finite only; compliance fails closed otherwise).
+        for sid, cap in zip(merged["sid"], merged["me_usd"]):
+            if cap == cap and cap is not None and float(cap) not in (float("inf"), float("-inf")):
+                caps[sid] = Decimal(str(float(cap)))
 
-        rets = merged.set_index("sid")["ret_exc_lead1m"].to_dict()
-        missing_weight = sum(
-            abs(w) for k, w in weights.items()
-            if rets.get(k) is None or (isinstance(rets.get(k), float) and math.isnan(rets[k]))
-        )
-        resolved_weight = sum(abs(w) for w in weights.values())
-        missing_share = missing_weight / resolved_weight if resolved_weight else 1.0
-        if missing_share > 0.5:
-            continue
-
-        resolved = {
-            k: (0.0 if v is None or (isinstance(v, float) and math.isnan(v)) else float(v))
-            for k, v in rets.items()
-        }
         month_key = f"{month_date.year}-{month_date.month:02d}"
-        rf_m = tb3ms.get(month_key, 0.0) / 1200.0
+        if month_key not in tb3ms:
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"TB3MS risk-free rate missing for {month_key}",
+                "The risk-free input is never zero-filled.",
+            )
+        rf_m = tb3ms[month_key] / 1200.0
         bench_m = rf_m + 0.04 / 12.0
-        active_ret = sum(w * resolved.get(k, 0.0) for k, w in weights.items())
-        short_w = -sum(w for w in weights.values() if w < 0)
-        borrow = short_w * BORROW_ANNUAL / 12.0
-        cost = turnover * COST_BP_PER_SIDE / 10_000.0 * 2.0
-        gross_ret = rf_m + active_ret
-        net_ret = gross_ret - borrow - cost
 
-        nav *= 1.0 + net_ret
-        nav_path.append({"month": str(month_date), "nav": nav})
+        accounted = account_period(
+            replay,
+            compliance,
+            period=str(month_date),
+            formation_at=utc_close(month_date),
+            end_at=utc_close(ret_date),
+            construction_weights=construction_weights,
+            post_risk_weights=post_risk_weights,
+            outcomes=merged.set_index("sid")["ret_exc_lead1m"].to_dict(),
+            liquidations=liquidations_by_day.get(month_date),
+            rf_monthly=rf_m,
+            cost_bp_per_side=COST_BP_PER_SIDE,
+            market_caps=caps,
+        )
+        trade, result = accounted.trade, accounted.result
+        last_drifted = result.drifted_weights
+        nav_path.append({"month": str(month_date), "nav": float(result.nav_end)})
         monthly.append(
             {
                 "month": str(month_date),
-                "gross_return": gross_ret,
-                "net_return": net_ret,
+                "gross_return": result.gross_return,
+                "net_return": result.net_return,
                 "rf_monthly": rf_m,
                 "benchmark_monthly": bench_m,
-                "active_return": active_ret,
-                "missing_weight_share": missing_share,
-                "borrow": borrow,
-                "cost": cost,
-                "turnover": turnover,
-                "names": len(weights),
-                "gross_exposure": sum(abs(w) for w in weights.values()),
-                "net_exposure": sum(weights.values()),
+                "active_return": result.active_return,
+                "borrow": result.borrow_return,
+                "cost": result.cost_return,
+                "turnover": trade.turnover_one_way,
+                "names": result.names,
+                "gross_exposure": result.gross_exposure,
+                "net_exposure": result.net_exposure,
+                "liquidated": result.liquidated,
+                "nav_residuals": result.reconciliation,
             }
         )
-        prev_weights = weights
-
-        me_map = merged.set_index("sid")["me_usd"].to_dict()
-        last_holdings = [
-            ActualHolding(
-                security_id=p.security_id,
-                weight=Decimal(str(p.target_weight)),
-                market_cap_usd=Decimal(str(me_map.get(p.security_id, 0.0))),
-                formation_market_cap_usd=Decimal(str(me_map.get(p.security_id, 0.0))),
-            )
-            for p in book.positions
-        ]
+        for sid, weight in sorted(trade.post_weights.items()):
+            holdings_rows.append([str(month_date), sid, str(weight), "long" if weight > 0 else "short"])
+        id_rows = merged.set_index("sid")
+        for sid in trade.post_weights:
+            row = id_rows.loc[sid]
+            ticker = row.get("ticker")
+            name = row.get("comp_name", row.get("name", ""))
+            identities[sid] = (str(ticker) if ticker == ticker and ticker is not None else sid, str(name) if name == name and name is not None else "", str(month_date))
 
     net_returns = [m["net_return"] for m in monthly]
     table = RequiredTable(
-        ending_value=nav,
-        starting_value=1_000_000_000.0,
+        ending_value=float(replay.nav()),
+        starting_value=float(START_NAV),
         elapsed_years=len(monthly) / 12.0,
         periods_per_year=12,
         portfolio_returns=tuple(net_returns),
@@ -523,18 +686,79 @@ def main() -> None:
         turnover_per_rebalance=tuple(m["turnover"] for m in monthly),
     ).as_table()
 
-    compliance_report = compliance.check(last_holdings) if last_holdings else None
-
-    (OUT / "nav_path.json").write_text(json.dumps(nav_path, indent=2), encoding="utf-8")
-    (OUT / "monthly.json").write_text(json.dumps(monthly, indent=2), encoding="utf-8")
-    (OUT / "required_table.json").write_text(json.dumps(table, indent=2), encoding="utf-8")
-    (OUT / "coverage.json").write_text(json.dumps(coverage_log, indent=2), encoding="utf-8")
-    if overlay_log:
-        (OUT / "overlay_log.json").write_text(json.dumps(overlay_log, indent=2, default=str), encoding="utf-8")
-    if compliance_report is not None:
-        (OUT / "compliance.json").write_text(
-            json.dumps(compliance_report.as_dict(), indent=2), encoding="utf-8"
+    final_rows = []
+    for sid, weight in sorted(last_drifted.items()):
+        ticker, name, ref = identities[sid]
+        final_rows.append(
+            HoldingsRow(sid, ticker, name, PANEL.name, ref, float(replay.ledger.positions[sid].quantity), float(weight), "long" if weight > 0 else "short")
         )
+
+    config = {
+        "families": list(FAMILIES),
+        "test_start": str(TEST_START),
+        "test_end": str(TEST_END),
+        "cost_bp_per_side": COST_BP_PER_SIDE,
+        "borrow_annual": BORROW_ANNUAL,
+        "risk_overlay": USE_RISK_OVERLAY,
+        "blend_renorm": BLEND_RENORM,
+        "with_graph": USE_GRAPH,
+        "with_gap": USE_GAP,
+        "with_demand": USE_DEMAND,
+        "gate_e7_demand": GATE_E7_DEMAND,
+        "target_positions": 300,
+        "research_only": RESEARCH_ONLY,
+        "excluded_terminal_months": excluded_terminal,
+    }
+    writer.write_json("nav_path.json", nav_path)
+    writer.write_json("monthly.json", monthly)
+    writer.write_json("required_table.json", table)
+    writer.write_json("coverage.json", coverage_log)
+    if overlay_log:
+        writer.write_json("overlay_log.json", overlay_log)
+    writer.write_json("compliance.json", compliance.as_dict())
+    writer.write_text("returns_export.csv", returns_csv([(m["month"], m["net_return"]) for m in monthly]))
+    writer.write_text("holdings_export.csv", holdings_csv(final_rows))
+    lines = ["period,security_id,post_trade_weight,side"] + [",".join(r) for r in holdings_rows]
+    writer.write_text("holdings_by_period.csv", "\n".join(lines) + "\n")
+    writer.write_json("lineage.json", lineage.as_dict())
+
+    assessment = assess_freeze(
+        manifest=None,  # the legacy path declares no security-master/graph versions or certificates
+        outputs=dict(writer.payloads),
+        gate=gate,
+        certificate_count=0,
+        deployed_forecast_count=len(FAMILIES),
+        accounting_reconciled=True,  # advance() raises on any NAV residual; reaching here is measured
+        compliance=compliance,
+        trial_count=TRIAL_COUNT,
+        evaluation_access_count=EVAL_ACCESS_COUNT,
+        frozen_at=utc_close(months[-1]),
+    )
+    writer.write_json(
+        "run_status.json",
+        {
+            "labels": {
+                "run_kind": "replay",
+                "evidence_class": "legacy_monthly_replay",
+                "trial_count_declared": TRIAL_COUNT,
+                "evaluation_access_count_declared": EVAL_ACCESS_COUNT,
+            },
+            "freeze": assessment.as_dict(),
+            "source_policy": gate.as_dict(),
+            "config_hash": canonical_digest(config),
+            "config": config,
+            "environment_lock_hash": environment_lock_hash(),
+            "python": sys.version.split()[0],
+            "input_hashed": HASH_INPUTS,
+            "periods": len(monthly),
+            "excluded_terminal_months": excluded_terminal,
+            "internal_warnings": compliance.internal_warnings(),
+            "liquidations_supplied": bool(liquidations_by_day),
+            "limitations": list(MONTHLY_LIMITATIONS),
+            "llm_called": False,
+        },
+    )
+    writer.write_json("artifact_hashes.json", dict(sorted(writer.hashes.items())))
 
     avg_coverage = {
         name: sum(c["coverage"].get(name, 0) for c in coverage_log) / max(len(coverage_log), 1)
@@ -544,6 +768,9 @@ def main() -> None:
     label = "WITH RISK OVERLAY" if USE_RISK_OVERLAY else "no risk overlay"
     blend = "coverage-renormalized (challenger)" if BLEND_RENORM else "family-equal (C2 baseline)"
     print(f"=== seven sleeves (5 deterministic + 2 trained) — {label} | blend: {blend} ===")
+    print(f"run label               : {gate.run_label}  freeze: {assessment.status}")
+    for reason in assessment.reasons:
+        print(f"  not frozen because    : {reason}")
     if overlay_log:
         scales = [o["risk_scale"] for o in overlay_log]
         edges = [o["edge_scale"] for o in overlay_log]
@@ -553,7 +780,7 @@ def main() -> None:
         print(f"overlay: peer-flagged shorts={flagged} runup-capped={capped}")
     print(f"months evaluated        : {len(monthly)}")
     print(f"avg coverage per sleeve : " + ", ".join(f"{k}={v:.0f}" for k, v in avg_coverage.items()))
-    print(f"ending NAV              : ${nav:,.0f}")
+    print(f"ending NAV              : ${float(replay.nav()):,.0f}")
     print(f"cumulative return       : {table['cumulative_return']:.2%}")
     print(f"CAGR                    : {table['cagr']:.2%}")
     print(f"annualized volatility   : {table['annualized_volatility']:.2%}")
@@ -562,8 +789,7 @@ def main() -> None:
     print(f"Sharpe                  : {table['sharpe_ratio']:.2f}")
     print(f"turnover per rebalance  : {table['turnover_per_rebalance_avg']:.2%}")
     print(f"annual cost % NAV       : {table['annual_cost_pct_nav']:.2%}")
-    if compliance_report is not None:
-        print(f"compliance official pass: {compliance_report.official_pass}")
+    print(f"compliance official pass: {compliance.all_official_pass} ({len(compliance.records)} period-stage checks)")
     print(f"artifacts written to    : {OUT}")
 
 
