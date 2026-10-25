@@ -57,6 +57,7 @@ class InternalPolicy(StrictModel):
     beta_tilt: float = Field(ge=0.0, le=1.0, default=0.25)
     beta_lower: float = Field(gt=0, default=0.2)
     beta_upper: float = Field(gt=0, default=3.0)
+    max_short_interest: float = Field(ge=0.0, le=1.5, default=0.15)
 
     @model_validator(mode="after")
     def _check(self) -> "InternalPolicy":
@@ -76,6 +77,7 @@ class Candidate:
     incumbent: bool = False
     sector: str = "unknown"
     beta: float = 1.0
+    short_interest_pct: float = float("nan")
 
 
 @dataclass
@@ -153,7 +155,12 @@ class ConstructionEngine:
         official = self._official
         internal = self._internal
         tradable = [c for c in candidates if c.tradable]
-        shortable = [c for c in tradable if c.market_cap_usd >= official.min_short_market_cap_usd]
+        shortable = [
+            c
+            for c in tradable
+            if c.market_cap_usd >= official.min_short_market_cap_usd
+            and not (c.short_interest_pct >= internal.max_short_interest)
+        ]
 
         longs = sorted(
             (c for c in tradable if c.alpha > 0),

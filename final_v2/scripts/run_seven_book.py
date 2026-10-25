@@ -30,6 +30,7 @@ from pod_platform.allocation import (  # noqa: E402
     InternalPolicy,
     OfficialLimits,
 )
+from pod_platform.contracts.errors import PodPlatformError  # noqa: E402
 from pod_platform.data.competition import CharsPanelLoader  # noqa: E402
 from pod_platform.reporting.compliance import ActualHolding, ComplianceEngine  # noqa: E402
 from pod_platform.reporting.tables import RequiredTable  # noqa: E402
@@ -42,6 +43,7 @@ from pod_platform.signals import (  # noqa: E402
     build_xgb_rank,
     scaled_rank,
 )
+from pod_platform.signals.short_interest import build_short_interest  # noqa: E402
 
 REPO = ROOT.parent
 PANEL = REPO / "final" / "data" / "chars_final_with_names.parquet"
@@ -207,6 +209,15 @@ def main() -> None:
 
     xgb_fc, filing_fc, audits = get_forecasts(panel_full, factor_columns, reuse)
     gap_map = get_gap_map() if USE_GAP else {}
+
+    si_table = build_short_interest(str(EXTERNAL), str(PANEL))
+    si_map = {
+        (str(int(r.permno)), r.return_month.date()): (
+            float("nan") if pd.isna(r.short_pct) else float(r.short_pct)
+        )
+        for r in si_table.itertuples()
+    }
+    print(f"short-interest rows: {len(si_table):,}")
     xgb_map = {
         (str(int(r.permno)), r.eom.date()): float(r.pred_xgb_rank) for r in xgb_fc.itertuples()
     }
@@ -238,6 +249,7 @@ def main() -> None:
         if len(month_df) < 250:
             continue
 
+        ret_date = (month_ts + pd.offsets.MonthEnd(1)).date()
         results = {
             "inventory_retail": signals.inventory_retail(month_df),
             "oplev_software": signals.oplev_software(month_df),
@@ -250,6 +262,9 @@ def main() -> None:
 
         merged = month_df.copy()
         merged["sid"] = merged["permno"].astype(int).astype(str)
+        if merged["ret_exc_lead1m"].notna().sum() == 0:
+            print(f"skip {month_date}: no forward labels for the return month", flush=True)
+            continue
         keys = [(sid, month_date) for sid in merged["sid"]]
         merged["xgb_rank"] = [xgb_map.get(k) for k in keys]
         merged["filing_events"] = [filing_map.get(k) for k in keys]
@@ -284,6 +299,7 @@ def main() -> None:
             candidates_alpha[sid] = alpha
             row = merged.loc[idx]
             beta_value = row.get("beta_60m")
+            si_value = si_map.get((sid, ret_date))
             candidates.append(
                 Candidate(
                     security_id=sid,
@@ -293,24 +309,31 @@ def main() -> None:
                     incumbent=sid in prev_weights,
                     sector=str(row["gics"])[:2] if row["gics"] else "unknown",
                     beta=float(beta_value) if beta_value == beta_value and beta_value is not None else 1.0,
+                    short_interest_pct=si_value if si_value is not None else float("nan"),
                 )
             )
         if len(candidates) < 250:
             continue
 
-        book = engine.build(
-            candidates,
-            run_id=f"seven_{month_date}",
-            decision_at=dt.datetime(month_date.year, month_date.month, month_date.day, tzinfo=dt.timezone.utc),
-            forecast_publication_ids=[f"fc_{month_date}"],
-            current_book_snapshot_id=f"snap_{month_date}",
-            nav_snapshot_id=f"nav_{month_date}",
-            price_snapshot_id=f"px_{month_date}",
-            risk_envelope_version="envelope_v1",
-            covariance_version="cov_v1",
-            cost_model_version="cost_v1",
-            attribution_method="family_equal_contribution",
-        )
+        try:
+            book = engine.build(
+                candidates,
+                run_id=f"seven_{month_date}",
+                decision_at=dt.datetime(month_date.year, month_date.month, month_date.day, tzinfo=dt.timezone.utc),
+                forecast_publication_ids=[f"fc_{month_date}"],
+                current_book_snapshot_id=f"snap_{month_date}",
+                nav_snapshot_id=f"nav_{month_date}",
+                price_snapshot_id=f"px_{month_date}",
+                risk_envelope_version="envelope_v1",
+                covariance_version="cov_v1",
+                cost_model_version="cost_v1",
+                attribution_method="family_equal_contribution",
+            )
+        except PodPlatformError:
+            neg = sum(1 for c in candidates if c.alpha < 0)
+            si_blocked = sum(1 for c in candidates if c.alpha < 0 and c.short_interest_pct == c.short_interest_pct and c.short_interest_pct >= 0.15)
+            print(f"construction failed at {month_date}: candidates={len(candidates)} neg_alpha={neg} si_blocked={si_blocked}", flush=True)
+            raise
 
         weights = {p.security_id: float(p.target_weight) for p in book.positions}
 
