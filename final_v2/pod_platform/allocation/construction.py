@@ -51,11 +51,19 @@ class InternalPolicy(StrictModel):
     target_net: float = 0.0
     max_abs_net: float = Field(ge=0, default=0.10)
     retention_band: float = Field(ge=0.0, default=0.5)
+    sector_neutral: bool = True
+    min_sector_names: int = Field(ge=1, default=4)
+    beta_neutral: bool = True
+    beta_tilt: float = Field(ge=0.0, le=1.0, default=0.25)
+    beta_lower: float = Field(gt=0, default=0.2)
+    beta_upper: float = Field(gt=0, default=3.0)
 
     @model_validator(mode="after")
     def _check(self) -> "InternalPolicy":
         if self.retention_band >= 2.0:
             raise ValueError("retention band must be a tight band around k, not an unbounded keep-all")
+        if self.beta_upper <= self.beta_lower:
+            raise ValueError("beta_upper must exceed beta_lower")
         return self
 
 
@@ -67,6 +75,7 @@ class Candidate:
     tradable: bool = True
     incumbent: bool = False
     sector: str = "unknown"
+    beta: float = 1.0
 
 
 @dataclass
@@ -169,29 +178,99 @@ class ConstructionEngine:
             )
             return result
 
-        selected_longs = self._select_with_retention(longs, k)
-        selected_shorts = self._select_with_retention(shorts, k)
+        if internal.sector_neutral:
+            sector_counts: dict[str, int] = {}
+            for c in list(longs) + list(shorts):
+                sector_counts[c.sector] = sector_counts.get(c.sector, 0) + 1
+            eligible_counts = {s: n for s, n in sector_counts.items() if n >= internal.min_sector_names}
+            quota = _quota(eligible_counts, k)
+            selected_longs: list[Candidate] = []
+            selected_shorts: list[Candidate] = []
+            for sector, k_sector in quota.items():
+                if k_sector <= 0:
+                    continue
+                lo = [c for c in longs if c.sector == sector]
+                so = [c for c in shorts if c.sector == sector]
+                k_pair = min(k_sector, len(lo), len(so))
+                if k_pair <= 0:
+                    continue
+                picked_shorts = self._select_with_retention(so, k_pair)
+                short_ids = {c.security_id for c in picked_shorts}
+                picked_longs = self._select_with_retention(
+                    [c for c in lo if c.security_id not in short_ids], k_pair
+                )
+                k_pair = min(len(picked_shorts), len(picked_longs))
+                selected_longs += picked_longs[:k_pair]
+                selected_shorts += picked_shorts[:k_pair]
+        else:
+            selected_longs = self._select_with_retention(longs, k)
+            selected_shorts = self._select_with_retention(shorts, k)
 
-        weight = Decimal(str(internal.target_gross)) / Decimal(2 * k)
-        weight = weight.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
-        if weight > Decimal(str(official.max_abs_name_weight)):
-            weight = Decimal(str(official.max_abs_name_weight)).quantize(
-                Decimal("0.00000001"), rounding=ROUND_DOWN
+        if not selected_longs or not selected_shorts:
+            result.status = SolverStatus.INFEASIBLE
+            result.official_results.append(
+                ConstraintResult(
+                    name="selection",
+                    threshold="non-empty long and short books",
+                    value=f"longs={len(selected_longs)} shorts={len(selected_shorts)}",
+                    status="fail",
+                )
             )
+            return result
+
+        half = Decimal(str(internal.target_gross)) / Decimal(2)
+        long_notional = half
+        short_notional = half
+        if internal.beta_neutral:
+            beta_low = Decimal(str(internal.beta_lower))
+            beta_high = Decimal(str(internal.beta_upper))
+            long_betas = [
+                min(max(Decimal(str(c.beta)), beta_low), beta_high) for c in selected_longs
+            ]
+            short_betas = [
+                min(max(Decimal(str(c.beta)), beta_low), beta_high) for c in selected_shorts
+            ]
+            long_beta = sum(long_betas) / Decimal(len(long_betas))
+            short_beta = sum(short_betas) / Decimal(len(short_betas))
+            gross = Decimal(str(internal.target_gross))
+            tilt = Decimal(str(internal.beta_tilt))
+            raw = gross * short_beta / (long_beta + short_beta)
+            long_notional = min(max(raw, half * (1 - tilt)), half * (1 + tilt))
+            short_notional = gross - long_notional
+
+        long_unit = (long_notional / Decimal(len(selected_longs))).quantize(
+            Decimal("0.00000001"), rounding=ROUND_DOWN
+        )
+        short_unit = (short_notional / Decimal(len(selected_shorts))).quantize(
+            Decimal("0.00000001"), rounding=ROUND_DOWN
+        )
+        max_name = Decimal(str(official.max_abs_name_weight))
+        if long_unit > max_name:
+            long_unit = max_name
             result.relaxations.append(
                 Relaxation(
                     step=1,
-                    description="reduced desired gross to satisfy the single-name cap",
+                    description="reduced desired gross to satisfy the single-name cap (long side)",
+                    estimated_cost="lower gross exposure than requested",
+                )
+            )
+            result.status = SolverStatus.RELAXED
+        if short_unit > max_name:
+            short_unit = max_name
+            result.relaxations.append(
+                Relaxation(
+                    step=1,
+                    description="reduced desired gross to satisfy the single-name cap (short side)",
                     estimated_cost="lower gross exposure than requested",
                 )
             )
             result.status = SolverStatus.RELAXED
 
         positions = [
-            TargetPosition(security_id=c.security_id, target_weight=weight)
+            TargetPosition(security_id=c.security_id, target_weight=long_unit)
             for c in selected_longs
         ] + [
-            TargetPosition(security_id=c.security_id, target_weight=-weight)
+            TargetPosition(security_id=c.security_id, target_weight=-short_unit)
             for c in selected_shorts
         ]
 
@@ -204,6 +283,7 @@ class ConstructionEngine:
         min_net = Decimal(str(official.min_net))
         max_net = Decimal(str(official.max_net))
         max_name = Decimal(str(official.max_abs_name_weight))
+        max_unit = max(long_unit, short_unit)
         result.official_results = [
             ConstraintResult(
                 name="position_count",
@@ -226,8 +306,8 @@ class ConstructionEngine:
             ConstraintResult(
                 name="max_abs_name_weight",
                 threshold=f"<= {official.max_abs_name_weight}",
-                value=str(weight),
-                status="pass" if weight <= max_name + tol else "fail",
+                value=str(max_unit),
+                status="pass" if max_unit <= max_name + tol else "fail",
             ),
             ConstraintResult(
                 name="short_market_cap",
@@ -252,7 +332,10 @@ class ConstructionEngine:
         result.diagnostics = {
             "selected_longs": str(len(selected_longs)),
             "selected_shorts": str(len(selected_shorts)),
-            "name_weight": str(weight),
+            "long_unit": str(long_unit),
+            "short_unit": str(short_unit),
+            "long_notional": str(long_notional),
+            "short_notional": str(short_notional),
             "gross": str(gross),
             "net": str(net),
             "relaxation_order": " -> ".join(RELAXATION_ORDER),
@@ -275,3 +358,19 @@ class ConstructionEngine:
                 selected.append(candidate)
                 seen.add(candidate.security_id)
         return selected
+
+
+def _quota(counts: dict[str, int], total: int) -> dict[str, int]:
+    """Largest-remainder split of total names proportional to sector counts."""
+    if not counts or total <= 0:
+        return {}
+    base_sum = sum(counts.values())
+    quota = {s: int(n / base_sum * total) for s, n in counts.items()}
+    remainder = sorted(
+        ((s, (n / base_sum * total) - quota[s]) for s, n in counts.items()),
+        key=lambda x: (-x[1], x[0]),
+    )
+    left = total - sum(quota.values())
+    for i in range(max(0, left)):
+        quota[remainder[i % len(remainder)][0]] += 1
+    return quota

@@ -283,6 +283,7 @@ def main() -> None:
             )
             candidates_alpha[sid] = alpha
             row = merged.loc[idx]
+            beta_value = row.get("beta_60m")
             candidates.append(
                 Candidate(
                     security_id=sid,
@@ -291,6 +292,7 @@ def main() -> None:
                     tradable=True,
                     incumbent=sid in prev_weights,
                     sector=str(row["gics"])[:2] if row["gics"] else "unknown",
+                    beta=float(beta_value) if beta_value == beta_value and beta_value is not None else 1.0,
                 )
             )
         if len(candidates) < 250:
