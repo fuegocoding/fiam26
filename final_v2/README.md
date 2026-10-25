@@ -6,6 +6,16 @@ reference workflow connects challenge, scoped admission, portfolio replay, accou
 dossiers and freeze evidence. Synthetic certificates authorize test books only. See
 `BUILD_STATUS.md`, `SPEC_COVERAGE.md` and `HANDOFF.md` for verified behavior and remaining evidence.
 
+## Complete application
+
+[Source-to-book commands and remaining gates](AUTONOMOUS_PLATFORM.md). The complete offline run uses the actual four-pod scheduler, registered paper adaptations, frozen independent checks, publications, covariance/shared-hedge CIO, fills/NAV and feedback:
+
+```sh
+python scripts/run_complete_platform.py --state-dir /tmp/pods/state --output-dir /tmp/pods/out
+```
+
+Two planted candidates are admitted, another remains shadow, and one fails design execution; all certificates are fixture-scoped. Real candidates are never admitted to make the demo succeed.
+
 ## Install and test
 
 ```bash
@@ -65,6 +75,10 @@ through `--executors-module your.module` (exposing `register_executors(registry)
 shipped `--dataset-manifest` built-ins can create an `evaluated_result`, only on the design partition.
 
 ## Real model (explicit opt-in, may bill)
+
+The strategy's exact lead/challenger/extractor trial is prepared separately in
+[LLM_TRIAL.md](LLM_TRIAL.md). Run `python scripts/try_strategy_models.py plan` for
+an offline plan. One-task live smoke checks passed for Groq gpt-oss and local Qwen8. The exact thinking lead endpoint and full quality/adoption benchmark remain pending.
 
 ```bash
 python scripts/run_pod_research.py run --state-dir "$S" --online --provider claude-code --model sonnet

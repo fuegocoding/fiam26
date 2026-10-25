@@ -39,13 +39,17 @@
       "title": "Source importer/catalogue",
       "software_status": "tested_bounded",
       "code": [
-        "pod_platform/data/catalogue.py"
+        "pod_platform/data/catalogue.py",
+        "pod_platform/data/discovery.py",
+        "pod_platform/data/carbonarc_discovery.py"
       ],
       "tests": [
         "tests/test_data_spine.py",
-        "tests/test_source_cards.py"
+        "tests/test_source_cards.py",
+        "tests/test_source_discovery.py",
+        "tests/test_carbonarc_discovery.py"
       ],
-      "acceptance_evidence": "Archive and catalogue fixture hashes/counts are checked. Unresolved source cards remain ineligible.",
+      "acceptance_evidence": "Concept search and host-registered read-only connector discovery reserve persistent budgets; metadata/samples never establish source eligibility.",
       "investment_validation": "unproven"
     },
     {
@@ -86,14 +90,18 @@
         "pod_platform/research/registry.py",
         "pod_platform/research/jobs.py",
         "pod_platform/application/stages.py",
-        "pod_platform/application/recovery.py"
+        "pod_platform/application/recovery.py",
+        "pod_platform/research/scheduler.py",
+        "pod_platform/research/registration.py"
       ],
       "tests": [
         "tests/test_registry.py",
         "tests/test_research_engine.py",
-        "tests/test_reference_workflow.py"
+        "tests/test_reference_workflow.py",
+        "tests/test_research_scheduler.py",
+        "tests/test_durable_research_ledger.py"
       ],
-      "acceptance_evidence": "Immutable registrations/jobs and completed-stage hash verification; immutable attempt IDs bind inputs before execution. Interrupted owned outputs are quarantined without deleting evidence. Crash/retry and hard process-exit tests preserve trial reservations and budget charges.",
+      "acceptance_evidence": "Durable registrations, trials and check access; weekly/matured-monthly quotas, semantic stopping and restart identity are exercised.",
       "investment_validation": "unproven"
     },
     {
@@ -134,13 +142,17 @@
       "software_status": "tested_bounded",
       "code": [
         "pod_platform/risk/envelope.py",
-        "pod_platform/risk/overlay.py"
+        "pod_platform/risk/overlay.py",
+        "pod_platform/allocation/covariance.py",
+        "pod_platform/allocation/coordination.py"
       ],
       "tests": [
         "tests/test_allocation_risk.py",
-        "tests/test_final_controls.py"
+        "tests/test_final_controls.py",
+        "tests/test_cio_coordination.py",
+        "tests/test_coordinated_replay.py"
       ],
-      "acceptance_evidence": "Feasible/infeasible books and measured post-fill reviews.",
+      "acceptance_evidence": "As-of covariance changes actual sizing; economic duplicate grouping, residual shared hedges, pending/partial fills and strict post-fee actual risk are tested.",
       "investment_validation": "unproven"
     },
     {
@@ -150,13 +162,17 @@
       "code": [
         "pod_platform/allocation/integration.py",
         "pod_platform/allocation/construction.py",
-        "pod_platform/application/publication.py"
+        "pod_platform/application/publication.py",
+        "pod_platform/application/system_workflow.py",
+        "pod_platform/application/research_loop.py"
       ],
       "tests": [
         "tests/test_allocation_risk.py",
-        "tests/test_reference_workflow.py"
+        "tests/test_reference_workflow.py",
+        "tests/test_complete_platform.py",
+        "tests/test_autonomous_pods.py"
       ],
-      "acceptance_evidence": "Only certified published forecasts trade; rejected candidates and stale publications excluded.",
+      "acceptance_evidence": "Actual registered four-pod research -> sealed challenge -> validated publications -> coordinated orders/fills/NAV; failed/shadow candidates never trade.",
       "investment_validation": "unproven"
     },
     {
@@ -188,9 +204,10 @@
       "tests": [
         "tests/test_reporting.py",
         "tests/test_daily_attribution.py",
-        "tests/test_supplied_daily.py"
+        "tests/test_supplied_daily.py",
+        "tests/test_institutional_daily_integrity.py"
       ],
-      "acceptance_evidence": "Exact accounting identities, factor/idiosyncratic and selection/sizing split, event/decay prerequisites. Daily fixture book is separate from monthly replay; no inferred daily history.",
+      "acceptance_evidence": "Self-financing dated cash/short/fees, missing held returns, total-loss decay and trading-day event windows are tested; production daily impact/borrow realism remains external.",
       "investment_validation": "unproven"
     },
     {
@@ -199,14 +216,17 @@
       "software_status": "tested_bounded",
       "code": [
         "pod_platform/papers/service.py",
-        "pod_platform/application/methods.py"
+        "pod_platform/application/methods.py",
+        "pod_platform/papers/adaptations.py"
       ],
       "tests": [
         "tests/test_papers.py",
         "tests/test_paper_watches.py",
-        "tests/test_reference_workflow.py"
+        "tests/test_reference_workflow.py",
+        "tests/test_paper_adaptations.py",
+        "tests/test_autonomous_pods.py"
       ],
-      "acceptance_evidence": "Source-grounded cached paper evidence and import-resolved method implementations; online providers not called in this completion.",
+      "acceptance_evidence": "Grounded full-text claims and reviewed recipes register before execution, persist frozen models/results and feed independent challenge; incomplete papers require review.",
       "investment_validation": "unproven"
     },
     {
@@ -215,13 +235,17 @@
       "software_status": "tested_bounded",
       "code": [
         "pod_platform/application/diagnostics.py",
-        "pod_platform/research/memory.py"
+        "pod_platform/research/memory.py",
+        "pod_platform/research/scheduler.py",
+        "pod_platform/application/research_loop.py"
       ],
       "tests": [
         "tests/test_reference_workflow.py",
-        "tests/test_pod_research.py"
+        "tests/test_pod_research.py",
+        "tests/test_research_scheduler.py",
+        "tests/test_complete_platform.py"
       ],
-      "acceptance_evidence": "Persisted failure taxonomy, queue and prior-attempt retrieval APIs; automatic recurring scheduler is not claimed.",
+      "acceptance_evidence": "Scheduled weekly/matured-monthly review, failure/category triggers, finite lanes and actual combined-fund diagnostic feedback share persistent queues; no automatic retraining after each loss.",
       "investment_validation": "unproven"
     },
     {
@@ -247,14 +271,19 @@
       "code": [
         "pod_platform/application/integrity.py",
         "pod_platform/research/certificates.py",
-        "pod_platform/research/promotion.py"
+        "pod_platform/research/promotion.py",
+        "pod_platform/research/challenge_bridge.py",
+        "pod_platform/research/bridge_economics.py"
       ],
       "tests": [
         "tests/test_admission_boundaries.py",
         "tests/test_certificate_scope.py",
-        "tests/test_reference_workflow.py"
+        "tests/test_reference_workflow.py",
+        "tests/test_challenge_bridge.py",
+        "tests/test_challenge_hardening.py",
+        "tests/test_autonomous_pods.py"
       ],
-      "acceptance_evidence": "Baseline/placebo/check/stability/multiplicity criteria and enforceable environment/source/expiry restrictions. Synthetic evidence cannot issue formation certificates.",
+      "acceptance_evidence": "Frozen model/source/policy hashes, producer-sealed protected outcomes, measured net costs and independent gates; recover original certificate after interruption without a second check.",
       "investment_validation": "unproven"
     },
     {
@@ -315,14 +344,18 @@
       "code": [
         "pod_platform/agents/registry.py",
         "pod_platform/agents/provider.py",
-        "pod_platform/agents/budgets.py"
+        "pod_platform/agents/budgets.py",
+        "pod_platform/agents/strategy_models.py",
+        "pod_platform/agents/model_trials.py"
       ],
       "tests": [
         "tests/test_agents.py",
         "tests/test_llm_provider.py",
-        "tests/test_persistent_budgets.py"
+        "tests/test_persistent_budgets.py",
+        "tests/test_strategy_model_trials.py",
+        "tests/test_autonomous_pods.py"
       ],
-      "acceptance_evidence": "Checkpoint temporal denial, adoption and durable call/variant budgets tested. Actual exact-checkpoint evidence and fixed-task adoption comparison require operator/provider evidence.",
+      "acceptance_evidence": "Exact role profiles, no substitution, persistent failed-call charges and typed schema output; actual three-model benchmark and historical adoption remain unproven.",
       "investment_validation": "unproven"
     }
   ],
@@ -434,7 +467,7 @@
       "work_packages": [
         "W13"
       ],
-      "assessment": "Persistent diagnostics/queue and stopping-rule APIs; learned scheduling remains advanced work."
+      "assessment": "Weekly/matured-monthly bounded research scheduler, semantic stops and combined-fund diagnostic review are connected and functionally tested."
     },
     {
       "section": "13",
@@ -614,5 +647,21 @@
     "Dated daily fills/borrow/liquidity and event calendar for production reporting realism.",
     "Genuine post-commitment prospective outcomes; synthetic demo cannot establish investment performance or LLM skill.",
     "Arcana live vendor schema/API and receipt verification require a refreshed authenticated client session; local review mapping is not vendor approval."
-  ]
+  ],
+  "integrated_application": {
+    "entrypoint": "scripts/run_complete_platform.py",
+    "proof_tests": [
+      "tests/test_autonomous_pods.py",
+      "tests/test_complete_platform.py"
+    ],
+    "fixture_only": true,
+    "live_investment_validation": "unproven",
+    "external_gates": [
+      "original lead endpoint and full model adoption benchmark",
+      "production source/vintage/entity and cost/borrow evidence",
+      "successful real candidate independent admission",
+      "live Arcana vendor compatibility",
+      "prospective outcomes"
+    ]
+  }
 }

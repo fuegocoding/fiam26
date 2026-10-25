@@ -1,0 +1,96 @@
+{
+  "schema_version": "strategy_roster_proposal.v1",
+  "spec_sections": [
+    "20.15",
+    "20.18",
+    "20.19",
+    "20.20"
+  ],
+  "historical_policy": "release_gated",
+  "cutoff_qualified_backcast_enabled": false,
+  "frozen_roster_id": null,
+  "backend_admission_policy_id": null,
+  "current_trial": {
+    "lead": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+    "challenger": "openai/gpt-oss-20b",
+    "extractor": "Qwen/Qwen3-8B",
+    "lead_upgrade": "Qwen/Qwen3.6-35B-A3B"
+  },
+  "trial_default_lead": "lead",
+  "upgrade_automatic": false,
+  "periods": [
+    {
+      "proposed_start": "2021-01-01",
+      "proposed_end": "2021-10-31",
+      "lead": null,
+      "challenger": "EleutherAI/gpt-j-6B",
+      "extractor": "rules",
+      "limitations": "NeoX proposal is Policy B only and disabled; GPT-J needs verified release/adoption."
+    },
+    {
+      "proposed_start": "2021-11-01",
+      "proposed_end": "2022-12-31",
+      "lead": "bigscience/T0pp",
+      "challenger": "EleutherAI/gpt-j-6B",
+      "extractor": "original T0 family and rules",
+      "limitations": "Proposed dates are not verified release or adoption dates."
+    },
+    {
+      "proposed_start": "2023-01-01",
+      "proposed_end": "2023-09-30",
+      "lead": "google/flan-t5-xxl",
+      "challenger": "EleutherAI/gpt-neox-20b",
+      "extractor": "smaller FLAN-T5",
+      "limitations": "Bounded QA/extraction benchmark required."
+    },
+    {
+      "proposed_start": "2023-10-01",
+      "proposed_end": "2023-12-31",
+      "lead": "mistralai/Mistral-7B-Instruct-v0.1",
+      "challenger": "google/flan-t5-xxl",
+      "extractor": "mistralai/Mistral-7B-Instruct-v0.1",
+      "limitations": "Exact checkpoint evidence required."
+    },
+    {
+      "proposed_start": "2024-01-01",
+      "proposed_end": "2024-09-30",
+      "lead": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+      "challenger": "meta-llama/Llama-2-13b-chat-hf",
+      "extractor": "mistralai/Mistral-7B-Instruct-v0.1",
+      "limitations": "Chat tuning chronology assessed separately from base cutoff."
+    },
+    {
+      "proposed_start": "2024-10-01",
+      "proposed_end": "2025-05-31",
+      "lead": "Qwen/Qwen2.5-32B-Instruct",
+      "challenger": "google/gemma-2-9b-it",
+      "extractor": "Qwen/Qwen2.5-7B-Instruct",
+      "limitations": "Exact checkpoint evidence required."
+    },
+    {
+      "proposed_start": "2025-06-01",
+      "proposed_end": "2025-08-31",
+      "lead": "Qwen/Qwen3-32B",
+      "challenger": "google/gemma-2-9b-it",
+      "extractor": "Qwen/Qwen3-8B",
+      "limitations": "Extractor non-thinking."
+    },
+    {
+      "proposed_start": "2025-09-01",
+      "proposed_end": "2026-04-30",
+      "lead": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+      "challenger": "openai/gpt-oss-20b",
+      "extractor": "Qwen/Qwen3-8B",
+      "limitations": "120b optional only after resources and benchmark justify it."
+    },
+    {
+      "proposed_start": "2026-05-01",
+      "proposed_end": null,
+      "lead": "Qwen/Qwen3.6-35B-A3B",
+      "challenger": "openai/gpt-oss-20b",
+      "extractor": "Qwen/Qwen3-8B",
+      "limitations": "Upgrade requires gate; otherwise keep eligible incumbent or deterministic fallback."
+    }
+  ],
+  "notice": "Proposed schedule only. No entry is admitted, no release dates are inferred, and later checkpoints cannot be routed to earlier decisions."
+}

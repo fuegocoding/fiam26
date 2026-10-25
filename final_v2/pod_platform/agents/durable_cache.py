@@ -494,7 +494,8 @@ class CachedStructuredExtractor:
                 provider_is_mock=bool(getattr(self.provider, "is_mock", False)),
                 call_provenance=provenance,
             )
-        request = LLMRequest(system=self.system_prompt, user=user_text, params=params, role=role)
+        request = LLMRequest(system=self.system_prompt, user=user_text, params=params, role=role,
+            response_schema=self.schema.model_json_schema())
         result = call_structured(
             self.provider, request, self.schema, budget=self.budget, clock=self.clock, validator=validator
         )

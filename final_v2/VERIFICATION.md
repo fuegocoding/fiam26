@@ -1,48 +1,28 @@
 # Verification — 2026-10-25
 
-Verified against the integrated workspace before the checkpoint commit:
+The final integrated source-to-book workspace passed **836 tests**, with one sandbox-dependent socket check skipped and three existing NumPy/pandas deprecation warnings (54.21 seconds). This includes the final live-clock restart/default-publication assertion.
 
-- Full `final_v2/tests` offline suite: **653 passed, 1 skipped**, 20.10 seconds.
-  The skipped test needs loopback sockets unavailable in this sandbox.
-- Parquet loader/CSV parity exercised using the cached compatible pyarrow wheel;
-  the full built-in executor suite passed all 53 tests.
-- All 170 Python files under `final_v2/` parsed successfully.
-- Eight CLI `--help` checks passed: paper research, pod research, paper watches,
-  controlled replay, strategy campaign, reference workflow, daily reporting and Arcana export.
-- Fresh integrated reference demo returned `software_status=PASS` and
-  `judge_status=COMPLETE_SOFTWARE_FIXTURE`; investment validation remained `UNPROVEN`
-  and prospective evaluation `INCOMPLETE`.
-- Full paired books, admission/environment gates, persistent budgets, namespace isolation,
-  tamper detection, normal resume and interrupted/hard-exit recovery are covered in tests.
-- Staged whitespace check passed. Common credential patterns were checked in changed
-  text files; local credentials and large source data are excluded from Git.
+- Actual four-pod paper/evidence -> structured extractor/lead/challenger -> reviewed adaptation -> registration before data access -> executor -> frozen independent check -> scoped publication -> coordinated CIO -> risk -> partial fills -> NAV/dossier -> feedback review is exercised in `test_autonomous_pods.py` and `test_complete_platform.py`.
+- Positive fixtures measure two admissions. Valuation stays shadow after a timing-placebo failure; events fails design evidence sufficiency. No fixture certificate authorizes a competition book.
+- CIO tests verify covariance-sensitive actual holdings, economic duplicates, source-only overlap diagnostics, three shared-hedge requests netted once, current holdings/pending orders, partial-fill reconciliation and strict actual post-fee risk. Fee/executable-book headroom does not weaken limits.
+- Failure checks cover producer-bound evidence, tampering, private namespaces/protected partitions, durable trial and model budgets, failed-call charging, source/profile changes, incompatible horizons, callback retry and a crash between sealed challenge and publication without a second check.
+- Publication loads current feature columns without labels; native target resolution and monthly return bridge units/horizons remain distinct.
+- Daily accounting checks cover cash and short proceeds, fee-dollar allocation, drift, missing held returns, total losses, decay coverage and four-trading-day event windows. Existing supplied-data January 2021 smoke reconciled 19 days to independent end NAV `1000102.449274516682995535700`; this is accounting verification, not strategy evidence.
+- 211 Python files parsed; eight new CLI help paths passed. Actual stdio MCP initialize/tools-list/catalogue-call passed with 31 tools; an injected rival namespace was denied. No daemon/model/network call is needed for default startup.
+- Fresh `run_complete_platform.py --mode demo` completed two accounted periods, four validated publication batches, one shared hedge and two feedback reviews. Investment validation remains unproven; prospective status is not prospective.
+- Fresh `run_complete_platform.py --mode research` ran the official manifest: all four real candidates rejected, zero admissions/publications/orders. The current campaign measured 12 variants. Gates were retained.
 
-Real-input checks (saved under `artifacts/verification_20261025/`):
+Compact reproducible receipts: [integrated acceptance](artifacts/verification_20261025/integrated-acceptance.json), [official research acceptance](artifacts/verification_20261025/official-research-acceptance.json), [real design summary](artifacts/verification_20261025/latest-real-design-summary.json), [CLI/MCP smoke](artifacts/verification_20261025/cli-mcp-smoke.json). Raw data, private authority keys, credentials and detailed runtime artifacts remain ignored under `data/`, `local/` and `.pod_state/`.
 
-- Official daily source: 12,175,448 rows, 6,827 identifiers, zero duplicate identifier/date
-  keys; dates 2014-01-02 through 2026-09-28. Returns retain supplied missing/outlier values.
-- Four-charter design campaign: 12 variants, zero variant execution failures, all four
-  candidates rejected. No strategy admitted or deployed and no protected challenge consumed.
-- Supplied daily January 2021 reporting smoke: 19 trading days, zero missing selected
-  returns, independently reconciled end NAV `1000102.449274516682995535700`.
-  This uses an explicit small holding/fill and ex-post monthly TB3MS conversion; it is
-  accounting verification, not a strategy result or forecast input.
-- Arcana OAuth CLI returned `Successfully logged in` for `https://app.arcana.io/mcp`.
-  Current session did not dynamically expose the new tools; live analytics/schema/upload
-  remains unverified and no portfolio was uploaded.
+Actual model smoke evidence: Groq gpt-oss passed one chronology task in 0.930 seconds (335 input/562 completion tokens). Local Qwen8 initially failed its output contract twice, then passed with a typed schema and explicit public choices; observed inference GPU memory was 5,560,992,384 bytes on the working RTX3070Ti. Failed attempts remain recorded. This is not the complete benchmark or adoption evidence. The original thinking lead endpoint remains unconfigured. Earlier arXiv/OpenAlex and tool-less Claude draft checks succeeded. Carbon Arc read-only catalogue discovery returned actual card-spending/foot-traffic metadata; it does not establish raw-data entitlement or historical vintage.
 
-Earlier live checks in the same build:
+Arcana OAuth authenticated and a fresh client discovered read-only tools. No vendor portfolio-upload schema/tool was exposed in that inspection; no live upload or vendor-compatible export is claimed.
 
-- arXiv and OpenAlex each returned two papers.
-- Tool-less Claude structured JSON and one valid pod draft succeeded. An oversized
-  response was rejected and retained as a failure.
-- Four-pod offline demo completed four mock jobs; mock outputs were never model skill.
-
-Reproduce after installing `.[research,test]`, from `final_v2/`:
+Reproduce from `final_v2/` after `pip install -e '.[research,test]'`:
 
 ```sh
 python -m pytest -q -p no:cacheprovider
+python scripts/run_complete_platform.py --state-dir /tmp/complete/state --output-dir /tmp/complete/out
 ```
 
-This laptop used `local/carbonarc-venv/bin/python` with locally cached pytest and pyarrow,
-through temporary wrappers under `/tmp/fiam26-complete/`. No heavy training was started.
+This laptop uses `local/carbonarc-venv/bin/python` with locally cached pytest/pyarrow via a temporary wrapper. No GPU training or heavy market backtest was started. See [AUTONOMOUS_PLATFORM.md](AUTONOMOUS_PLATFORM.md) for configuration and the explicit remaining operational/evidence gates.

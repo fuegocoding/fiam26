@@ -54,11 +54,21 @@ PERMISSIONS: dict[str, frozenset[str]] = {
             "research.submit",
             "runs.read",
             "notes.append_role",
+            "catalogue.search",
+            "catalogue.describe",
+            "source.discover",
+            "source.sample",
+            "source.propose",
         }
     ),
-    ROLE_RESEARCH: frozenset({"runs.read", "research.read_all_jobs", "notes.append_role", "publication.read_all"}),
+    ROLE_RESEARCH: frozenset(
+        {"runs.read", "research.read_all_jobs", "notes.append_role", "publication.read_all", "catalogue.search", "catalogue.describe"}
+    ),
     ROLE_INTEGRITY: frozenset(
         {
+            "catalogue.search",
+            "catalogue.describe",
+            "source.review",
             "workspace.read_any",
             "publication.read_all",
             "integrity.evaluate_protected",
@@ -76,7 +86,16 @@ PERMISSIONS: dict[str, frozenset[str]] = {
 
 # actions where the target namespace must equal the caller's own namespace
 OWN_NAMESPACE_ACTIONS = frozenset(
-    {"workspace.write_own", "workspace.read_own", "publication.publish", "publication.read_own", "research.submit"}
+    {
+        "workspace.write_own",
+        "workspace.read_own",
+        "publication.publish",
+        "publication.read_own",
+        "research.submit",
+        "source.discover",
+        "source.sample",
+        "source.propose",
+    }
 )
 
 

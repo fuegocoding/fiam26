@@ -1,3 +1,5 @@
+The new integrated acceptance path and explicit external gates are in [AUTONOMOUS_PLATFORM.md](AUTONOMOUS_PLATFORM.md). `tests/test_autonomous_pods.py` and `tests/test_complete_platform.py` exercise actual registered services, admitted/rejected outcomes, shared hedges, fills/NAV, feedback and restart/tamper denial. These extend the bounded component map below; no full investment-readiness claim is made.
+
 # Specification implementation coverage
 
 Local software acceptance map; `tested_bounded` means executable positive/negative assertions, never investment validation or file-presence completeness. Exact code/test paths are in [the machine ledger](configs/spec_coverage.json).
@@ -17,8 +19,8 @@ Evaluation cutoff: **2026-08-31**. Official `data/dsf_mini_from_2014.csv` is ava
 | W09 | Integration/construction | tested_bounded | Only certified published forecasts trade; rejected candidates and stale publications excluded. |
 | W10 | Execution/costs | tested_bounded | Participation, partial fills, pending orders and accounting integration; actual market impact requires real calibration. |
 | W11 | Reporting/exports | tested_bounded | Exact accounting identities, factor/idiosyncratic and selection/sizing split, event/decay prerequisites. Daily fixture book is separate from monthly replay; no inferred daily history. |
-| W12 | Paper/method service | tested_bounded | Source-grounded cached paper evidence and import-resolved method implementations; online providers not called in this completion. |
-| W13 | Diagnostics/private memory | tested_bounded | Persisted failure taxonomy, queue and prior-attempt retrieval APIs; automatic recurring scheduler is not claimed. |
+| W12 | Paper/method service | tested_bounded | Full-text claims -> reviewed adaptation -> preregistered executor -> frozen model -> sealed challenge/publication; incomplete evidence fails closed. |
+| W13 | Diagnostics/private memory | tested_bounded | Persisted failure taxonomy, queue and prior-attempt retrieval APIs; weekly/matured-monthly scheduling and feedback reviews are now connected (see `test_research_scheduler.py` and `test_complete_platform.py`). |
 | W14 | Four charters | tested_bounded | Four registered measured candidates; demo contains actual rejection. Real campaign design results never fabricate admission. |
 | W15 | Challenge/promotion | tested_bounded | Baseline/placebo/check/stability/multiplicity criteria and enforceable environment/source/expiry restrictions. Synthetic evidence cannot issue formation certificates. |
 | W16 | Agent exception/twin | tested_bounded | Two full self-financing ControlledReplay arms on identical bound fixture inputs include all periods, path-dependent fills, fees, borrow, cash and risk. Injectable model decisions require sealed admitted checkpoint/adoption, temporal/context validation, durable cache and persistent budget. Default and mock results never establish LLM skill. |
@@ -39,7 +41,7 @@ Evaluation cutoff: **2026-08-31**. Official `data/dsf_mini_from_2014.csv` is ava
 | 9 | tested_bounded | Point-in-time identity/availability and supplied daily ingestion; no daily interpolation. |
 | 10 | tested_bounded | Paper evidence and real implementation method registry. |
 | 11 | tested_bounded | Registered hypotheses and explicit conventional bridge; fixture signal is planted. |
-| 12 | tested_bounded | Persistent diagnostics/queue and stopping-rule APIs; learned scheduling remains advanced work. |
+| 12 | tested_bounded | Persistent diagnostics/queue and stopping-rule APIs; bounded recurring scheduling and actual fund-feedback review are exercised; learned research ranking remains an optional extension. |
 | 13 | tested_bounded | Registration before outcome access, distinct partitions and trial accounting; statistics state dependence limitations. |
 | 14 | tested_bounded | Measured criteria and scoped certificates; real campaigns cannot self-admit. |
 | 15 | tested_bounded | Explicit return unit/horizon/bridge and uncertainty references. |

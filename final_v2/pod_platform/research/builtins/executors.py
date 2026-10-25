@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -155,6 +156,7 @@ class BuiltinContext:
             "manifest_hash": self.manifest.manifest_hash,
             "dataset_approved": dataset.spec.approved,
         }
+        report["candidate_artifact"] = self._persist_candidate(registration_id, variant_name, spec_hash, spec, cfg, core)
         report["report_hash"] = canonical_digest(report)
         result = ExperimentResult(
             registration_id=registration_id,
@@ -170,6 +172,34 @@ class BuiltinContext:
             fits=int(core["metrics"].get("trial_fold_evaluations", 0)), ridge=cfg.method_id == "ridge",
         )
         return result
+
+    def candidate_path(self, spec_hash: str) -> Optional[Path]:
+        return None if self.ledger.path is None else self.ledger.path.parent / "candidates" / f"{spec_hash}.json"
+
+    def _persist_candidate(self, registration_id, variant_name, spec_hash, spec, cfg, core) -> Optional[dict]:
+        """Write the immutable candidate provenance (spec, frozen design-trained model, exact design predictions).
+
+        Needs a persistent ``state_dir``; the report carries the artifact digest so the registered ledger report binds it.
+        """
+        path = self.candidate_path(spec_hash)
+        if path is None:
+            return None
+        model, rows = core["frozen_model"], core["predictions"]
+        artifact = {
+            "schema_version": "builtin_candidate.v1", "registration_id": registration_id, "variant_name": variant_name,
+            "spec_hash": spec_hash, "spec": spec, "params": cfg.as_dict(), "frozen_model": model,
+            "model_hash": canonical_digest(model), "predictions": rows, "predictions_hash": canonical_digest(rows),
+        }
+        text = json.dumps(artifact, sort_keys=True, allow_nan=False)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.read_text(encoding="utf-8") != text:
+            raise DataIntegrityError("candidate artifact exists with different content; refusing to overwrite immutable provenance")
+        if not path.exists():
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, path)
+        return {"file": path.name, "artifact_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "model_hash": artifact["model_hash"], "predictions_hash": artifact["predictions_hash"], "prediction_rows": len(rows)}
 
     @staticmethod
     def _report(executor_id, registration_id, variant_name, spec, spec_hash, cfg, dataset, recipe, asof, meta, core) -> dict:

@@ -316,16 +316,54 @@ def load_dsf_daily(
         ),
     )
     d = table.to_pandas()
-    if permnos is not None:
-        d = d.loc[d["permno"].isin(permnos)]
     if first_date is not None:
         first_int = int(first_date.strftime("%Y%m%d"))
         d = d.loc[d["date"] >= first_int]
     if last_date is not None:
         last_int = int(last_date.strftime("%Y%m%d"))
         d = d.loc[d["date"] <= last_int]
+    # Calendar comes from every source security in range, before held-name filtering.
+    calendar = pd.to_datetime(sorted(d['date'].dropna().unique()), format='%Y%m%d')
+    if permnos is not None:
+        d = d.loc[d["permno"].isin(permnos)].copy()
     d["day"] = pd.to_datetime(d["date"], format="%Y%m%d")
-    return d.sort_values(["permno", "day"]).reset_index(drop=True)
+    d = d.sort_values(["permno", "day"]).reset_index(drop=True)
+    d.attrs['trading_calendar'] = list(calendar)
+    return d
+
+
+def _daily_pivot(dsf: pd.DataFrame) -> pd.DataFrame:
+    required = {'day', 'permno', 'daily_return'}
+    if not required.issubset(dsf):
+        raise ValueError('daily input requires day, permno and daily_return')
+    if dsf[['day', 'permno']].isna().any().any() or dsf.duplicated(['day', 'permno']).any():
+        raise ValueError('daily identifiers/dates must be present and unique')
+    values = pd.to_numeric(dsf['daily_return'], errors='raise')
+    observed = values.dropna()
+    if not np.isfinite(observed).all() or (observed < -1).any():
+        raise ValueError('daily total returns must be finite and at least -1; never clipped')
+    frame = dsf.assign(daily_return=values, day=pd.to_datetime(dsf['day']))
+    px = frame.pivot(index='day', columns='permno', values='daily_return').sort_index()
+    calendar = dsf.attrs.get('trading_calendar')
+    if calendar is not None:
+        dates = pd.DatetimeIndex(calendar).sort_values()
+        if dates.has_duplicates or dates.isna().any() or not px.index.isin(dates).all():
+            raise ValueError('invalid explicit daily source calendar')
+        px = px.reindex(dates)
+    return px
+
+
+def _held_daily(px: pd.DataFrame, month, weights) -> pd.DataFrame:
+    days = px.loc[px.index.to_period('M') == month]
+    if days.empty:
+        raise ValueError(f'no supplied daily observations for held month {month}')
+    missing = set(weights) - set(days.columns)
+    if missing:
+        raise ValueError(f'missing daily held identifiers: {sorted(missing)}')
+    selected = days[list(weights)]
+    if selected.isna().any().any():
+        raise ValueError(f'missing held daily returns in {month}; supply explicit exit/suspense evidence')
+    return selected
 
 
 def evaluate_daily_spine(
@@ -334,7 +372,11 @@ def evaluate_daily_spine(
     fred: pd.DataFrame,
     monthly_df: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
-    """Builds the daily mark-to-market return series, rolling 252d beta, and daily metrics."""
+    """Daily total-return analytics; monthly cost allocation is a declared approximation.
+
+    Use reporting.daily.reconcile_daily with actual dated fills/cash for an exact
+    execution ledger. Monthly target weights do not establish daily entry dates.
+    """
     tbill = fred[fred["series"] == "TB3MS"].dropna(subset=["value"]).copy()
     tbill["day"] = pd.to_datetime(tbill["date"])
     rf_daily = (tbill.set_index("day")["value"] / 100.0 / TRADING_DAYS).sort_index()
@@ -344,49 +386,57 @@ def evaluate_daily_spine(
     spx_close = spx_rows.set_index("day")["value"].sort_index()
     spx_ret = spx_close.pct_change().dropna()
 
-    px = dsf.pivot(index="day", columns="permno", values="daily_return")
+    px = _daily_pivot(dsf)
     total_rows = []
+    wealth = 1.0
     for month in sorted(books):
         w = {int(k): float(v) for k, v in books[month].items() if v != 0.0}
         if not w:
             continue
-        days = px.loc[px.index.to_period("M") == month]
-        if days.empty:
-            continue
+        if not all(np.isfinite(v) for v in w.values()):
+            raise ValueError('held daily weights must be finite')
+        days = _held_daily(px, month, w)
         weights = pd.Series(w, dtype=float)
-        cols = [c for c in weights.index if c in days.columns]
+        cols = list(weights.index)
         # Amortize monthly trading + borrow drag across trading days if monthly_df supplied
         daily_drag = 0.0
         if monthly_df is not None and month in monthly_df.index:
             m_row = monthly_df.loc[month]
-            daily_drag = float(m_row["cost"] + m_row["borrow"]) / max(len(days), 1)
+            monthly_drag = float(m_row["cost"] + m_row["borrow"])
+            if not np.isfinite(monthly_drag) or monthly_drag < 0:
+                raise ValueError('monthly modeled costs must be finite and nonnegative')
+            daily_drag = wealth * monthly_drag / len(days)
         for day, row in days[cols].iterrows():
-            r = row.fillna(0.0)
+            r = row
             rfd = float(rf_daily.get(day, np.nan))
             if not np.isfinite(rfd):
                 rfd = float(rf_daily.asof(day))
+            if not np.isfinite(rfd):
+                raise ValueError(f'missing dated risk-free input at {day}')
             pnl = float((weights[cols] * r).sum())
-            net_d = rfd + pnl - daily_drag
+            cash_income = (1.0-float(weights.sum())) * rfd
+            cost_fraction = daily_drag / wealth
+            net_d = cash_income + pnl - cost_fraction
+            if not np.isfinite(net_d) or net_d <= -1:
+                raise ValueError(f'nonpositive or invalid daily NAV at {day}')
             total_rows.append(
                 {
                     "day": day,
                     "month": str(month),
-                    "gross_daily": rfd + pnl,
+                    "gross_daily": cash_income + pnl,
                     "total": net_d,
                     "rf": rfd,
                     "benchmark_daily": rfd + HURDLE / TRADING_DAYS,
                 }
             )
-            denom = 1.0 + pnl + rfd
-            if denom > 0:
-                weights[cols] = weights[cols] * (1.0 + r + rfd) / denom
+            wealth *= 1.0 + net_d
+            weights[cols] = weights[cols] * (1.0 + r) / (1.0 + net_d)
 
     if not total_rows:
         return pd.DataFrame(), {}
 
     d = pd.DataFrame(total_rows).set_index("day")
     d = d.join(spx_ret.rename("spx"), how="left")
-    d["spx"] = d["spx"].fillna(0.0)
     d["excess"] = d["total"] - d["rf"]
     d["mkt_excess"] = d["spx"] - d["rf"]
     d["active"] = d["total"] - d["benchmark_daily"]
@@ -399,6 +449,11 @@ def evaluate_daily_spine(
     worst = d["total"].idxmin()
     best = d["total"].idxmax()
     summary: dict[str, object] = {
+        'evidence_class': 'daily_return_analytics_with_monthly_target_and_cost_assumptions',
+        'actual_dated_execution_ledger': False,
+        'monthly_cost_timing': 'allocated equally in dollars over supplied source trading days; modeled, not actual fills',
+        'missing_held_returns': 'fail_closed',
+        'missing_market_returns': int(d['spx'].isna().sum()),
         "days": int(len(d)),
         "max_one_day_loss": float(d["total"].min()),
         "max_one_day_loss_date": str(pd.Timestamp(worst).date()),
@@ -431,57 +486,53 @@ def daily_alpha_decay(
     predictions: pd.DataFrame,
     score_col: str = "final_score",
     horizons_days: tuple[int, ...] = (1, 3, 5, 10, 21, 42, 63),
-) -> dict[str, float]:
+) -> dict[str, object]:
     """Measures daily top-minus-bottom quintile cumulative return spread after formation."""
-    px = dsf.pivot(index="day", columns="permno", values="daily_return").fillna(0.0)
-    log_ret = np.log1p(px.clip(lower=-0.99))
-    cum_log = log_ret.cumsum()
-
+    px = _daily_pivot(dsf)
     preds = predictions[["return_month", "permno", score_col]].dropna().copy()
     preds["return_month"] = pd.to_datetime(preds["return_month"]).dt.to_period("M")
-
-    # Map each return_month to its first trading day index in px
-    month_first_idx: dict[pd.Period, int] = {}
-    day_periods = px.index.to_period("M")
-    for idx_pos, per in enumerate(day_periods):
-        if per not in month_first_idx:
-            month_first_idx[per] = idx_pos
-
-    spreads_by_h: dict[int, list[float]] = {h: [] for h in horizons_days}
+    spreads_by_h = {h: [] for h in horizons_days}
+    missing_by_h = {h: 0 for h in horizons_days}
     for month, grp in preds.groupby("return_month"):
-        if month not in month_first_idx:
+        # Rank the formation cohort before observing future return availability.
+        if len(grp) < 50 or grp['permno'].duplicated().any():
             continue
-        start_pos = month_first_idx[month]
-        if start_pos == 0:
+        if not np.isfinite(grp[score_col]).all():
+            raise ValueError('decay scores must be finite')
+        positions = np.flatnonzero(px.index.to_period('M') == month)
+        if not len(positions):
             continue
-        base_pos = start_pos - 1
-        valid_p = [int(p) for p in grp["permno"] if int(p) in cum_log.columns]
-        if len(valid_p) < 50:
-            continue
-        sub = grp[grp["permno"].isin(valid_p)].copy()
-        sub["q"] = pd.qcut(sub[score_col].rank(method="first"), 5, labels=False)
-        top_p = sub.loc[sub["q"] == 4, "permno"].astype(int).tolist()
-        bot_p = sub.loc[sub["q"] == 0, "permno"].astype(int).tolist()
+        # Information at preceding month end, entry at first trading close;
+        # first earned total return belongs to the second supplied trading day.
+        start_pos = int(positions[0])+1
+        sub = grp.copy()
+        sub['q'] = pd.qcut(sub[score_col].rank(method='first'), 5, labels=False)
+        top = sub.loc[sub['q']==4, 'permno'].astype(int).tolist()
+        bottom = sub.loc[sub['q']==0, 'permno'].astype(int).tolist()
         for h in horizons_days:
-            end_pos = base_pos + h
-            if end_pos >= len(cum_log):
+            if h < 1:
+                raise ValueError('decay horizons must be positive trading-day counts')
+            if start_pos+h > len(px):
+                continue  # Outcome is not yet mature; never invent a zero return.
+            if set(top+bottom)-set(px.columns):
+                missing_by_h[h] += 1
                 continue
-            fwd_top = np.expm1(cum_log.iloc[end_pos][top_p] - cum_log.iloc[base_pos][top_p]).mean()
-            fwd_bot = np.expm1(cum_log.iloc[end_pos][bot_p] - cum_log.iloc[base_pos][bot_p]).mean()
-            spreads_by_h[h].append(float(fwd_top - fwd_bot))
-
-    out: dict[str, float] = {}
+            window = px.iloc[start_pos:start_pos+h][top+bottom]
+            if window.isna().any().any():
+                missing_by_h[h] += 1
+                continue
+            cumulative = (1.0+window).prod()-1.0  # A total loss (-1) is preserved.
+            spreads_by_h[h].append(float(cumulative[top].mean()-cumulative[bottom].mean()))
+    out = {'basis': 'gross cohort diagnostic; first earned return after first trading-day close',
+           'missing_return_policy': 'exclude entire affected cohort/horizon and disclose count; no clipping or zero fill'}
     for h, vals in spreads_by_h.items():
         arr = np.array(vals, dtype=float)
-        arr = arr[np.isfinite(arr)]
-        if len(arr) > 1 and arr.std() > 0:
-            out[f"quintile_spread_{h}d_cum_bps"] = float(arr.mean() * 1e4)
-            out[f"quintile_spread_{h}d_ann"] = float(arr.mean() * (TRADING_DAYS / h))
-            out[f"quintile_spread_{h}d_t"] = float(arr.mean() / arr.std() * math.sqrt(len(arr)))
-        else:
-            out[f"quintile_spread_{h}d_cum_bps"] = 0.0
-            out[f"quintile_spread_{h}d_ann"] = 0.0
-            out[f"quintile_spread_{h}d_t"] = 0.0
+        out[f'quintile_spread_{h}d_cohorts'] = len(arr)
+        out[f'quintile_spread_{h}d_missing_cohorts'] = missing_by_h[h]
+        out[f'quintile_spread_{h}d_cum_bps'] = float(arr.mean()*1e4) if len(arr) else None
+        out[f'quintile_spread_{h}d_ann'] = float(arr.mean()*TRADING_DAYS/h) if len(arr) else None
+        out[f'quintile_spread_{h}d_t'] = (float(arr.mean()/arr.std(ddof=1)*math.sqrt(len(arr)))
+            if len(arr)>1 and arr.std(ddof=1)>0 else None)
     return out
 
 
@@ -489,7 +540,7 @@ def earnings_window_decomposition(
     books: dict[pd.Period, dict[int, float]],
     dsf: pd.DataFrame,
     external_path: Path,
-) -> dict[str, float]:
+) -> dict[str, object]:
     """Decomposes realized daily portfolio P&L into earnings announcement windows [-1d, +2d] vs ex-earnings days."""
     ext = pd.read_parquet(
         external_path,
@@ -512,13 +563,16 @@ def earnings_window_decomposition(
     merged = merged[(merged["anndats"] >= merged["sdate"]) & (merged["anndats"] <= merged["edate"])]
     ann_dates = merged[["permno", "anndats"]].drop_duplicates()
 
-    # Build a set of (permno, day) inside [-1, +2] calendar/trading window around anndats
+    # Ex-post event attribution: four trading observations [-1, +2], not five
+    # calendar days. Announcement time-of-day is not a historical signal here.
+    px = _daily_pivot(dsf)
     window_pairs: set[tuple[int, pd.Timestamp]] = set()
     for r in ann_dates.itertuples():
-        for offset in range(-1, 4):
-            window_pairs.add((int(r.permno), r.anndats + pd.Timedelta(days=offset)))
-
-    px = dsf.pivot(index="day", columns="permno", values="daily_return")
+        position = px.index.searchsorted(pd.Timestamp(r.anndats).normalize())
+        if position >= len(px):
+            continue
+        for idx in range(max(0, position-1), min(len(px), position+3)):
+            window_pairs.add((int(r.permno), px.index[idx]))
     earn_pnl_total = 0.0
     ex_earn_pnl_total = 0.0
     earn_pos_days = 0
@@ -528,12 +582,10 @@ def earnings_window_decomposition(
         w = {int(k): float(v) for k, v in books[month].items() if v != 0.0}
         if not w:
             continue
-        days = px.loc[px.index.to_period("M") == month]
-        if days.empty:
-            continue
-        cols = [c for c in w if c in days.columns]
+        days = _held_daily(px, month, w)
+        cols = list(w)
         for day, row in days[cols].iterrows():
-            r = row.fillna(0.0)
+            r = row
             for p in cols:
                 contrib = w[p] * float(r[p])
                 if (p, day) in window_pairs:
@@ -542,11 +594,13 @@ def earnings_window_decomposition(
                 else:
                     ex_earn_pnl_total += contrib
                     ex_earn_pos_days += 1
+                w[p] *= 1.0+float(r[p])
 
     total_pnl = earn_pnl_total + ex_earn_pnl_total
     total_obs = max(1, earn_pos_days + ex_earn_pos_days)
     years = max(len(books) / 12.0, 1e-6)
     return {
+        "basis": "ex-post gross security PnL normalized to each month start NAV; excludes cash and execution costs",
         "earnings_window_pnl_ann": float(earn_pnl_total / years),
         "ex_earnings_window_pnl_ann": float(ex_earn_pnl_total / years),
         "earnings_window_share_of_pnl": float(earn_pnl_total / total_pnl) if abs(total_pnl) > 1e-9 else 0.0,

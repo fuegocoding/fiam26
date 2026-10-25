@@ -7,9 +7,11 @@ append-only ledgers.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -32,7 +34,18 @@ IMMUTABLE_TABLES = frozenset(
     }
 )
 
-APPEND_ONLY_TABLES = frozenset({"run_attempts", "evaluation_access", "trial_counts", "incidents"})
+APPEND_ONLY_TABLES = frozenset(
+    {
+        "run_attempts",
+        "evaluation_access",
+        "trial_counts",
+        "incidents",
+        "research_registrations",
+        "research_trials",
+        "research_access",
+        "research_audit",
+    }
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS hypotheses (
@@ -154,7 +167,50 @@ CREATE TABLE IF NOT EXISTS incidents (
     status TEXT NOT NULL,
     payload TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS research_registrations (
+    registration_id TEXT PRIMARY KEY,
+    spec_hash TEXT NOT NULL,
+    registered_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS research_trials (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    trial_id TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    spec_hash TEXT NOT NULL,
+    registration_id TEXT,
+    detail TEXT NOT NULL,
+    counted_at TEXT NOT NULL,
+    reservation_key TEXT UNIQUE
+);
+CREATE TABLE IF NOT EXISTS research_access (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    access_id TEXT NOT NULL UNIQUE,
+    partition TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    record_count INTEGER NOT NULL,
+    accessed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS research_audit (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    event TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    at TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS research_registrations_no_update BEFORE UPDATE ON research_registrations BEGIN SELECT RAISE(ABORT, 'research registrations are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS research_registrations_no_delete BEFORE DELETE ON research_registrations BEGIN SELECT RAISE(ABORT, 'research registrations are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS research_trials_no_update BEFORE UPDATE ON research_trials BEGIN SELECT RAISE(ABORT, 'trial ledger is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS research_trials_no_delete BEFORE DELETE ON research_trials BEGIN SELECT RAISE(ABORT, 'trial ledger is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS research_access_no_update BEFORE UPDATE ON research_access BEGIN SELECT RAISE(ABORT, 'access ledger is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS research_access_no_delete BEFORE DELETE ON research_access BEGIN SELECT RAISE(ABORT, 'access ledger is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS research_audit_no_update BEFORE UPDATE ON research_audit BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS research_audit_no_delete BEFORE DELETE ON research_audit BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
 """
+
+# Trial kinds that consume a registration's variant budget.
+BUDGETED_TRIAL_KINDS = ("scored_variant", "hyperparameter_config", "seed_restart")
 
 _PROTECTED_PARTITIONS = frozenset({"check", "final", "evaluation", "holdout"})
 
@@ -173,7 +229,8 @@ class Registry:
     def __init__(self, path: str | Path):
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._path))
+        # One Registry object per thread/process; separate objects on one file serialize via BEGIN IMMEDIATE.
+        self._conn = sqlite3.connect(str(self._path), timeout=30.0)
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
@@ -359,6 +416,192 @@ class Registry:
         )
         self._conn.commit()
         return incident_id
+
+    # ---------------------------------------------------- durable research ledger
+    @contextlib.contextmanager
+    def _immediate(self):
+        """Write transaction that takes the database write lock up front (atomic check-then-insert)."""
+        if self._conn.in_transaction:  # an earlier failed statement (e.g. duplicate register) leaves an empty implicit transaction
+            self._conn.commit()
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield self._conn
+        except BaseException:
+            self._conn.rollback()
+            raise
+        self._conn.commit()
+
+    @staticmethod
+    def _now() -> str:
+        return dt.datetime.now(dt.timezone.utc).isoformat()
+
+    def _insert_trial(self, conn, kind, spec_hash, detail, counted_at, registration_id, reservation_key) -> str:
+        trial_id = f"trial_{uuid.uuid4().hex}"
+        conn.execute(
+            "INSERT INTO research_trials (trial_id, kind, spec_hash, registration_id, detail, counted_at, reservation_key)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (trial_id, kind, spec_hash, registration_id, detail, counted_at, reservation_key),
+        )
+        # mirror into the legacy counter table under the same unique id (no shared in-process counter)
+        conn.execute(
+            "INSERT INTO trial_counts (counter_id, kind, spec_hash, counted_at) VALUES (?, ?, ?, ?)",
+            (trial_id, kind, spec_hash, self._now()),
+        )
+        return trial_id
+
+    def research_register(self, registration_id: str, spec_hash: str, registered_at: str, payload: dict, trial: dict) -> None:
+        """Insert a registration and its ``registered_specification`` trial in ONE transaction."""
+        try:
+            with self._immediate() as conn:
+                conn.execute(
+                    "INSERT INTO research_registrations (registration_id, spec_hash, registered_at, payload) VALUES (?, ?, ?, ?)",
+                    (registration_id, spec_hash, registered_at, json.dumps(payload, sort_keys=True, default=str)),
+                )
+                self._insert_trial(conn, trial["kind"], trial["spec_hash"], trial["detail"], trial["counted_at"], registration_id, None)
+        except sqlite3.IntegrityError as exc:
+            raise PodPlatformError(
+                ToolResponse.failure(
+                    summary=f"registration {registration_id} already exists and is immutable",
+                    code=ErrorCode.SCHEMA_MISMATCH,
+                    stop_condition="Amendments create new IDs linked to parents.",
+                )
+            ) from exc
+
+    def research_registration(self, registration_id: str) -> Optional[dict]:
+        row = self._conn.execute(
+            "SELECT payload FROM research_registrations WHERE registration_id = ?", (registration_id,)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def research_add_trial(self, kind: str, spec_hash: str, detail: str, counted_at: str, registration_id: Optional[str] = None) -> str:
+        with self._immediate() as conn:
+            return self._insert_trial(conn, kind, spec_hash, detail, counted_at, registration_id, None)
+
+    def research_reserve(
+        self,
+        registration_id: str,
+        spec_hash: str,
+        variant_budget: int,
+        kind: str,
+        detail: str,
+        counted_at: str,
+        reservation_key: str,
+        *,
+        extra_used: int = 0,
+    ) -> dict:
+        """Atomically spend one trial before execution. The same ``reservation_key`` never spends twice.
+
+        Budget check and insert share one write transaction, so concurrent callers cannot both take the
+        last slot. A refused reservation is recorded in ``research_audit`` before the error is raised.
+        """
+        denied = None
+        with self._immediate() as conn:
+            prior = conn.execute(
+                "SELECT trial_id FROM research_trials WHERE reservation_key = ?", (reservation_key,)
+            ).fetchone()
+            if prior:
+                return {"trial_id": prior[0], "replayed": True}
+            if kind in BUDGETED_TRIAL_KINDS:
+                marks = ",".join("?" * len(BUDGETED_TRIAL_KINDS))
+                used = conn.execute(
+                    f"SELECT COUNT(*) FROM research_trials WHERE spec_hash = ? AND kind IN ({marks})",
+                    (spec_hash, *BUDGETED_TRIAL_KINDS),
+                ).fetchone()[0] + extra_used
+                if used >= variant_budget:
+                    denied = f"{kind} {detail!r}: {used}/{variant_budget} variants already spent"
+                    conn.execute(
+                        "INSERT INTO research_audit (event, subject, detail, at) VALUES (?, ?, ?, ?)",
+                        ("reservation_denied", registration_id, denied, self._now()),
+                    )
+            if denied is None:
+                trial_id = self._insert_trial(conn, kind, spec_hash, detail, counted_at, registration_id, reservation_key)
+        if denied is not None:
+            raise PodPlatformError(
+                ToolResponse.failure(
+                    summary=f"variant budget exhausted for {registration_id}",
+                    code=ErrorCode.PROVIDER_BUDGET_EXCEEDED,
+                    stop_condition="A new registered variant is required; silent retries do not reset the budget.",
+                )
+            )
+        return {"trial_id": trial_id, "replayed": False}
+
+    def research_budgeted_used(self, spec_hash: str) -> int:
+        marks = ",".join("?" * len(BUDGETED_TRIAL_KINDS))
+        row = self._conn.execute(
+            f"SELECT COUNT(*) FROM research_trials WHERE spec_hash = ? AND kind IN ({marks})", (spec_hash, *BUDGETED_TRIAL_KINDS)
+        ).fetchone()
+        return int(row[0])
+
+    def research_trial_count(self, kind: Optional[str] = None) -> int:
+        if kind is None:
+            row = self._conn.execute("SELECT COUNT(*) FROM research_trials").fetchone()
+        else:
+            row = self._conn.execute("SELECT COUNT(*) FROM research_trials WHERE kind = ?", (kind,)).fetchone()
+        return int(row[0])
+
+    def research_record_access(
+        self, access_id: str, partition: str, actor: str, purpose: str, record_count: int, *, authorized: bool = False
+    ) -> dict:
+        """Durable outcome-access event; an identical repeat is a replay, a conflicting id or an unauthorized
+        protected access is refused and logged in ``research_audit``."""
+        problem = None
+        code = ErrorCode.SCHEMA_MISMATCH
+        with self._immediate() as conn:
+            prior = conn.execute(
+                "SELECT partition, actor, purpose, record_count FROM research_access WHERE access_id = ?", (access_id,)
+            ).fetchone()
+            if partition in _PROTECTED_PARTITIONS and not authorized:
+                problem, code = f"partition {partition!r} is referee-controlled", ErrorCode.PARTITION_ACCESS_DENIED
+            elif prior and tuple(prior) == (partition, actor, purpose, record_count):
+                return {"access_id": access_id, "replayed": True}
+            elif prior:
+                problem = f"access id {access_id} already used for a different access"
+            elif conn.execute("SELECT 1 FROM evaluation_access WHERE access_id = ?", (access_id,)).fetchone():
+                problem = f"access id {access_id} already used in the evaluation access log"
+            if problem is not None:
+                conn.execute(
+                    "INSERT INTO research_audit (event, subject, detail, at) VALUES (?, ?, ?, ?)",
+                    ("access_refused", access_id, f"{actor}/{partition}: {problem}", self._now()),
+                )
+            else:
+                now = self._now()
+                conn.execute(
+                    "INSERT INTO research_access (access_id, partition, actor, purpose, record_count, accessed_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (access_id, partition, actor, purpose, record_count, now),
+                )
+                conn.execute(
+                    "INSERT INTO evaluation_access (access_id, partition, actor, purpose, accessed_at, record_count)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (access_id, partition, actor, purpose, now, record_count),
+                )
+        if problem is not None:
+            raise PodPlatformError(
+                ToolResponse.failure(
+                    summary=problem,
+                    code=code,
+                    stop_condition="Evaluation partitions are accessed only through Research Integrity with recorded authorization.",
+                )
+            )
+        return {"access_id": access_id, "replayed": False}
+
+    def research_accesses(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT access_id, partition, actor, purpose, record_count FROM research_access ORDER BY seq"
+        ).fetchall()
+        return [dict(access_id=r[0], partition=r[1], actor=r[2], purpose=r[3], record_count=r[4]) for r in rows]
+
+    def research_audit(self, event: str, subject: str, detail: str) -> None:
+        with self._immediate() as conn:
+            conn.execute(
+                "INSERT INTO research_audit (event, subject, detail, at) VALUES (?, ?, ?, ?)",
+                (event, subject, detail[:500], self._now()),
+            )
+
+    def research_audit_log(self, event: Optional[str] = None) -> list[dict]:
+        query = "SELECT seq, event, subject, detail, at FROM research_audit"
+        rows = self._conn.execute(query + (" WHERE event = ? ORDER BY seq" if event else " ORDER BY seq"), (event,) if event else ()).fetchall()
+        return [dict(seq=r[0], event=r[1], subject=r[2], detail=r[3], at=r[4]) for r in rows]
 
     def verify_immutability(self) -> None:
         for table in sorted(IMMUTABLE_TABLES | APPEND_ONLY_TABLES):

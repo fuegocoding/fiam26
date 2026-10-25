@@ -17,6 +17,7 @@ KNOWN_TARGET_UNITS = frozenset(
         "decimal_surprise",
         "probability",
         "decimal_return",
+        "centered_rank",
         "usd_per_share",
     }
 )

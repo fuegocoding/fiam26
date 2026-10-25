@@ -52,8 +52,8 @@ from pod_platform.reporting.judge_package import (  # noqa: E402
 )
 
 REPO = ROOT.parent
-PANEL = REPO / "final" / "data" / "chars_final_with_names.parquet"
-EXTERNAL = REPO / "final" / "external_data" / "external.parquet"
+PANEL = REPO / "data" / "chars_final_with_names.parquet"
+EXTERNAL = REPO / "external_data" / "external.parquet"
 FORBIDDEN_CONTEXT_KEYS = {"ticker", "company_name", "cik", "date", "return_month", "formation_date"}
 
 
@@ -167,7 +167,7 @@ def main() -> None:
     contrib_df = pd.read_csv(art_dir / "contributors.csv")
 
     # Load short interest for anonymized context
-    si_path = REPO / "final" / "output" / "short_interest" / "short_interest.parquet"
+    si_path = REPO / "output" / "short_interest" / "short_interest.parquet"
     si_map: dict[tuple[int, pd.Period], float] = {}
     if si_path.exists():
         si_df = pd.read_parquet(si_path)
@@ -264,9 +264,9 @@ def main() -> None:
                             resulting_artifact_id=f"review_{month_per}_{sid}",
                         )
                         dossier_builder.record(ev)
-                        realized_r = ret_lookup.get((month_per, permno), 0.0)
-                        if pd.isna(realized_r):
-                            realized_r = 0.0
+                        realized_r = ret_lookup.get((month_per, permno))
+                        if realized_r is None or not np.isfinite(realized_r):
+                            raise ValueError('Missing realized outcome: provide dated liquidation/mark evidence, never a zero return')
                         pnl_twin = w_base * float(realized_r)
                         pnl_agent = w_agent * float(realized_r)
                         position_outcomes.append(
@@ -323,15 +323,20 @@ def main() -> None:
     losses = outcomes_df[outcomes_df["delta_pnl_bps"] < 0] if not outcomes_df.empty else pd.DataFrame()
 
     counterfactual_report = {
-        "scope": "C1_bounded_exception_only_agent_with_fixed_rule_twin",
+        "scope": "retrospective_deterministic_policy_comparison",
+        "provider_is_mock": True,
+        "llm_skill_evidence": False,
+        "llm_calls_made": 0,
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "model_cutoff_and_anonymization_audit": {
             "forbidden_keys_blocked": sorted(FORBIDDEN_CONTEXT_KEYS),
             "company_names_exposed_to_agent": 0,
             "tickers_exposed_to_agent": 0,
             "calendar_dates_exposed_to_agent": 0,
-            "strictly_point_in_time_numeric_features": True,
+            "strictly_point_in_time_numeric_features": False,
+            "timing_note": "This legacy replay does not establish source-vintage eligibility; verify via controlled replay.",
         },
-        "call_statistics": twin.call_stats,
+        "policy_callback_statistics": twin.call_stats,
         "interventions_total": len(twin.records),
         "divergent_interventions": len(outcomes_df),
         "agent_gains_count": int(len(gains)),
@@ -439,11 +444,11 @@ def main() -> None:
         ),
         agent_evidence=AgentEvidence(
             counterfactual_id="agent_twin_counterfactual.json",
-            worked_case="Context-conditional short tail trim on high-GEV-jump crowded shorts vs fixed-rule twin",
+            worked_case="Deterministic rule comparison; no real language-model calls or skill evidence",
             interventions=len(outcomes_df),
             net_effect_summary=(
                 f"Evaluated {len(twin.records)} triggers ({len(outcomes_df)} divergent): "
-                f"Agent IR={m_agent['information_ratio']:.3f} vs Twin IR={m_twin['information_ratio']:.3f} "
+                f"Rule-policy IR={m_agent['information_ratio']:.3f} vs baseline IR={m_twin['information_ratio']:.3f}; no LLM skill claim. "
                 f"({len(gains)} gains, {len(losses)} losses disclosed)."
             ),
         ),
@@ -463,11 +468,21 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    # Freeze run using pod_platform.orchestration.freeze.freeze_run
+    # Preserve an actual-time diagnostic snapshot. This legacy path cannot certify
+    # formation eligibility, reproduce historical source vintages, or create a
+    # prospective commitment for an already-observed period.
+    from pod_platform.application.common import tree_sha256
+    import importlib.metadata
+    environment = {'python': sys.version, 'packages': {}}
+    for name in ('numpy', 'pandas', 'pydantic', 'pyarrow', 'torch'):
+        try:
+            environment['packages'][name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            environment['packages'][name] = 'not_installed'
     manifest = RunManifest(
         run_id=f"run_{art_name}_68m",
-        code_commit_or_tree_hash="final_v2_institutional_68m_sha256",
-        environment_lock_hash="py313_win64_torch_xgb_timesfm3",
+        code_commit_or_tree_hash=tree_sha256(ROOT / 'pod_platform'),
+        environment_lock_hash=hashlib.sha256(json.dumps(environment, sort_keys=True).encode()).hexdigest(),
         config_hashes={
             "construction": hashlib.sha256(b"sector_beta_neutral_adv_5_2_prc5").hexdigest(),
             "overlay": hashlib.sha256(b"peer_evt_gev_es_edge_throttle").hexdigest(),
@@ -506,12 +521,13 @@ def main() -> None:
     freeze_res = freeze_run(
         manifest,
         outputs_bytes,
-        frozen_at=as_of_end,
-        formation_inputs_approved=True,
-        certificate_count=8,
-        deployed_forecast_count=8,
-        accounting_reconciled=True,
-        actual_holdings_compliant=bool(compliance_data.get("official_pass", False)),
+        frozen_at=dt.datetime.now(dt.timezone.utc),
+        formation_inputs_approved=False,
+        certificate_count=0,
+        deployed_forecast_count=0,
+        accounting_reconciled=False,
+        actual_holdings_compliant=False,
+        incidents_disclosed=['Legacy retrospective rule diagnostic only; formation/certificate/accounting/post-fill approvals must come from the controlled workflow.'],
         trial_count=18,
         evaluation_access_count=4,
     )

@@ -15,8 +15,11 @@ factor does not guarantee FDR control (spec 13.8).
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import enum
+import hashlib
+import hmac
 import math
 import statistics
 import uuid
@@ -24,7 +27,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from pydantic import Field, field_validator, model_validator
 
-from ..contracts.base import StrictModel, require_aware
+from ..contracts.base import StrictModel, canonical_digest, require_aware
 from ..contracts.errors import ErrorCode
 from ..contracts.experiments import (
     ExperimentAdmission,
@@ -80,6 +83,10 @@ class IntegrityPolicy(StrictModel):
     min_mean_ic: float = Field(default=0.03, gt=0)
     min_improvement: float = Field(default=0.02, gt=0)
     min_bridge_ic: float = 0.0
+    # Preregistered net-of-cost bridge: mean monthly tail-portfolio spread after trading costs must exceed min_net_spread
+    # in design and check. cost_bps_floor_one_way is the host cost assumption; data-declared costs may only raise it.
+    min_net_spread: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    cost_bps_floor_one_way: float = Field(default=0.0, ge=0, le=1000, allow_inf_nan=False)
     max_placebo_fraction: float = Field(default=0.5, gt=0, le=1)
     min_t_stat: float = Field(default=2.0, gt=0)
     family_alpha: float = Field(default=0.05, gt=0, lt=1)
@@ -97,8 +104,11 @@ class IntegrityPolicy(StrictModel):
             improvement_vs_primary_baseline=f"paired mean rank-IC improvement >= {self.min_improvement} in design and check",
             direction_and_economic_size=f"mean rank IC has the declared sign and |IC| >= {self.min_mean_ic} in design and check",
             stability_requirement=f"declared sign and |IC| >= {self.min_mean_ic / 2:.4f} in both design halves and check; timing-shift placebo |IC| <= {self.max_placebo_fraction} x |IC|",
-            return_translation_requirement=f"mean rank IC of prediction vs net forward return in check >= {self.min_bridge_ic}",
-            implementation_requirement="forecasts carry the 20-day horizon, decimal_return unit and a declared bridge",
+            return_translation_requirement=f"mean rank IC of prediction vs bridge-signed forward return (gross, descriptive) in check >= {self.min_bridge_ic}",
+            implementation_requirement=(
+                "forecasts carry the 20-day horizon, decimal_return unit and a declared bridge; measured tail-portfolio net spread "
+                f"(declared turnover x max(data cost, {self.cost_bps_floor_one_way}bp one-way floor)) > {self.min_net_spread} in design and check"
+            ),
             permitted_statistical_uncertainty=f"descriptive t-stat across formation dates >= {self.min_t_stat} (not dependence-adjusted)",
             multiple_testing_treatment=f"t >= normal quantile for alpha {self.family_alpha}/(2m) across m candidates; scored variants <= {self.variant_budget}",
         )
@@ -218,6 +228,120 @@ def _date_counts(observations: Sequence[ForecastOutcome]) -> dict[str, int]:
     return counts
 
 
+# --------------------------------------------------------- producer-sealed evidence
+
+
+def _obs_digest(observations: Sequence[ForecastOutcome]) -> str:
+    return canonical_digest([o.model_dump(mode="json") for o in sorted(observations, key=lambda o: (o.formation_at, o.security_id))])
+
+
+@dataclasses.dataclass(frozen=True)
+class EvidenceBundle:
+    """Observations plus tail-portfolio membership, sealed by the trusted producer AFTER it verified provenance.
+
+    Not a pod / model argument: only a holder of the host-derived ``EvidenceSeal`` key can mint one, and the seal covers the
+    candidate record, model hash, scope, provenance digests, every observation and every portfolio membership.
+    """
+
+    bundle_id: str
+    candidate_id: str
+    record_digest: str
+    model_hash: str
+    scope: str
+    provenance: tuple[tuple[str, str], ...]
+    design_observations: tuple[ForecastOutcome, ...]
+    check_observations: tuple[ForecastOutcome, ...]
+    design_portfolio: tuple[Mapping[str, Any], ...]
+    check_portfolio: tuple[Mapping[str, Any], ...]
+    bridge_sign: int
+    tail_fraction: float
+    cost_bps_one_way: float
+    cost_source: str
+    issued_at: dt.datetime
+    seal: str
+
+    def body(self) -> dict[str, Any]:
+        return {
+            "bundle_id": self.bundle_id, "candidate_id": self.candidate_id, "record_digest": self.record_digest,
+            "model_hash": self.model_hash, "scope": self.scope, "provenance": [list(p) for p in self.provenance],
+            "design_observations": _obs_digest(self.design_observations), "check_observations": _obs_digest(self.check_observations),
+            "design_portfolio": canonical_digest([dict(p) for p in self.design_portfolio]),
+            "check_portfolio": canonical_digest([dict(p) for p in self.check_portfolio]),
+            "bridge_sign": self.bridge_sign, "tail_fraction": self.tail_fraction, "cost_bps_one_way": self.cost_bps_one_way,
+            "cost_source": self.cost_source, "issued_at": self.issued_at.isoformat(),
+        }
+
+
+class EvidenceSeal:
+    """Host-held HMAC capability. Derive from the host authority key; give the same seal to the producer and to integrity."""
+
+    def __init__(self, key: bytes, gateway: Optional[RoleGateway] = None):
+        if not isinstance(key, bytes) or len(key) < 16:
+            raise ValueError("evidence seal needs a secret key of at least 16 bytes")
+        self._key = key
+        self._gateway = gateway or RoleGateway()
+
+    def __repr__(self) -> str:
+        return "EvidenceSeal(<key hidden>)"
+
+    def __reduce__(self):  # keys never travel through pickles / logs
+        raise TypeError("EvidenceSeal cannot be serialized")
+
+    @property
+    def fingerprint(self) -> str:
+        return hmac.new(self._key, b"evidence-seal-fingerprint", hashlib.sha256).hexdigest()[:16]
+
+    def _mac(self, body: Mapping[str, Any]) -> str:
+        return hmac.new(self._key, canonical_digest(dict(body)).encode(), hashlib.sha256).hexdigest()
+
+    def issue(self, ctx: RoleContext, *, record: "CandidateRecord", scope: str, provenance: Mapping[str, str],
+              design_observations: Sequence[ForecastOutcome], check_observations: Sequence[ForecastOutcome],
+              design_portfolio: Sequence[Mapping[str, Any]], check_portfolio: Sequence[Mapping[str, Any]], bridge_sign: int,
+              tail_fraction: float, cost_bps_one_way: float, cost_source: str, issued_at: dt.datetime) -> EvidenceBundle:
+        self._gateway.authorize(ctx, "integrity.evaluate_protected")
+        self._gateway.authorize(ctx, "certificate.issue")
+        draft = EvidenceBundle(
+            "", record.candidate_id, canonical_digest(record.model_dump(mode="json")), record.model_hash, scope,
+            tuple(sorted((str(k), str(v)) for k, v in provenance.items())), tuple(design_observations), tuple(check_observations),
+            tuple(dict(p) for p in design_portfolio), tuple(dict(p) for p in check_portfolio), int(bridge_sign), float(tail_fraction),
+            float(cost_bps_one_way), cost_source, require_aware(issued_at, "issued_at"), "")
+        with_id = dataclasses.replace(draft, bundle_id="ev_" + canonical_digest(draft.body())[:20])
+        return dataclasses.replace(with_id, seal=self._mac(with_id.body()))
+
+    def verify(self, bundle: Any) -> bool:
+        return isinstance(bundle, EvidenceBundle) and hmac.compare_digest(str(bundle.seal), self._mac(bundle.body()))
+
+
+def net_spread_series(observations: Sequence[ForecastOutcome], portfolio: Sequence[Mapping[str, Any]], *, bridge_sign: int,
+                      tail_fraction: float, cost_bps_one_way: float) -> Optional[list[dict[str, float]]]:
+    """Gross tail spread, one-way turnover and net spread per formation date, from sealed observations and membership.
+
+    ``net_forward_return`` carries ``bridge_sign x`` raw return, so the raw return is ``bridge_sign x`` it. The first date pays
+    full entry turnover. Returns None when membership is inconsistent with the observations (unmeasured, not assumed).
+    """
+    rets = {(o.security_id, o.formation_at.isoformat()): bridge_sign * o.net_forward_return for o in observations if o.net_forward_return is not None}
+    scores: dict[str, dict[str, float]] = {}
+    for o in observations:
+        scores.setdefault(o.formation_at.isoformat(), {})[o.security_id] = bridge_sign * o.prediction
+    cost, prev, out = cost_bps_one_way / 1e4, {}, []
+    for entry in sorted(portfolio, key=lambda e: e["formation_at"]):
+        date, longs, shorts = entry["formation_at"], list(entry["longs"]), list(entry["shorts"])
+        signed = scores.get(date, {})
+        q = max(1, int(len(signed) * tail_fraction))
+        expected = sorted(signed, key=lambda s: (-signed[s], s))[:q]
+        if (not longs or not shorts or len(set(longs)) != len(longs) or len(set(shorts)) != len(shorts) or set(longs) & set(shorts)
+                or sorted(longs) != sorted(expected) or len(shorts) > q or any((s, date) not in rets for s in longs + shorts)):
+            return None
+        gross = math.fsum(rets[(s, date)] for s in longs) / len(longs) - math.fsum(rets[(s, date)] for s in shorts) / len(shorts)
+        weights = {s: 1.0 / len(longs) for s in longs}
+        for s in shorts:
+            weights[s] = weights.get(s, 0.0) - 1.0 / len(shorts)
+        turnover = math.fsum(abs(weights.get(s, 0.0) - prev.get(s, 0.0)) for s in set(weights) | set(prev))
+        prev = weights
+        out.append({"gross": gross, "turnover": turnover, "net": gross - cost * turnover})
+    return out
+
+
 class IntegrityService:
     def __init__(
         self,
@@ -229,7 +353,16 @@ class IntegrityService:
         source_cards: Sequence[SourceCard],
         clock=now_utc,
         gateway: Optional[RoleGateway] = None,
+        evidence_seal: Optional[EvidenceSeal] = None,
+        allow_unbound_fixture: bool = True,
     ):
+        """``evidence_seal`` verifies producer-sealed bundles (required for any non-fixture scope).
+
+        ``allow_unbound_fixture`` keeps the legacy caller-supplied-observation path for FIXTURE certificates only; it can never
+        issue research or formation certificates. Hosts that run real challenges should set it to False.
+        """
+        self.evidence_seal = evidence_seal
+        self.allow_unbound_fixture = allow_unbound_fixture
         self.registry = registry
         self.ledger = ledger
         self.evaluator = evaluator
@@ -389,21 +522,28 @@ class IntegrityService:
     def evaluate(
         self,
         record: CandidateRecord,
-        design_observations: Sequence[ForecastOutcome],
-        check_observations: Sequence[ForecastOutcome],
+        design_observations: Sequence[ForecastOutcome] = (),
+        check_observations: Sequence[ForecastOutcome] = (),
         *,
         ctx: RoleContext,
         evaluation_asof: dt.datetime,
         certificate_scope: str = SCOPE_FIXTURE,
         multiplicity: int = 1,
         sign_cost_bp: Optional[float] = None,
+        evidence: Optional[EvidenceBundle] = None,
     ) -> IntegrityDecision:
-        """Challenge and (maybe) promote one candidate. Needs the integrity role (protected partitions)."""
+        """Challenge and (maybe) promote one candidate. Needs the integrity role (protected partitions).
+
+        Authority comes from a producer-sealed ``evidence`` bundle. Without one, only a FIXTURE-scope evaluation of caller
+        observations is possible (labelled ``unbound_fixture_observations``; net-of-cost bridge unmeasured).
+        """
         self.gateway.authorize(ctx, "integrity.evaluate_protected")
         self.gateway.authorize(ctx, "certificate.issue")
         evaluation_asof = require_aware(evaluation_asof, "evaluation_asof")
         if certificate_scope not in SCOPES:
             fail(ErrorCode.SCHEMA_MISMATCH, f"unknown certificate scope {certificate_scope!r}", f"Use one of {SCOPES}.")
+        design_observations, check_observations = self._bind_evidence(
+            record, evidence, design_observations, check_observations, certificate_scope, evaluation_asof)
         if multiplicity < 1:
             fail(ErrorCode.SCHEMA_MISMATCH, "multiplicity must be at least 1", "Count every compared candidate.")
         if evaluation_asof < self.policy.frozen_at:
@@ -419,7 +559,10 @@ class IntegrityService:
             "A t-threshold with a multiplicity factor does not guarantee FDR control.",
             "Evaluated against realized next-period excess return (bridge level), not the declared belief target.",
         ]
-        labels = {"evidence_mode": record.evidence_mode, "certificate_scope": certificate_scope}
+        labels = {"evidence_mode": record.evidence_mode, "certificate_scope": certificate_scope,
+                  "evidence_binding": f"producer_sealed:{evidence.bundle_id}" if evidence else "unbound_fixture_observations"}
+        if evidence is None:
+            limitations.append("Caller-supplied observations (fixture compatibility): net-of-cost tail-portfolio bridge was NOT measured.")
         if certificate_scope == SCOPE_FIXTURE:
             limitations += [FIXTURE_LIMITATION, f"{SYNTHETIC_LABEL}: planted-signal data; no result here is investment evidence."]
             labels["synthetic"] = SYNTHETIC_LABEL
@@ -452,7 +595,9 @@ class IntegrityService:
             card = self.cards.get(source_id)
             if card is None:
                 problems.append(f"no source card for {source_id}")
-            elif certificate_scope == SCOPE_FIXTURE and card.dataset_id != SYNTHETIC_DATASET_ID:
+            elif certificate_scope == SCOPE_FIXTURE and card.dataset_id != SYNTHETIC_DATASET_ID and not (
+                    evidence is not None and record.evidence_mode.startswith("synthetic")
+                    and dict(evidence.provenance).get('dataset_class') == 'fixture'):
                 problems.append(f"fixture scope is limited to synthetic sources, but {source_id} is dataset {card.dataset_id}")
             elif card.broker_rejects_formation():
                 ineligible.append(source_id)
@@ -560,6 +705,7 @@ class IntegrityService:
             and sign * c_improve >= policy.min_improvement
         )
 
+        net_metrics, net_met = self._net_bridge(evidence)
         criteria = {
             "coverage_met": True,
             "improvement_met": improvement_met,
@@ -571,6 +717,7 @@ class IntegrityService:
                 and abs(placebo_c) <= policy.max_placebo_fraction * abs(c_mean)
             ),
             "implementation_met": bridge_c is not None and bridge_c * sign >= policy.min_bridge_ic,
+            "net_bridge_met": net_met,
             "uncertainty_met": t_signed >= policy.min_t_stat,
             "multiple_testing_met": t_signed >= t_required and scored_variants <= policy.variant_budget,
         }
@@ -597,6 +744,7 @@ class IntegrityService:
             "n_dates_check": float(len(check_ic)),
             "scored_variants": float(scored_variants),
             "multiplicity": float(multiplicity),
+            **net_metrics,
         }
         reasons: list[str] = []
         for name, ok in criteria.items():
@@ -623,6 +771,7 @@ class IntegrityService:
             "check_result_input_hash": check["input_hash"],
             "design_placebo_input_hash": design_placebo["input_hash"],
             "check_placebo_input_hash": check_placebo["input_hash"],
+            **({"evidence_bundle_id": evidence.bundle_id} if evidence else {}),
         }
         certificate_id: Optional[str] = None
         if outcome == Outcome.ADMITTED:
@@ -687,12 +836,69 @@ class IntegrityService:
         return decision
 
     # ------------------------------------------------------------------ helpers
+    def _bind_evidence(self, record: CandidateRecord, evidence: Optional[EvidenceBundle], design: Sequence[ForecastOutcome],
+                       check: Sequence[ForecastOutcome], scope: str, asof: dt.datetime) -> tuple[list[ForecastOutcome], list[ForecastOutcome]]:
+        """Observations may only come from a verified bundle bound to this exact candidate, model and scope (or fixture compat)."""
+        def refuse(summary: str) -> None:
+            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, summary, "Protected evaluation needs producer-sealed evidence bound to this candidate.")
+
+        if evidence is None:
+            if scope != SCOPE_FIXTURE or not self.allow_unbound_fixture:
+                refuse("unbound observations can only support an explicitly allowed FIXTURE evaluation, never research or formation")
+            return list(design), list(check)
+        if self.evidence_seal is None or not self.evidence_seal.verify(evidence):
+            refuse("evidence bundle is unknown, forged or tampered")
+        if (evidence.candidate_id != record.candidate_id or evidence.model_hash != record.model_hash
+                or evidence.record_digest != canonical_digest(record.model_dump(mode="json")) or evidence.scope != scope):
+            refuse("evidence bundle is bound to a different candidate record, model or scope")
+        if evidence.issued_at > asof:
+            refuse("evidence bundle was issued after the evaluation clock")
+        for supplied, sealed in ((design, evidence.design_observations), (check, evidence.check_observations)):
+            if supplied and _obs_digest(supplied) != _obs_digest(sealed):
+                refuse("supplied observations differ from the sealed evidence")
+        return list(evidence.design_observations), list(evidence.check_observations)
+
+    def _net_bridge(self, evidence: Optional[EvidenceBundle]) -> tuple[dict[str, Optional[float]], bool]:
+        """Measured tail-portfolio net spread after costs (design and check). Unbound fixture compat reports it as unmeasured."""
+        if evidence is None:
+            return {}, True  # fixture compatibility only; decision limitations state the bridge was not measured
+        policy = self.policy
+        cost = max(evidence.cost_bps_one_way, policy.cost_bps_floor_one_way)
+        series = {
+            part: net_spread_series(obs, port, bridge_sign=evidence.bridge_sign, tail_fraction=evidence.tail_fraction, cost_bps_one_way=cost)
+            for part, obs, port in (("design", evidence.design_observations, evidence.design_portfolio),
+                                    ("check", evidence.check_observations, evidence.check_portfolio))
+        }
+        metrics: dict[str, Optional[float]] = {"cost_bps_one_way_effective": cost}
+        met = True
+        for part, minimum in (("design", policy.min_dates_design), ("check", policy.min_dates_check)):
+            rows = series[part]
+            if not rows or len(rows) < minimum:
+                metrics[f"{part}_net_spread"] = None
+                met = False
+                continue
+            for key in ("gross", "turnover", "net"):
+                metrics[f"{part}_{key}_spread" if key != "turnover" else f"{part}_turnover"] = _mean([r[key] for r in rows])
+            met = met and metrics[f"{part}_net_spread"] > policy.min_net_spread
+        return metrics, met
+
     def certificate(self, candidate_id: str) -> AdmissionCertificate:
         try:
             return self._certificates[candidate_id]
         except KeyError:
             fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, f"no certificate was issued for {candidate_id}",
                  "Only an ADMITTED candidate holds a certificate.")
+
+    def restore_admission(self, decision: IntegrityDecision, *, model_hash: str) -> AdmissionCertificate:
+        """Trusted bridge restart: recover an existing sealed certificate, never issue one."""
+        raw = self.registry.get('admission_certificates', decision.certificate_id) if decision.admitted and decision.certificate_id else None
+        cert = AdmissionCertificate.model_validate(raw) if raw else None
+        if cert is None or not cert.verify_seal() or cert.model_hash != model_hash:
+            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, 'stored admission certificate is absent or changed',
+                 'Resume requires the original sealed integrity certificate.')
+        self._certificates[decision.candidate_id] = cert
+        self._decisions[decision.candidate_id] = decision
+        return cert
 
     def decision(self, candidate_id: str) -> Optional[IntegrityDecision]:
         return self._decisions.get(candidate_id)
@@ -743,7 +949,7 @@ class IntegrityService:
             improvement_met=criteria["improvement_met"],
             direction_met=criteria["direction_met"],
             stability_met=criteria["stability_met"],
-            implementation_met=criteria["implementation_met"],
+            implementation_met=criteria["implementation_met"] and criteria["net_bridge_met"],
             uncertainty_met=criteria["uncertainty_met"],
             multiple_testing_met=criteria["multiple_testing_met"],
         )

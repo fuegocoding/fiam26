@@ -577,6 +577,7 @@ def _run_candidate(
             "metrics": result.metrics,
             "notes": result.notes,
             "report_hash": report.get("report_hash"),
+            "candidate_artifact": report.get("candidate_artifact"),
             "gates": {k: v for k, v in gates.items()},
         })
         if report.get("report_hash"):

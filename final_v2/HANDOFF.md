@@ -4,6 +4,12 @@ Start here: [BUILD_STATUS.md](BUILD_STATUS.md), [SPEC_COVERAGE.md](SPEC_COVERAGE
 [VERIFICATION.md](VERIFICATION.md), then [README.md](README.md).
 The governing `../POD_FRAMEWORK_IMPLEMENTATION_SPEC.md` remains unchanged.
 
+## Continue from the integrated application
+
+Read [AUTONOMOUS_PLATFORM.md](AUTONOMOUS_PLATFORM.md), then run the complete offline CLI below. Research, sealed check, publication, covariance/shared-hedge sizing, actual fills/NAV and diagnostic scheduling now share the same backend services. The latest official design campaign still rejects all four real candidates; no production strategy is admitted.
+
+Model profiles are in [LLM_TRIAL.md](LLM_TRIAL.md). The Groq key is private local state. One live task passed on Groq gpt-oss and local Qwen8 with typed output; two earlier local output-contract failures are retained. The RTX3070Ti GPU works. Original Qwen thinking lead service, full benchmark, checkpoint/adoption evidence and production source evidence are still required. No automatic replacement or model adoption occurs.
+
 ## Run immediately
 
 From `final_v2/`, using Python 3.11+:
@@ -13,6 +19,7 @@ python -m venv .venv
 . .venv/bin/activate
 pip install -e '.[research,test]'
 python -m pytest -q -p no:cacheprovider
+python scripts/run_complete_platform.py --state-dir /tmp/complete/state --output-dir /tmp/complete/out
 python scripts/run_reference.py --mode demo --state-dir /tmp/reference/state --output-dir /tmp/reference/out
 python scripts/run_strategy_research.py --fixture-demo /tmp/campaign/data --state-dir /tmp/campaign/state --summary
 ```

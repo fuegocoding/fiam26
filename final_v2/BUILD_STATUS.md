@@ -1,60 +1,19 @@
 # Build status — 2026-10-25
 
-The integrated suite passed **653 tests**, with one sandbox-dependent socket check skipped.
-The local software reference workflow is implemented and tested within the scope recorded
-in [SPEC_COVERAGE.md](SPEC_COVERAGE.md). Investment validation remains unproven.
-See [HANDOFF.md](HANDOFF.md) for continuation instructions and [VERIFICATION.md](VERIFICATION.md)
-for measured checks. The specification itself is unchanged.
+The final suite passed **836 tests**, with one sandbox-dependent socket check skipped. The source-to-book framework is connected and exercised through actual research, admission, CIO, execution, accounting and feedback APIs. See [AUTONOMOUS_PLATFORM.md](AUTONOMOUS_PLATFORM.md) for commands, boundaries and the tested sequence. The governing strategy specification is unchanged. Investment validation remains **unproven**.
 
-## Implemented
+New integration includes four private specialist pods; persistent role-specific model budgets/caches; weekly and matured-monthly research scheduling; paper-to-reviewed-method adaptation; registration before data access; frozen-model independent checks with sealed producer provenance; scoped publication; point-in-time shrunk covariance; economic duplicate/overlap handling; one residual shared hedge across pods and CIO; actual holdings/pending/fill reconciliation; fee- and execution-aware pretrade headroom; independent actual-fill risk; dossiers; and bounded feedback review.
 
-- Four private research pods, bounded registered executors and a four-charter campaign.
-  All hypotheses are registered before label access; protected partitions remain inaccessible.
-  Design results include baseline comparisons, belief metrics, conventional return bridges,
-  costs, sector/exposure diagnostics and trial accounting.
-- Paper search, ingestion, grounded claims, replication specifications, version-aware caches
-  and explicit-tick watches. arXiv/OpenAlex and tool-less Claude were exercised earlier.
-- Tool-less model providers, checkpoint/adoption gates, durable extraction cache and
-  persistent call/token budgets with atomic reservation, failure charging and idempotent settlement.
-- Machine-enforced certificate environment, source/snapshot, namespace, expiry and exposure
-  scopes, with revocation support and legacy fixture compatibility.
-- Role-scoped MCP services, source/method/publication APIs, diagnostics and private memory.
-- Reference demo/research/replay workflows connecting measured challenge, publication,
-  portfolio construction, independent target/post-fill risk, execution, accounting and reports.
-- Full self-financing paired counterfactual books, including actual fills, cash, borrow, costs,
-  risk and failure paths. Optional registered provider hook; default stand-in never proves LLM skill.
-- Daily accounting on supplied dated returns, benchmark/statistics, factor/idiosyncratic and
-  selection/sizing attribution, event/decay prerequisites, dated position dossiers and judge facts.
-- Actual strategy-removal replays, hash-bound stages, timestamped commitment, prospective
-  tracking interfaces and safe interrupted-attempt recovery with preserved budgets/evidence.
-- Arcana review CSV/JSON exports with explicit mapping/units/schema and fingerprints.
-  Local Codex OAuth connection authenticated; live vendor schema/analytics/upload unverified.
+The complete offline fixture has both actual measured admissions and rejections. Its two admitted pods publish forecasts that become actual orders, partial fills and accounted holdings. Three requests share one hedge. Restart, failed-model charging, interrupted challenge/publication recovery, namespace privacy, tamper rejection and horizon mismatch are covered by functional tests. The fixture remains synthetic and cannot authorize a competition book.
 
-## Measured real-input checks
+The official input campaign was rerun against current registered executors: 12 variants, four rejected candidates, no production admission. Official daily data contains 12,175,448 rows and 6,827 identifiers. Evaluation excludes after 2026-08-31; missing held returns fail, total losses/outliers remain intact, and self-financing daily cash/short/fee identities are checked.
 
-The latest official download was moved from Downloads into ignored local project data.
-Its daily file has 12,175,448 unique (permno,date) rows, 6,827 identifiers, and dates from
-2014-01-02 through 2026-09-28. Default scored cutoff remains 2026-08-31; missing returns
-and outliers are preserved, never silently zero-filled or clipped.
+Remaining operational/evidence gates:
 
-The four-charter real design campaign completed 12 variants without execution failures.
-All four candidates were rejected by their measured criteria. None was admitted or deployed.
-A separate January 2021 daily reconciliation used 19 supplied trading days and matched an
-independent NAV calculation exactly within accounting tolerance. This is a reporting smoke
-check, not strategy performance or a full daily market backtest. Evidence is in
-`artifacts/verification_20261025/`.
+- Configure the exact Qwen thinking lead endpoint and complete the three-role quality/adoption benchmark. Groq challenger and local Qwen8 extractor each have only one-task live smoke evidence.
+- Resolve production source history/vintages, entity mappings and raw-data entitlements. Carbon Arc catalogue search is connected; discovery is not approval or raw-data access.
+- Research a candidate that passes design and independent protected admission with authentic targets. Existing real candidates failed.
+- Calibrate production fills, borrow, liquidity/impact and event calendars; collect future observations after commitment.
+- Validate Arcana's live vendor schema/analytics/export flow. OAuth and local review export exist; no vendor upload/compatibility claim is made.
 
-## Remaining external evidence and operational work
-
-- Production source/vintage/identity attestations, including unresolved Carbon Arc cards.
-- Exact model-checkpoint release/cutoff/adoption evidence for real LLM use.
-- Live Arcana tool discovery and vendor schema/analytics validation. OAuth client credentials
-  are local and intentionally absent from Git; teammates authenticate their own account.
-- Dated production fills, borrow, liquidity/impact calibration and event calendars.
-- Independent protected challenge/admission for any successful new candidate. The current
-  real candidates failed, so there is no approved production strategy to deploy.
-- Genuine post-commitment prospective outcomes and measured real-agent skill. Fixture
-  success, mock decisions and descriptive historical results cannot substitute for these.
-
-No GPU training or heavy market replay was started. Claude handled the parallel build until
-its local quota was exhausted; bounded native workers finished the software integration.
+Claude performed most parallel component implementation until its session quota was reached. Integration was completed with available agents and direct verification. See [VERIFICATION.md](VERIFICATION.md) for final counts and evidence.

@@ -132,6 +132,7 @@ class LLMRequest:
     user: str
     params: GenerationParams
     role: str = "researcher"
+    response_schema: Optional[dict[str, Any]] = None
 
     @property
     def prompt_hash(self) -> str:
@@ -143,8 +144,11 @@ class LLMRequest:
 
     @property
     def request_hash(self) -> str:
+        identity = {"s": self.system, "u": self.user, "p": self.params.identity(), "r": self.role}
+        if self.response_schema is not None:
+            identity['response_schema'] = self.response_schema
         blob = json.dumps(
-            {"s": self.system, "u": self.user, "p": self.params.identity(), "r": self.role},
+            identity,
             sort_keys=True,
         )
         return sha256_text(blob)
@@ -289,7 +293,10 @@ class OpenAICompatibleProvider:
             payload["seed"] = request.params.seed
         if self.json_mode:
             payload["response_format"] = {"type": "json_object"}
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {
+            "Content-Type": "application/json", "Accept": "application/json",
+            "User-Agent": "fiam-pod-platform/0.1",
+        }
         if key:
             headers["Authorization"] = f"Bearer {key}"
         started = time.monotonic()

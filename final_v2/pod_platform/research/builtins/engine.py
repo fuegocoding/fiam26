@@ -275,6 +275,7 @@ def evaluate(panel: Panel, dataset: ApprovedDataset, recipe: Recipe, variant: Va
     belief_lag = max(0, horizon - 1)
 
     monthly: list[dict] = []
+    predictions: list[dict] = []  # exact out-of-sample design rows; persisted as immutable candidate provenance
     prev_w = {"cand": {}, "base": {}}
     fits = 0
     warmup_months = 0
@@ -410,6 +411,10 @@ def evaluate(panel: Panel, dataset: ApprovedDataset, recipe: Recipe, variant: Va
                     if corr is not None:
                         exposures_acc[column][label].append(corr)
         monthly.append(rec)
+        resolved = max(md.resolve_at, month_end_known_at(m + ds.label.resolve_months, ds.label.resolve_lag_days))
+        for r in eval_rows:
+            predictions.append({"m": m, "s": panel.security[r], "p": pred[r], "b": base[r], "t": md.target[r], "r": ret[r],
+                                "x": resolved.isoformat()})
 
     if len(monthly) < ev.min_eval_months:
         raise EvidenceInsufficient(
@@ -500,6 +505,8 @@ def evaluate(panel: Panel, dataset: ApprovedDataset, recipe: Recipe, variant: Va
 
     return {
         "metrics": {k_: float(v) for k_, v in sorted(metrics.items())},
+        "predictions": predictions,
+        "frozen_model": freeze_model(variant, names, [train_stats[s] for s in sorted(train_stats)], k, sorted(train_stats)),
         "monthly": monthly,
         "diagnostics": {
             "feature_names": names,
@@ -511,3 +518,59 @@ def evaluate(panel: Panel, dataset: ApprovedDataset, recipe: Recipe, variant: Va
             "short_eligibility_enforced": cap is not None,
         },
     }
+
+
+def freeze_model(variant: VariantConfig, names: list[str], stats_list: list, k: int, train_months: list[int]) -> dict:
+    """Final design-trained model: ridge fit once on every design month whose target resolved inside the window.
+
+    A rank blend has no fitted parameters. The result is plain JSON so it can be hashed and replayed without refitting.
+    """
+    model: dict = {"method_id": variant.method_id, "feature_names": list(names)}
+    if variant.method_id == "ridge":
+        fit = _fit_ridge(stats_list, float(variant.ridge_lambda), k)
+        if fit is None:
+            raise EvidenceInsufficient("INSUFFICIENT_HISTORY: the final design-trained ridge model is underdetermined")
+        model.update({"ridge_lambda": float(variant.ridge_lambda), "xbar": list(fit[0]), "ybar": fit[1], "beta": list(fit[2]),
+                      "train_months": list(train_months)})
+    return model
+
+
+def score_frozen(
+    panel: Panel, dataset: ApprovedDataset, recipe: Recipe, variant: VariantConfig, model: dict, months: list[int],
+    *, resolved_by: Optional[dt.datetime] = None,
+) -> list[dict]:
+    """Apply a frozen model to ``months`` WITHOUT refitting. ``resolved_by`` set => labelled rows only (target and bridge resolved by it).
+
+    ``resolved_by=None`` produces unlabeled forecast rows (features and baseline only).
+    """
+    ds = dataset.spec
+    features = list(recipe.features(variant.feature_set))
+    names = [f.name for f in features]
+    if model.get("feature_names") != names or model.get("method_id") != variant.method_id:
+        raise BuiltinConfigError("frozen model does not match the recipe features / method; refusing to score")
+    ret = panel.num.get(ds.label.column, [None] * len(panel))
+    out: list[dict] = []
+    for m in months:
+        if not panel.rows_by_month.get(m):
+            continue
+        resolved = None
+        target: dict[int, float] = {}
+        if resolved_by is not None:
+            resolved = max(target_resolve_at(recipe, m, dataset), month_end_known_at(m + ds.label.resolve_months, ds.label.resolve_lag_days))
+            if resolved > resolved_by:
+                continue  # label not mature at the evaluation window / clock
+            target = target_values(panel, recipe, m, dataset)
+        feats = {f.name: feature_values(panel, f, m, dataset) for f in features}
+        base = feature_values(panel, recipe.baseline, m, dataset)
+        for r in sorted(panel.rows_by_month[m]):
+            if any(r not in feats[n] for n in names) or r not in base:
+                continue
+            if resolved_by is not None and (r not in target or ret[r] is None):
+                continue
+            if model["method_id"] == "ridge":
+                pred = model["ybar"] + math.fsum(b * (feats[n][r] - xb) for b, n, xb in zip(model["beta"], names, model["xbar"]))
+            else:
+                pred = math.fsum(feats[n][r] for n in names) / len(names)
+            out.append({"m": m, "s": panel.security[r], "p": pred, "b": base[r], "t": target.get(r), "r": ret[r] if resolved else None,
+                        "x": resolved.isoformat() if resolved else None})
+    return out

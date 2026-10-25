@@ -97,6 +97,7 @@ class EvaluationSpec(StrictModel):
 
 
 class DatasetSpec(StrictModel):
+    universe_id: Optional[str] = Field(default=None, pattern=IDENT)
     approved: bool
     data_class: Literal["operator_authorized", "fixture"]
     path: str = Field(min_length=1)

@@ -30,6 +30,32 @@ class Empty(StrictModel):
     pass
 
 
+class CatalogueQuery(StrictModel):
+    query: str = Field(min_length=2, max_length=200)
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class CatalogueRead(StrictModel):
+    source_id: str = Field(min_length=1, max_length=100)
+
+
+class DiscoverQuery(CatalogueQuery):
+    provider_id: str = Field(pattern=r'^[a-z][a-z0-9_]{0,63}$')
+
+
+class DiscoveredSource(StrictModel):
+    query_fingerprint: str = Field(pattern=r'^[0-9a-f]{64}$')
+    provider_ref: str = Field(pattern=r'^[a-z][a-z0-9_]{0,63}$')
+
+
+class SourceSample(DiscoveredSource):
+    max_rows: int = Field(default=5, ge=1, le=20)
+
+
+class SourceProposal(DiscoveredSource):
+    rationale: str = Field(min_length=20, max_length=1000)
+
+
 class Search(StrictModel):
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(default=10, ge=1, le=50)
@@ -306,7 +332,7 @@ class MethodRead(StrictModel):
 
 
 def build_server(state_dir, pod=None, *, role='strategy', online=False, source_cards_dir=None,
-                 clock=None,papers_db=None,transport=None):
+                 clock=None,papers_db=None,transport=None, discovery=None, research_runtime=None):
     from ..application.namespaces import RoleContext, RoleGateway
     from ..application.methods import default_registry
     from ..application.common import read_json, safe_id
@@ -379,6 +405,41 @@ def build_server(state_dir, pod=None, *, role='strategy', online=False, source_c
     server.tools['platform.status']=Tool('platform.status','Fixed process identity',Empty,lambda args:{
         'role':role,'namespace':namespace,'pod':spec.charter.value if spec else None,'live_llm':False,'automatic_admission':False,
         'online_papers':online,'execution':'No shell or trading tools are exposed.'})
+    if discovery is None:
+        from ..data.discovery import DiscoveryService, CatalogueMeta
+        from ..data.catalogue import CatalogueManifest
+        catalog = CatalogueManifest()
+        cards_dir = Path(source_cards_dir) if source_cards_dir else Path(__file__).parents[2] / 'configs/source_cards'
+        for path in sorted(cards_dir.glob('*.json')):
+            catalog.import_card(SourceCard.model_validate_json(path.read_text()))
+        discovery = DiscoveryService(state / 'discovery.sqlite', catalogue=catalog,
+            metadata=[CatalogueMeta(source_id=s, title=catalog.card(s).topic, concepts=[catalog.card(s).topic])
+                      for s in catalog.source_ids()], clock=clock)
+    if research_runtime is not None:
+        if Path(research_runtime.state_dir).resolve() != state:
+            raise ValueError('runtime and MCP must use the same configured state')
+        if discovery is not research_runtime.discovery:
+            raise ValueError('runtime and MCP must share the same discovery service')
+    if role in ('strategy', 'research', 'integrity'):
+        for tool in [Tool('catalogue.search','Search approved source concepts and availability',CatalogueQuery,
+                           lambda a: discovery.search_catalogue(ctx,a.query,limit=a.limit)),
+                     Tool('catalogue.describe','Read documented source eligibility',CatalogueRead,
+                           lambda a: discovery.describe_catalogue(ctx,a.source_id))]:
+            server.tools[tool.name] = tool
+    if role == 'strategy':
+        for tool in [Tool('sources.discover','Bounded host-registered connector discovery; cannot grant access',DiscoverQuery,
+                           lambda a: research_runtime.discover(ctx,a.provider_id,a.query,limit=a.limit) if research_runtime
+                           else discovery.discover(ctx,namespace,a.provider_id,a.query,limit=a.limit),False),
+                     Tool('sources.sample','Read a bounded sample of a previously discovered eligible source',SourceSample,
+                           lambda a: discovery.sample(ctx,namespace,a.query_fingerprint,a.provider_ref,max_rows=a.max_rows),False),
+                     Tool('sources.propose','Queue source or connector review; never self-approve',SourceProposal,
+                           lambda a: discovery.propose_source(ctx,namespace,a.query_fingerprint,a.provider_ref,a.rationale),False)]:
+            server.tools[tool.name] = tool
+        if research_runtime is not None:
+            server.tools['scheduler.status'] = Tool('scheduler.status','Read this pod research schedule',Empty,
+                lambda a: research_runtime.scheduler.status(namespace))
+            server.tools['research.cycle_status'] = Tool('research.cycle_status','Read own bounded research outcomes and budgets',Empty,
+                lambda a: research_runtime.status(namespace))
     return server
 
 # Replaces the earlier launcher while preserving build_server's legacy pod API.
