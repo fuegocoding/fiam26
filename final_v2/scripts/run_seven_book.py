@@ -61,9 +61,12 @@ BORROW_ANNUAL = 0.05
 USE_RISK_OVERLAY = "--risk-overlay" in sys.argv
 USE_GAP = "--with-gap" in sys.argv
 BLEND_RENORM = "--blend-renorm" in sys.argv
-OUT = ROOT / "artifacts" / (
-    ("risk_book_renorm" if BLEND_RENORM else "risk_book") if USE_RISK_OVERLAY else "seven_book"
-)
+USE_GRAPH = "--with-graph" in sys.argv
+_out_name = "seven_book"
+if USE_RISK_OVERLAY:
+    _out_name = "risk_book" + ("_renorm" if BLEND_RENORM else "") + ("_graph" if USE_GRAPH else "")
+OUT = ROOT / "artifacts" / _out_name
+GRAPH_WORK = ROOT / "artifacts" / "graph_work"
 GAP_WORK = ROOT / "artifacts" / "valuation_work"
 FAMILIES = (
     "inventory_retail",
@@ -188,6 +191,19 @@ def get_gap_map():
     return gap_map
 
 
+def get_graph_map():
+    """3-seed ensemble of graph EPS forecasts: {(sid, formation date): pred}."""
+    import glob as _glob
+
+    files = sorted(_glob.glob(str(GRAPH_WORK / "graph_attention_*_seed*.parquet")))
+    if not files:
+        raise FileNotFoundError("graph forecasts not found - run scripts/train_graph.py first")
+    frames = [pd.read_parquet(f) for f in files]
+    allf = pd.concat(frames, ignore_index=True)
+    ens = allf.groupby(["permno", "eom"], as_index=False)["pred_eps"].mean()
+    return {(str(int(r.permno)), r.eom.date()): float(r.pred_eps) for r in ens.itertuples()}
+
+
 def main() -> None:
     reuse = "--reuse-forecasts" in sys.argv
     OUT.mkdir(parents=True, exist_ok=True)
@@ -209,6 +225,7 @@ def main() -> None:
 
     xgb_fc, filing_fc, audits = get_forecasts(panel_full, factor_columns, reuse)
     gap_map = get_gap_map() if USE_GAP else {}
+    graph_map = get_graph_map() if USE_GRAPH else {}
 
     si_table = build_short_interest(str(EXTERNAL), str(PANEL))
     si_map = {
@@ -283,8 +300,7 @@ def main() -> None:
             ranked = series.rank(pct=True)
             scaled[name] = ((ranked - 0.5) * (12 ** 0.5)).where(series.notna()).fillna(0.0)
 
-        candidates = []
-        candidates_alpha = {}
+        raw_alpha = {}
         for sid, idx in zip(merged["sid"], merged.index):
             fams = []
             for name in FAMILIES:
@@ -293,10 +309,29 @@ def main() -> None:
                     fams.append(FamilyEstimate(name, sid, value, 0.1))
             if not fams:
                 continue
-            alpha = sum(f.expected_excess_return for f in fams) / (
+            raw_alpha[sid] = sum(f.expected_excess_return for f in fams) / (
                 len(fams) if BLEND_RENORM else len(FAMILIES)
             )
-            candidates_alpha[sid] = alpha
+
+        candidates_alpha = {}
+        if USE_GRAPH and raw_alpha:
+            sr = pd.Series(raw_alpha)
+            sr_rank = sr.rank(pct=True)
+            gv = pd.Series({sid: graph_map.get((sid, month_date)) for sid in raw_alpha})
+            covered = gv.notna()
+            tilted = sr_rank.copy()
+            if covered.any():
+                gr_rank = gv[covered].rank(pct=True)
+                tilted[covered] = 0.95 * sr_rank[covered] + 0.05 * gr_rank
+            candidates_alpha = (tilted - 0.5).to_dict()
+        else:
+            candidates_alpha = dict(raw_alpha)
+
+        candidates = []
+        for sid, idx in zip(merged["sid"], merged.index):
+            if sid not in candidates_alpha:
+                continue
+            alpha = candidates_alpha[sid]
             row = merged.loc[idx]
             beta_value = row.get("beta_60m")
             si_value = si_map.get((sid, ret_date))
