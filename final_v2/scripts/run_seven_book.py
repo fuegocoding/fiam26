@@ -62,9 +62,10 @@ USE_RISK_OVERLAY = "--risk-overlay" in sys.argv
 USE_GAP = "--with-gap" in sys.argv
 BLEND_RENORM = "--blend-renorm" in sys.argv
 USE_GRAPH = "--with-graph" in sys.argv
+USE_DEMAND = "--with-demand" in sys.argv
 _out_name = "seven_book"
 if USE_RISK_OVERLAY:
-    _out_name = "risk_book" + ("_renorm" if BLEND_RENORM else "") + ("_graph" if USE_GRAPH else "")
+    _out_name = "risk_book" + ("_renorm" if BLEND_RENORM else "") + ("_graph" if USE_GRAPH else "") + ("_demand" if USE_DEMAND else "")
 OUT = ROOT / "artifacts" / _out_name
 GRAPH_WORK = ROOT / "artifacts" / "graph_work"
 GAP_WORK = ROOT / "artifacts" / "valuation_work"
@@ -76,7 +77,7 @@ FAMILIES = (
     "conf_revision_gated",
     "xgb_rank",
     "filing_events",
-) + (("gap_micro",) if USE_GAP else ())
+) + (("gap_micro",) if USE_GAP else ()) + (("demand",) if USE_DEMAND else ())
 
 
 def load_tb3ms() -> dict[str, float]:
@@ -191,6 +192,37 @@ def get_gap_map():
     return gap_map
 
 
+def get_demand_map():
+    """Combined demand signal: {(TICKER, formation date): scaled rank}.
+
+    Equal rank-mean of card spend 12m YoY and foot traffic 3m YoY (the
+    strongest belief features), formed at month+1 (T+3 lag), ranked
+    cross-sectionally per formation month.
+    """
+    card = pd.read_parquet(ROOT / "artifacts" / "demand_card.parquet") if (ROOT / "artifacts" / "demand_card.parquet").exists() else None
+    if card is None:
+        card = pd.read_parquet(REPO / "data" / "carbon" / "raw" / "framework" / "card_panel_unified.parquet")
+        ft = pd.read_parquet(REPO / "data" / "carbon" / "raw" / "framework" / "foot_traffic_panel.parquet")
+        card = card[["ticker", "date", "credit_card_spend_12m_yoy"]].merge(
+            ft[["ticker", "date", "foot_traffic_3m_yoy"]], on=["ticker", "date"], how="outer"
+        )
+        card["feature_month"] = pd.to_datetime(card["date"]) + pd.offsets.MonthEnd(1)
+        out = ROOT / "artifacts" / "demand_card.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        card.to_parquet(out, index=False)
+    g = card.dropna(subset=["feature_month"]).copy()
+    g["combo"] = (
+        g["credit_card_spend_12m_yoy"].rank(pct=True).fillna(0.5)
+        + g["foot_traffic_3m_yoy"].rank(pct=True).fillna(0.5)
+    )
+    # rank within formation month across tickers
+    g["scaled"] = (g.groupby("feature_month")["combo"].rank(pct=True) - 0.5) * (12 ** 0.5)
+    return {
+        (str(r.ticker).upper(), r.feature_month.date()): float(r.scaled)
+        for r in g.dropna(subset=["scaled"]).itertuples()
+    }
+
+
 def get_graph_map():
     """3-seed ensemble of graph EPS forecasts: {(sid, formation date): pred}."""
     import glob as _glob
@@ -226,6 +258,9 @@ def main() -> None:
     xgb_fc, filing_fc, audits = get_forecasts(panel_full, factor_columns, reuse)
     gap_map = get_gap_map() if USE_GAP else {}
     graph_map = get_graph_map() if USE_GRAPH else {}
+    demand_map = get_demand_map() if USE_DEMAND else {}
+    if USE_DEMAND:
+        print(f"demand scores: {len(demand_map):,}")
 
     si_table = build_short_interest(str(EXTERNAL), str(PANEL))
     si_map = {
@@ -285,6 +320,14 @@ def main() -> None:
         keys = [(sid, month_date) for sid in merged["sid"]]
         merged["xgb_rank"] = [xgb_map.get(k) for k in keys]
         merged["filing_events"] = [filing_map.get(k) for k in keys]
+        if USE_DEMAND:
+            merged["demand"] = [
+                demand_map.get((str(t).upper(), month_date), float("nan"))
+                for t in merged["ticker"]
+            ]
+            dv = merged["demand"]
+            scaled["demand"] = dv.where(dv.notna()).fillna(0.0)
+            coverage["demand"] = int(dv.notna().sum())
         if USE_GAP:
             merged["gap_micro"] = [gap_map.get(k) for k in keys]
             micro = merged["size_grp"].eq("micro") & merged["gap_micro"].notna()
