@@ -1,0 +1,93 @@
+{
+  "schema_version": "charter_campaign_config.v1",
+  "config_id": "charter_campaign_v1",
+  "thresholds": {
+    "alpha": 0.05,
+    "min_belief_ic_improvement": 0.0,
+    "min_bridge_ic_candidate": 0.0,
+    "require_halves_same_sign": true,
+    "min_positive_year_share": 0.5
+  },
+  "hypotheses": [
+    {
+      "key": "s1_fundamentals",
+      "charter": "business_fundamentals_expectations",
+      "recipe_id": "fund_earnings_innovation_v1",
+      "title": "Sales growth and earnings yield add to surprise persistence when forecasting the next earnings innovation",
+      "question": "Before the next report, does a bounded rank model of niq_su, sale_gr1 and ni_me forecast the panel's next standardized earnings surprise better than current-surprise persistence, and does that belief translate into next-month excess return?",
+      "mechanism": "Investors underanticipate persistence in operating changes: sales growth and profitability carry information about the next innovation that the current surprise alone does not, and prices may adjust slowly to the resulting earnings news.",
+      "falsification": [
+        "Candidate rank IC against the target is not above the persistence baseline on the design partition.",
+        "The improvement appears in only one half of the evaluated months or in a single calendar year.",
+        "The belief improves but next-month return IC or the net tail spread after the flat cost is not positive.",
+        "The improvement disappears after within-sector neutralization."
+      ],
+      "variants": [
+        {"name": "ridge_core", "params": {"recipe_id": "fund_earnings_innovation_v1", "method_id": "ridge", "feature_set": "core", "ridge_lambda": 0.05}},
+        {"name": "blend_core", "params": {"recipe_id": "fund_earnings_innovation_v1", "method_id": "rank_blend", "feature_set": "core"}},
+        {"name": "ridge_extended", "params": {"recipe_id": "fund_earnings_innovation_v1", "method_id": "ridge", "feature_set": "extended", "ridge_lambda": 0.05}}
+      ],
+      "primary_variant": "ridge_core"
+    },
+    {
+      "key": "s2_events",
+      "charter": "corporate_events_capital_allocation",
+      "recipe_id": "events_net_issuance_eqnetis_v1",
+      "title": "Net equity issuance intensity is forecastable and its direction is underpriced",
+      "question": "Does a bounded rank model of eqnetis_at, be_me and ret_12_1 forecast issuance intensity six months ahead better than current intensity alone, and does predicted heavy issuance precede lower next-month excess return?",
+      "mechanism": "Issuance is an observable, dated capital-allocation decision; heavy issuers tend to keep financing and dilute value, and investors underweight the consequences of persistent dilution.",
+      "falsification": [
+        "Candidate rank IC against future issuance intensity is not above the current-intensity baseline.",
+        "The predicted-issuance ranking does not carry a negative next-month return relation (bridge sign -1) after the flat cost.",
+        "The effect is explained by size, book-to-market or momentum exposure rather than issuance.",
+        "The improvement is concentrated in one year or one sector."
+      ],
+      "variants": [
+        {"name": "ridge_core", "params": {"recipe_id": "events_net_issuance_eqnetis_v1", "method_id": "ridge", "feature_set": "core", "ridge_lambda": 0.05}},
+        {"name": "blend_core", "params": {"recipe_id": "events_net_issuance_eqnetis_v1", "method_id": "rank_blend", "feature_set": "core"}},
+        {"name": "ridge_extended", "params": {"recipe_id": "events_net_issuance_eqnetis_v1", "method_id": "ridge", "feature_set": "extended", "ridge_lambda": 0.05}}
+      ],
+      "primary_variant": "ridge_core"
+    },
+    {
+      "key": "s3_valuation",
+      "charter": "valuation_fundamental_relative_value",
+      "recipe_id": "valuation_residual_return_v1",
+      "title": "Valuation and earnings yield forecast sector-residual three-month returns beyond sector-relative value",
+      "question": "Does a bounded rank model of be_me and ni_me forecast three-month sector-residual excess return better than sector-relative book-to-market alone, and is the translation positive after costs?",
+      "mechanism": "Prices can misrepresent the durability of business economics; cheap valuation combined with earnings yield may identify firms priced for a worse outcome than observable evidence supports, beyond the generic value style.",
+      "falsification": [
+        "Candidate rank IC is not above sector-relative book-to-market on the design partition.",
+        "The result is explained by generic value, size or momentum exposure.",
+        "The net tail spread after the flat cost is not positive or is below the baseline tail spread.",
+        "The improvement exists in only one half of the evaluated months."
+      ],
+      "variants": [
+        {"name": "ridge_core", "params": {"recipe_id": "valuation_residual_return_v1", "method_id": "ridge", "feature_set": "core", "ridge_lambda": 0.05}},
+        {"name": "blend_core", "params": {"recipe_id": "valuation_residual_return_v1", "method_id": "rank_blend", "feature_set": "core"}},
+        {"name": "ridge_extended", "params": {"recipe_id": "valuation_residual_return_v1", "method_id": "ridge", "feature_set": "extended", "ridge_lambda": 0.05}}
+      ],
+      "primary_variant": "ridge_core"
+    },
+    {
+      "key": "s4_dynamics",
+      "charter": "market_dynamics_information_diffusion",
+      "recipe_id": "dynamics_reversal_liquidity_v1",
+      "title": "Reversal, momentum and dollar volume forecast next-month sector-residual returns beyond simple reversal",
+      "question": "Does a bounded rank model of ret_1_0, ret_12_1 and dolvol_126d forecast next-month sector-residual excess return better than short-term reversal alone, and does it survive the flat cost with realistic turnover?",
+      "mechanism": "Temporary price pressure reverses and information diffuses slowly; liquidity conditions modulate both effects, so combining reversal, momentum and trading volume may identify temporary dislocations.",
+      "falsification": [
+        "Candidate rank IC is not above the simple reversal baseline.",
+        "The net tail spread after the flat cost is not positive because turnover absorbs the gross spread.",
+        "The score is mostly a size or liquidity exposure.",
+        "The improvement is concentrated in one year or a few sectors."
+      ],
+      "variants": [
+        {"name": "ridge_core", "params": {"recipe_id": "dynamics_reversal_liquidity_v1", "method_id": "ridge", "feature_set": "core", "ridge_lambda": 0.05}},
+        {"name": "blend_core", "params": {"recipe_id": "dynamics_reversal_liquidity_v1", "method_id": "rank_blend", "feature_set": "core"}},
+        {"name": "ridge_extended", "params": {"recipe_id": "dynamics_reversal_liquidity_v1", "method_id": "ridge", "feature_set": "extended", "ridge_lambda": 0.05}}
+      ],
+      "primary_variant": "ridge_core"
+    }
+  ]
+}

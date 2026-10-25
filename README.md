@@ -1,231 +1,313 @@
-# McGill FIAM Asset Management Hackathon 2026
+# FIAM 2026 long/short equity strategy
 
-## Time-series experiment batch
+A monthly U.S. equity pipeline that combines earnings, valuation, accounting,
+characteristics and filing signals with a company graph. It builds a portfolio
+of 100 longs and 100 shorts, applies liquidity and risk constraints, and produces
+holdings, returns, performance statistics and charts.
 
-The [40-hypothesis menu](docs/research/time_series_search.md) implements resumable tests of return,
-fundamental, analyst and peer-information paths, risk sizing, and information-based exits.
-The [research interpretation](docs/research/time_series_results.md) connects them to the challenge and
-the team's prior findings. Combined numerical results are written to `output/time_series_batch/summary.md`.
+The evaluation covers **January 2021–August 2026 (68 months)**. Under the final
+challenge mandate (Instructions 3.1, 3.3) the fund is endowed with **US$1bn at
+the start of the test period and compounds from there**; the shortable universe
+is restricted to names with **market capitalisation of at least US$500m at
+formation**. Every dollar limit in the optimizer follows the compounding capital.
 
-```bash
-OPENBLAS_NUM_THREADS=4 OMP_NUM_THREADS=4 python -u -m src.time_series_overnight --full-characteristics
-```
+Data provenance and source tables: [docs/source.md](docs/source.md). The final
+challenge rules, what they change and the mandate-compliant results are in
+[docs/final_mandate_rules_map.md](docs/final_mandate_rules_map.md) and
+[docs/RESULTS_AND_BASELINE_DELTA.md](docs/RESULTS_AND_BASELINE_DELTA.md).
 
-This runs the 40-idea menu at three costs, nonlinear and full-147-characteristic controls, predictive
-attribution, and independent saved-holdings reconciliation. Stages run sequentially to limit memory.
-TimesFM forecasts were regenerated on 2026-09 with the safe availability policy (full formation
-universe, independent of future targets): `output/preds_timesfm_all.parquet`, manifest and per-month
-parts under `output/timesfm_safe_v2/`. Tests that consumed the pre-regeneration cache must be
-re-scored before being cited as clean evidence.
+## Setup
 
-## Economic graph research (`src/graph/`, `docs/graph/`)
-
-All findings from the economic-graph, I/B/E/S expectation-gap, surprise-model, monthly-strategy and
-valuation experiments (September 2026) are summarized in [`docs/graph/research_log.md`](docs/graph/research_log.md),
-including what was rejected and why. Every model must follow the challenge walk-forward schedule in
-[`src/graph/walk_forward.py`](src/graph/walk_forward.py) (expanding training, rolling two-year validation, annual refit).
+Use Python 3.13 and install the pinned dependencies from the project root:
 
 ```bash
-# Monthly point-in-time economic graph (config: configs/economic_graph.json)
-OPENBLAS_NUM_THREADS=1 python -m src.graph.business_text_profiles
-OPENBLAS_NUM_THREADS=1 python -m src.graph.economic_graph --config configs/economic_graph.json --save-candidates
-
-# I/B/E/S expectation state, analyst-error history, graph peer surprises and the walk-forward surprise model
-PYTHONPATH=.deps OPENBLAS_NUM_THREADS=4 python -m src.graph.expectations
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-## Strategy memo
+`MAIN.py` selects CUDA when available and CPU otherwise. The modular runner
+uses `DEVICE` in `config.py`. Both runners read local inputs.
 
-This repository contains the starter data and reference scripts for the 2026 McGill FIAM Asset Management Hackathon. The recommendation below is a strategy design, not a reported backtest result. No performance numbers are invented here; they must be produced by the final reproducible pipeline.
+Put these competition files in `data/`:
 
-## Recommended strategy: Evidence-Weighted Alpha
+| File | Contents |
+|---|---|
+| `chars_final_with_names.parquet` | Monthly stock characteristics and identifiers |
+| `factor_char_list.csv` | The 147 characteristic features |
+| `8k_20150101_20260831_identified.parquet` | Linked 8-K filings |
+| `dsf_mini_from_2014.csv` | Daily returns from 2014, for the daily-frequency metrics |
 
-**Current submission config: final v3** (re-frozen 2026-09-21; pipeline fully unconditioned) —
-TimesFM + XGBoost 50/50 blend, both engines in 3-month staggered tranches at 1.0x book gross
-(stated risk-appetite policy), + 0.25x SPX sleeve, on a point-in-time $1 share-price floor
-(both legs; documented tradeability restriction). OOS 2021-26: +22.9% CAGR, IR 1.45, maxDD −6.4%.
-Definition, performance table, conventions and disclosures: `docs/timesfm_strategy_memo.md` §8.
-Metrics accounting: `src/comp_metrics.py`. Superseded configs (v1 single-engine, v2 buffered,
-0.8x-gross and no-floor variants) are retained in the memo as disclosed alternatives.
+Place the external input file at **`external_data/external.parquet`**.
+It contains I/B/E/S analyst records, FRED T-bill and S&P 500 data, FINRA short
+interest and SEC EDGAR indexes. See [external_data/README.md](external_data/README.md)
+for its source tables and rebuilding instructions. This file must be obtained
+separately; `MAIN.py` does not automatically download it.
 
-Build a market-neutral U.S. equity strategy whose alpha comes primarily from disciplined cross-sectional modeling of the 147 supplied characteristics, with 8-K disclosures used as a compact, point-in-time event overlay.
-
-The standout feature is an **evidence-aware agent council**. Agents do not choose trades or write the final portfolio. They independently turn the same eligible filing evidence into structured features, challenge one another's interpretation, and expose disagreement as a measurable uncertainty signal. The statistical model and portfolio optimizer remain the decision makers.
-
-The central principle is:
-
-> Alpha comes from structured characteristics plus disclosure events; agents make research auditable and challenge weak trades, but out-of-sample data—not prose—determines success.
-
-## Challenge framing
-
-The released challenge brief defines a monthly U.S. equity panel from January 2015 through August 2026, with January 2021 through August 2026 reserved for out-of-sample evaluation. The portfolio must be market-neutral and rebalance monthly.
-
-The design should respect these requirements from the local brief:
-
-- 100–500 positions across both long and short legs.
-- Gross exposure no greater than 200%.
-- Net exposure between -50% and +50%.
-- Benchmark of 3-month Treasury bills plus 4% annualized.
-- Evaluation emphasis on information ratio, alpha, near-zero beta, drawdown, turnover, liquidity, and short-book quality.
-- Deliverables: an eight-page maximum deck plus appendix, monthly holdings, monthly/daily returns, and one `MAIN.py` entry point.
-
-The public website currently describes a different universe size (“50–70 global stocks”), while the dated released PDF in this repository specifies the U.S. equity panel and 100–500 positions. This memo follows the released PDF; the final submission should explicitly confirm the applicable rule set with the organizers if the discrepancy remains.
-
-## Model architecture
-
-### 1. Point-in-time feature layer
-
-- Rank-normalize characteristics cross-sectionally by month.
-- Median-impute within the training process and retain missingness indicators where useful.
-- Add winsorization and robust scaling only inside each training fold.
-- Aggregate eligible 8-Ks to one stock-month record before joining to returns or characteristics.
-- Use event features such as filing category, novelty, recency, text length, TF-IDF or embeddings, and deterministic keyword/section flags.
-
-### 2. Predictive models
-
-Use a regularized linear model as the transparent baseline: Ridge or Elastic Net on the factor panel and event features. Add one nonlinear challenger, such as gradient-boosted trees, only if expanding-window validation shows stable incremental value.
-
-The final score should combine expected excess return with uncertainty and implementation costs:
+Input data and generated model/report directories are excluded from Git.
+A fresh checkout needs these actual files; local symlinks to another workspace
+are not supplied inputs. The required layout is:
 
 ```text
-alpha_score = predicted_return
-              × confidence_adjustment
-              × (1 - contradiction_penalty)
-              - turnover_cost
-              - liquidity_and_short_risk_penalty
+.
+├── MAIN.py
+├── requirements.txt
+├── data/
+│   ├── chars_final_with_names.parquet
+│   ├── factor_char_list.csv
+│   └── 8k_20150101_20260831_identified.parquet
+└── external_data/
+    └── external.parquet
 ```
 
-The exact coefficients must be learned or fixed using training/validation data only. Do not hand-tune them on the final out-of-sample period.
+## Run
 
-## Agent council: useful, but bounded
-
-An agent council is worthwhile if it is treated as a feature-generation and audit layer rather than an ensemble of autonomous portfolio managers. Multiple LLMs do not automatically provide independent evidence: they can share the same blind spots and produce false consensus.
-
-Give every agent the same point-in-time evidence packet and require strict structured output:
-
-```text
-direction             [-1, 1]
-materiality           [0, 1]
-novelty               [0, 1]
-expectedness          [0, 1]
-confidence            [0, 1]
-contradiction_score   [0, 1]
-evidence_quality      [0, 1]
-abstain               {0, 1}
-evidence_count        integer
-```
-
-Suggested roles:
-
-1. **Event classifier** — identifies filing type, topic, and likely economic direction.
-2. **Materiality analyst** — estimates whether the event can plausibly affect future cash flows, risk, or financing conditions.
-3. **Contrarian reviewer** — searches for alternative explanations, stale information, and reasons not to trade.
-4. **Numeric/audit checker** — validates dates, identifiers, units, and whether the claim is actually supported by the filing.
-
-Aggregate deterministically with medians or trimmed means, preserve disagreement, and allow abstention. Learn agent weights only on validation data. Recommended council features are median direction, median confidence, dispersion, contradiction rate, abstention rate, and evidence count. High disagreement should reduce position size or cause the event signal to be ignored.
-
-The agent council should be evaluated by ablation, not by how persuasive its explanations sound:
-
-- characteristics only;
-- characteristics plus deterministic filing features;
-- characteristics plus one agent;
-- characteristics plus the full council.
-
-Keep the council only if it improves out-of-sample risk-adjusted returns, drawdown, turnover, or robustness after accounting for inference cost and latency.
-
-## Portfolio construction and risk
-
-Each month, rank the final scores and form roughly 100–150 longs and 100–150 shorts, subject to the official universe and liquidity filters. Use an optimizer or constrained weighting rule to target:
-
-- dollar neutrality and beta near zero;
-- sector and industry exposure limits;
-- position and issuer concentration caps;
-- gross and net exposure limits;
-- turnover penalties and minimum trade thresholds;
-- liquidity-aware sizing and explicit short availability/borrow-risk penalties.
-
-Do not let a high-confidence event signal override a hard risk constraint. The portfolio layer should be deterministic, logged, and reproducible from the submitted `MAIN.py`.
-
-## Validation and leakage controls
-
-Use expanding or rolling time-series splits. A practical initial schedule is training on 2015–2018, validation on 2019–2020, and untouched out-of-sample evaluation from 2021 through August 2026, with annual refits after the model is frozen.
-
-Critical controls:
-
-- `ret_exc_lead1m` is the future target and must never enter features.
-- A row in month `t` predicts the next month's return; do not shift the target a second time.
-- A January 2021 forecast must use information available by December 2020 under the chosen cutoff policy.
-- Filing timestamps are date/midnight placeholders; do not treat them as precise publication times.
-- `content_report_date` is not a public-availability timestamp.
-- Same-month joins can leak when a filing arrives after the characteristic snapshot.
-- Deduplicate and aggregate filings before joining, or repeated filings will duplicate observations and portfolio weights.
-- Freeze prompts, model versions, feature definitions, and hyperparameters before the final out-of-sample run.
-
-Report active-return information ratio against `TB3MS / 100 / 12 + 0.04 / 12`, plus Sharpe, alpha and beta versus the S&P 500, maximum drawdown, turnover, concentration, liquidity, and short-book diagnostics. Reconcile the metric definitions with the challenge brief; the legacy script's printed “Information Ratio” is not automatically the competition metric.
-
-## Execution plan
-
-1. Build and test the point-in-time monthly panel and leakage checks.
-2. Establish the regularized linear factor baseline and the constrained long-short portfolio.
-3. Add deterministic 8-K features and test whether they add stable incremental signal.
-4. Add the bounded council, cache its structured outputs, and run the ablation matrix.
-5. Freeze the research specification, run the untouched out-of-sample period, and generate holdings/returns.
-6. Package the reproducible `MAIN.py`, CSV outputs, eight-page deck, appendix, and an audit log of feature/model versions.
-
-## Repository map
-
-- [`data/raw/readme.md`](data/raw/readme.md) — data dictionary, join guidance, and leakage warnings.
-- [`data/raw/factor_char_list.csv`](data/raw/factor_char_list.csv) — supplied characteristic list.
-- [`data/raw/penalized_linear_hackathon.py`](data/raw/penalized_linear_hackathon.py) — legacy regularized-model template; update its dates and target alignment before reuse.
-- [`data/raw/portfolio_analysis_hackathon.py`](data/raw/portfolio_analysis_hackathon.py) — legacy decile portfolio template; reconcile its metrics and constraints with the brief before reuse.
-- `data/raw/McGill-FIAM Asset Management Hackathon First Challenge 2026.pdf` — released challenge brief.
-
-## References
-
-Local data and rules should take precedence over generic examples. Useful external references include:
-
-- [2026 FIAM Asset Management Hackathon](https://hackathonfiam-ia.com/hackathon/)
-- [Gu, Kelly, and Xiu, “Empirical Asset Pricing via Machine Learning”](https://doi.org/10.1093/rfs/hhaa009)
-- [SEC EDGAR application programming interfaces](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
-- [SEC EDGAR FAQ](https://www.sec.gov/about/webmaster-frequently-asked-questions)
-- [FRED 3-Month Treasury Bill series (TB3MS)](https://fred.stlouisfed.org/series/TB3MS)
-- [8-K text-based strategy research](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3910451)
-
-## Opt-in Jev event scorer (replaces the archived LLM council)
-
-Filings are scored with TypeSafe's Jev System One model (`jev-1.13`, pinned) through
-OpenRouter's TypeSafe-compatible endpoint (`POST .../api/v1/systemone`), one request per
-filing carrying 12 parallel questions (event Choice, materiality/surprise/forward-looking
-and cash-flow Scores, distress/direction/secondary Nouls). Answers are validated, encoded
-to numeric filing rows in code, cached in `data/scoring/jev_scores.db`, aggregated
-deterministically to `output/jev_features.parquet`, and evaluated through the opt-in
-`src/xgb_jev.py` branch. The scorer is a feature and audit layer, not a portfolio
-decision-maker. The previous 4-role chat-completions council is archived under
-`src/agentic/archive_llm_council/` (frozen at `council-v3`) for reference and ablations.
-
-Strict redaction is unchanged: issuer names, tickers, identifiers, URLs, sector/industry
-labels, and exact date cues are masked before scoring, and a stable keyed local identity
-map preserves the `(permno, eom)` join without ever sending identifiers to the model.
-
-Availability follows the repository's monthly convention: filings dated in month `t` are
-aggregated at month-end `t` and predict the next-month target `t+1`. The scorer does not
-claim to support intramonth execution.
-
-Configure the Jev endpoint (key is the OpenRouter key; model stays pinned):
-
-```text
-JEV_API_KEY=(defaults to LLM_API_KEY)
-JEV_BASE_URL=https://openrouter.ai/api/v1/systemone
-JEV_MODEL=jev-1.13
-REDACTION_HMAC_KEY=a-local-secret-for-stable-opaque-ids
-```
-
-Full competition scope is the default (every filing, idempotent cache). Pilot first:
+After installing dependencies and placing the inputs above, run from the project root:
 
 ```bash
-python -m src.agentic.run_jev --sample 20
-python -m src.agentic.run_jev --month 2021-01
-python src/xgb_jev.py
+python MAIN.py          # rebuild all stages on the mandate rules
+python MAIN.py --reuse  # resume matching cached stages
 ```
 
-The existing TimesFM, FinBERT, text-scoring, and baseline branches remain available independently. Compare characteristics-only, deterministic filing features, Jev single-question features, and the full Jev set using the existing expanding time splits before retaining the scorer.
+New results are written to **`output_1000M/report/`**, including
+`holdings.csv`, `returns.csv`, performance statistics and charts. CUDA is
+selected when available; otherwise the single-file runner uses CPU.
+
+The modular entry point remains available from the project root:
+
+```bash
+python main.py           # rebuild into output/
+python main.py --reuse   # reuse matching caches
+```
+
+`--reuse` requires the saved code and input manifest to match the current
+pipeline. After a model or input change, use a full rebuild.
+
+Settings are in [config.py](config.py):
+
+| Setting | Purpose | Default |
+|---|---|---|
+| `NAV` | Endowed fund size in dollars (the fund compounds from it) | `1_000_000_000` |
+| `DEVICE` | Model computation device | `"cuda"` |
+| `DATA_DIR` | Competition input directory | `data/` |
+| `WORK_DIR` | Models, forecasts and reports | `output/` |
+| `TEST_YEARS`, `LAST_TARGET` | Holding-month evaluation window | 2021–August 2026 |
+
+Model settings and portfolio rules are defined in the modules below.
+
+## How it works
+
+### Signals and blend
+
+The pipeline has nine sleeves; the earnings sleeve supplies two signals:
+
+| Sleeve | Signal | Native universe |
+|---|---|---|
+| `e7_lm`, `e7_small_gated` | Earnings surprise and post-report analyst revision breadth | Large/mega caps; small caps |
+| `gap_micro_best` | Model-implied minus actual log valuation | Micro caps |
+| `runway_micro` | Cash divided by operating cash burn | Micro caps with negative operating cash flow |
+| `conf_lm_gated` | Consensus EPS revision that agrees with price momentum | Large/mega caps |
+| `inventory_retail` | Sales growth minus inventory growth | Retail and consumer durables |
+| `oplev_software` | Sales growth minus SG&A growth | Software and IT services |
+| `xgb_rank` | XGBoost ranking the 147 characteristics | Stocks priced at $1 or more |
+| `filing_events` | XGBoost on SEC event counts over 1, 3 and 12 months | Stocks priced at $1 or more |
+
+Scores are ranked within each month and averaged equally over the sleeves that
+cover a stock. Broad-universe scores use the sleeve's native scores as their
+ranking reference where available.
+
+**The fixed fund-size cutoff is $50M.** At or below $50M, all nine sleeves are
+included. Above $50M, the blend excludes `gap_micro_best` and `runway_micro` and
+uses `final_score_liquid`. Stock-level liquidity limits apply at every fund size.
+
+### Company graph
+
+Each company links to its 15 most similar peers. Similarity combines:
+
+| Component | Weight |
+|---|---:|
+| Business text | 40% |
+| Fundamentals | 35% |
+| Industry | 20% |
+| Recent filing events | 4% |
+| Historical return co-movement | 1% |
+
+Business text uses up to 60 months of available filings. A peer-attention model
+forecasts the next earnings surprise, with return and risk prediction as auxiliary
+tasks. Three seeds are averaged. The final score combines **95% sleeve rank and
+5% graph forecast rank**; stocks without a graph forecast keep their sleeve rank.
+
+### Portfolio construction and risk
+
+| Rule | Setting |
+|---|---|
+| Holdings | 100 longs and 100 shorts at formation (mandate floor: 200–500 names) |
+| Shortable universe | Market capitalisation ≥ $500m at formation (Instructions 3.1) |
+| Initial gross exposure | 100% of NAV |
+| Minimum share price | $5 |
+| Execution allowance | Five days at 5% of ADV for longs, 2% for shorts |
+| Liquidity measure | 126-day average dollar volume |
+| Short-interest screen | Exclude shorts at 15% or more; unknown values pass |
+| Sector matching | Equal long and short name counts within each sector |
+| Retention buffer | Keep incumbents within 1.5 times their sector selection quota |
+| Beta sizing | Balance estimated leg betas within bounded notional adjustments |
+| Capital path | Endowed $1bn compounding; dollar limits sized on current capital (Instructions 3.3) |
+
+Risk rules reduce crowded-short exposure, cap short run-ups and scale gross
+exposure when historical expected shortfall increases. The edge throttle uses
+the last 12 months' realized top-minus-bottom 5% score spread:
+
+`edge scale = clip(0.5 + 0.25 × t-statistic, 0.5, 1.0)`
+
+The multiplier is rounded to 25-point steps. Fewer than six usable months imply
+full edge exposure. These rules use settled past returns; bounded beta sizing
+does not guarantee zero realized market beta.
+
+### Timing and evaluation
+
+- Features at month-end t form the book held during month t+1.
+- Annual learned models train through Y−3 and validate or early-stop on
+  Y−2…Y−1 before predicting year Y. Earnings labels must be announced by the
+  relevant training or validation cutoff.
+- Analyst snapshots, company links and filing evidence are bounded by their
+  availability dates. A filing in month m first contributes to month m+1.
+- Short interest uses an explicit publication date where supplied; otherwise
+  it is delayed ten business days, accounting for holidays.
+- Previous holdings drift using the previous month's returns, cash rate and
+  fees before opening turnover is calculated.
+- Missing next-month returns do not remove stocks from the formation universe.
+  A held stock with a missing return closes during that holding month at the
+  latest positive quote dated no later than month-end. The exit price determines
+  P&L; an exit fee is charged and the closed position leaves subsequent drift
+  and retention. The trade is recorded in `liquidations.csv`.
+
+Returns are on NAV, net of trading costs and borrow fees. Trading costs range
+from 5 to 60 basis points per unit traded; annual borrow fees range from 25 to
+1,500 basis points by size tier. Cash earns the three-month T-bill. The benchmark
+is **T-bill + 4% annually**.
+
+## Results (final mandate)
+
+The book below is the submitted baseline rerun under the final mandate: the same
+signals, walk-forward and risk rules, with the **US$500m short-side market-cap
+floor** and the **compounding US$1bn endowment** in force. 68 months, 200 names
+every month, all compliance checks pass (`output/report/compliance.json`).
+
+| Metric | Mandate book |
+|---|---|
+| Information ratio vs T-bill + 4% | **0.36** |
+| Sharpe ratio (excess of T-bill) | 1.27 |
+| CAGR / cumulative return | 9.1% / 64.0% |
+| Ending value of the endowment | **$1.64bn** (from $1.00bn) |
+| Annualised volatility | 4.3% |
+| Maximum drawdown | -4.0% |
+| Maximum one-month / one-day loss | -2.0% (2026-05) / -1.3% (2022-02-15) |
+| Alpha vs S&P 500 (CAPM, monthly beta) | 6.4%/yr (t 3.5); beta -0.079 (s.e. 0.034) |
+| Beta vs S&P 500, daily | -0.070 (s.e. 0.008) |
+| 4-factor alpha (market, size, value, momentum) | 2.1%/yr (t 1.0) |
+| Trading costs / borrow fees per year | 0.8% / 0.2% |
+| Gross exposure, average (range) | 88% (37%–100%) |
+| Net exposure, average (range) | -0.2% (-6.8% to +6.8%) |
+| One-way turnover (per rebalance / annualised) | 33.5% / 402% |
+| Average holding period | 61 trading days |
+| Holdings per month (long / short) | 100 / 100 |
+| Position size, average / max | $5.9m / 0.57% NAV |
+| Short book median market cap (minimum) | $13.7bn (**$512.6m**) |
+| Micro/nano share of short positions | 0.2% |
+| OOS R² / rank IC (all scored stocks) | +0.02% / 0.122 |
+
+| Year | Strategy | Hurdle (T-bill + 4%) | S&P 500 |
+|---|---|---|---|
+| 2021 | 12.6% | 4.1% | 26.9% |
+| 2022 | 11.5% | 6.2% | -19.4% |
+| 2023 | 5.3% | 9.5% | 24.2% |
+| 2024 | 11.9% | 9.3% | 23.3% |
+| 2025 | 5.6% | 8.4% | 16.4% |
+| 2026 (to Aug) | 5.0% | 5.2% | 12.3% |
+
+What each new rule costs, and the attribution lenses the Arcana review asks for,
+are in [docs/RESULTS_AND_BASELINE_DELTA.md](docs/RESULTS_AND_BASELINE_DELTA.md);
+the rule map is [docs/final_mandate_rules_map.md](docs/final_mandate_rules_map.md).
+The first-challenge submission ran at $500M with no short floor (IR 1.07, CAGR
+13.5%); most of the gap to this table is fund size, not the rules.
+
+## Outputs
+
+The mandate report is in `output/report/`; new `MAIN.py` runs write
+`output_1000M/report/`.
+
+| Output | Contents |
+|---|---|
+| `holdings.csv` | Date, PERMNO, ticker, company name and weight as percent of NAV |
+| `returns.csv`, `monthly_detail.csv` | Monthly returns, exposures, turnover and costs |
+| `performance.json`, `comparison_metrics.csv`, `calendar_years.csv` | Aggregate statistics, strategy/benchmark/market comparison and annual returns |
+| `compliance.json` | Portfolio checks |
+| `liquidations.csv` | Missing-return exits, quote dates, prices and costs |
+| `contributors.csv`, `top_average_holdings.csv` | Return contributions and average positions |
+| `holdings_label_sources.csv` | Identifier and company-name provenance |
+| `arcana.json` | Factor vs idiosyncratic split, sizing vs selection, hit rate, alpha decay (Instructions 11) |
+| `position_adv_days.csv` | Position size in days of average daily volume, legs separate (Instructions 9.4) |
+| `rule_deltas/` | Attribution runs: what the short floor and the compounding fund each cost |
+| `charts/` | Performance, drawdown, risk and contributor charts |
+
+`output/` also contains saved models, `predictions.parquet`,
+`portfolio.parquet`, `optimizer_config.json` and `optimizer_diagnostics.csv`.
+
+## Submission
+
+The submission code is `MAIN.py` at the project root. The saved **mandate**
+holdings and returns CSVs (US$1bn compounding, $500m short floor) are in
+`submission/`.
+
+| File | Contents |
+|---|---|
+| `MAIN.py` (project root) | Complete Python source in one file; rebuilds models and reports from separately supplied inputs |
+| `holdings.csv` | Monthly long/short holdings, beginning-of-month dates, tickers, full company names and signed weights in percent of NAV |
+| `returns.csv` | Monthly total NAV returns in decimal units |
+
+Run the single-file version with Python 3.13 and the dependencies above:
+
+```bash
+python MAIN.py
+```
+
+It rebuilds every stage under the **mandate rules** and writes the report to
+`output_1000M/report/`. Place the three competition files in
+`data/` and `external.parquet` in `external_data/` beside `MAIN.py`. CUDA is
+used when available; otherwise it uses CPU.
+
+Optional path/device overrides:
+
+```bash
+python MAIN.py \
+  --data-dir /path/to/competition/files \
+  --external-dir /path/to/folder/containing/external.parquet \
+  --work-dir /path/to/new/output --device cuda
+```
+
+A normal run rebuilds all models; `--reuse` resumes matching cached stages.
+The supplied `holdings.csv` and `returns.csv` are the saved mandate results;
+newly generated versions are written inside `output_1000M/report/`.
+
+Add the eight-page slide deck and up to ten appendix pages in one PDF, plus
+the team members' CVs. Submit `MAIN.py`, both CSVs in `submission/`, the slide PDF and CVs;
+keep input data and fitted model caches outside the submission package.
+
+The supporting performance pack is in `output/report/`: `performance.json`,
+`comparison_metrics.csv`, `calendar_years.csv`, `top_average_holdings.csv`,
+`contributors.csv`, the historical label sources and the six required charts.
+
+## Project layout
+
+| Path | Role |
+|---|---|
+| `MAIN.py` | Standalone submission entry point; full rebuild on the mandate rules |
+| `main.py`, `config.py` | Entry point, paths and run settings |
+| `arcana.py` | Attribution lenses the Arcana review will ask for; reports only |
+| `sleeves/`, `combiner.py` | Signal models, monthly ranking and blend |
+| `graph/` | Dated company graphs, attention model and score overlay |
+| `identity.py`, `borrow.py` | Company labels and public short-interest data |
+| `optimizer.py`, `risk.py` | Stock selection, sizing and risk rules |
+| `evaluate.py`, `report.py` | Returns, costs, metrics, submission files and charts |
+| `timing.py` | Prediction timing checks and cache provenance |
+| `data/`, `external_data/` | Competition and external inputs |

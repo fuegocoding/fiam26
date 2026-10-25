@@ -26,7 +26,7 @@ SMOKE = OUT / "_smoke_panel.parquet"
 
 
 def main() -> None:
-    set_external_path(str(REPO / "final" / "external_data" / "external.parquet"))
+    set_external_path(str(REPO / "external_data" / "external.parquet"))
     OUT.mkdir(parents=True, exist_ok=True)
 
     if SMOKE.exists():
@@ -34,7 +34,7 @@ def main() -> None:
         print(f"[A] panel loaded from smoke cache: {len(panel):,} rows", flush=True)
     else:
         t = time.time()
-        panel = val._build_panel(REPO / "final" / "data" / "chars_final_with_names.parquet", OUT)
+        panel = val._build_panel(REPO / "data" / "chars_final_with_names.parquet", OUT)
         panel.to_parquet(SMOKE, index=False)
         print(f"[A] panel built: {len(panel):,} rows in {time.time()-t:.0f}s", flush=True)
 

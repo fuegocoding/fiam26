@@ -33,9 +33,9 @@ from pod_platform.reporting.tables import RequiredTable  # noqa: E402
 from pod_platform.signals import PortedSignals, scaled_rank  # noqa: E402
 
 REPO = ROOT.parent
-PANEL = REPO / "final" / "data" / "chars_final_with_names.parquet"
-FACTORS = REPO / "final" / "data" / "factor_char_list.csv"
-EXTERNAL = REPO / "final" / "external_data" / "external.parquet"
+PANEL = REPO / "data" / "chars_final_with_names.parquet"
+FACTORS = REPO / "data" / "factor_char_list.csv"
+EXTERNAL = REPO / "external_data" / "external.parquet"
 OUT = ROOT / "artifacts" / "ported_book"
 
 TEST_START = dt.date(2021, 1, 31)

@@ -1,43 +1,42 @@
-"""Seven-sleeve institutional run on the full 68-month out-of-sample window (2021-01 to 2026-08).
+"""Seven-sleeve run: five deterministic ports + two trained sleeves.
 
-Integrates:
-- Exact 68 holding months (formation 2020-12-31 .. 2026-07-31, return months 2021-01 .. 2026-08)
-- Point-in-time broad-vs-native empirical CDF scaling (e7_lm, e7_small_gated, conf_lm_gated,
-  inventory_retail, oplev_software, xgb_rank, filing_events with dated EDGAR crosswalk + lockup_m)
-- $1B NAV liquidity & ADV participation limits (5% long / 2% short over 5 execution days, prc >= $5)
-- Point-in-time verified company/ticker labels (CRSP + 8-K cover symbols)
-- Size-tiered transaction costs & borrow fees + Final Guide Section 7 conservative flat borrow sensitivity
-- Daily mark-to-market spine on dsf_mini_from_2014.csv (daily beta, max 1d loss, daily alpha decay, earnings window split)
-- Full 21-row Section 9.1 table, Section 9.4 exhibits, and offline Arcana attribution audit
+Trains xgb_rank (walk-forward on 147 chars) and filing_events (walk-forward
+on EDGAR event counts with dated cik links), caches the forecasts, blends
+all seven as families, and runs the engine end to end.
 
-Usage:
-  python final_v2/scripts/run_seven_book.py --reuse-forecasts --risk-overlay --with-graph --gate-e7-demand
+Hardened replay controls (pod_platform.orchestration.replay):
+* sources need APPROVED formation-eligible cards (--source-cards FILE) or an
+  explicit --research-only run, which is labeled and can never claim freeze;
+* every period is compliance-checked (formation target, post-risk, post-trade
+  actual, period-end drifted) with pre and post weights recorded;
+* no missing-return zero-fill: a held name without an outcome stops the run
+  unless dated liquidation evidence is supplied (--liquidations FILE);
+* turnover/cost use drifted actual holdings on the real AccountingLedger;
+* output goes to a fresh directory (--out-dir) or needs --overwrite.
+
+Monthly inputs only: no daily path, quotes or liquidity realism is claimed.
+
+Usage: python final_v2/scripts/run_seven_book.py (--source-cards FILE | --research-only)
+           [--reuse-forecasts] [--out-dir DIR] [--overwrite] [--liquidations FILE]
+           [--allow-terminal-unevaluated] [--no-hash-inputs]
+           [--trial-count N] [--evaluation-access-count N]
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
-import shutil
 import sys
 import time
 from decimal import Decimal
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from pod_platform.accounting.evaluation import (  # noqa: E402
-    evaluate_daily_spine,
-    evaluate_monthly_books,
-    load_dsf_daily,
-    load_evaluation_universe,
-    load_fred,
-    load_market_series,
-)
+from pod_platform.accounting.ledger import BorrowSchedule  # noqa: E402
 from pod_platform.allocation import (  # noqa: E402
     Candidate,
     ConstructionEngine,
@@ -46,138 +45,109 @@ from pod_platform.allocation import (  # noqa: E402
     InternalPolicy,
     OfficialLimits,
 )
-from pod_platform.contracts.hypotheses import HypothesisSpec  # noqa: E402
-from pod_platform.contracts.sources import SourceCard  # noqa: E402
-from pod_platform.data.security_master import (  # noqa: E402
-    UNVERIFIED_LABEL,
-    load_formation_fields,
+from pod_platform.contracts.base import canonical_digest  # noqa: E402
+from pod_platform.contracts.errors import ErrorCode, PodPlatformError  # noqa: E402
+from pod_platform.data.competition import CharsPanelLoader  # noqa: E402
+from pod_platform.orchestration.replay import (  # noqa: E402
+    MONTHLY_LIMITATIONS,
+    ArtifactWriter,
+    CoreSourceLineage,
+    LiquidationEvidence,
+    MonthlyAccountingReplay,
+    PeriodComplianceLog,
+    SourceEligibilityGate,
+    account_period,
+    assess_freeze,
+    environment_lock_hash,
+    fail,
+    legacy_source_uses,
+    load_source_cards,
+    utc_close,
+    validate_contiguous_periods,
 )
-from pod_platform.reporting.arcana_audit import (  # noqa: E402
-    compute_holding_period,
-    export_submission_and_exhibits,
-)
-from pod_platform.reporting.compliance import ActualHolding, ComplianceEngine  # noqa: E402
+from pod_platform.reporting.dossier import HoldingsRow, holdings_csv, returns_csv  # noqa: E402
 from pod_platform.reporting.tables import RequiredTable  # noqa: E402
-from pod_platform.research.promotion import AdmissionCertificate  # noqa: E402
-from pod_platform.research.registration import RegisteredExperiment, ResearchLedger  # noqa: E402
-from pod_platform.research.registry import Registry  # noqa: E402
 from pod_platform.risk.overlay import PANEL_COLUMNS as OVERLAY_COLUMNS  # noqa: E402
 from pod_platform.risk.overlay import protect  # noqa: E402
 from pod_platform.signals import (  # noqa: E402
-    build_conf_revisions_panel,
-    build_e7_delayed_panel,
-    build_edgar_crosswalk_features,
+    PortedSignals,
+    build_filing_event_features,
     build_filing_events,
     build_xgb_rank,
-    score_sleeves_table,
+    scaled_rank,
 )
 from pod_platform.signals.short_interest import build_short_interest  # noqa: E402
 
 REPO = ROOT.parent
-PANEL = REPO / "final" / "data" / "chars_final_with_names.parquet"
-FACTORS = REPO / "final" / "data" / "factor_char_list.csv"
-EXTERNAL = REPO / "final" / "external_data" / "external.parquet"
-FILINGS = REPO / "final" / "data" / "8k_20150101_20260831_identified.parquet"
-DSF_PATH = REPO / "data" / "raw" / "final" / "dsf_mini_from_2014.csv"
-FINAL_OUT = REPO / "final" / "output"
+PANEL = REPO / "data" / "chars_final_with_names.parquet"
+FACTORS = REPO / "data" / "factor_char_list.csv"
+EXTERNAL = REPO / "external_data" / "external.parquet"
+FILINGS = REPO / "data" / "8k_20150101_20260831_identified.parquet"
 CACHE = ROOT / "artifacts" / "seven_book" / "forecasts"
 
-# Formation months 2020-12-31 .. 2026-07-31 -> Holding months 2021-01 .. 2026-08 (68 months)
-FORMATION_START = dt.date(2020, 12, 31)
-FORMATION_END = dt.date(2026, 7, 31)
+TEST_START = dt.date(2021, 1, 31)
+TEST_END = dt.date(2026, 8, 31)
 TEST_YEARS = list(range(2021, 2027))
 LAST_TARGET = pd.Timestamp("2026-08-31")
-ENDOWMENT_NAV = 1_000_000_000.0
-MICRO_SLEEVES_MAX_NAV = 50_000_000.0
-MICRO_SLEEVES = ("gap_micro_best", "runway_micro")
-
-
-def _parse_float_arg(prefix: str, default: float) -> float:
-    for arg in sys.argv[1:]:
-        if arg.startswith(prefix + "="):
-            return float(arg.split("=", 1)[1])
-    return default
-
-
-def _parse_int_arg(prefix: str, default: int) -> int:
-    for arg in sys.argv[1:]:
-        if arg.startswith(prefix + "="):
-            return int(arg.split("=", 1)[1])
-    return default
-
-
-def _parse_str_arg(prefix: str, default: str) -> str:
-    for arg in sys.argv[1:]:
-        if arg.startswith(prefix + "="):
-            return arg.split("=", 1)[1]
-    return default
-
-
+COST_BP_PER_SIDE = 20.0
+BORROW_ANNUAL = 0.05
+START_NAV = Decimal("1000000000")
 USE_RISK_OVERLAY = "--risk-overlay" in sys.argv
 USE_GAP = "--with-gap" in sys.argv
 BLEND_RENORM = "--blend-renorm" in sys.argv
 USE_GRAPH = "--with-graph" in sys.argv
 USE_DEMAND = "--with-demand" in sys.argv
 GATE_E7_DEMAND = "--gate-e7-demand" in sys.argv
-USE_TFM_MONTHLY = "--with-timesfm-monthly" in sys.argv
-USE_TFM_DAILY = "--with-timesfm-daily" in sys.argv
-USE_TFM_DAILY_TILT = "--tfm-daily-tilt" in sys.argv
-USE_TFM_DAILY_SQUEEZE = "--tfm-daily-squeeze-gate" in sys.argv
-CAP_NET_EXPOSURE = "--no-cap-net" not in sys.argv
-COMPOUND_NAV_SIZING = "--constant-nav" not in sys.argv
-TARGET_GROSS = _parse_float_arg("--gross", 1.0)
-N_PER_SIDE = _parse_int_arg("--n-per-side", 100)
-MAX_ABS_NET = _parse_float_arg("--max-abs-net", 0.10)
-CUSTOM_OUT = _parse_str_arg("--out-name", "")
+RESEARCH_ONLY = "--research-only" in sys.argv
+OVERWRITE = "--overwrite" in sys.argv
+ALLOW_TERMINAL = "--allow-terminal-unevaluated" in sys.argv
+HASH_INPUTS = "--no-hash-inputs" not in sys.argv
+_out_name = "seven_book"
+if USE_RISK_OVERLAY:
+    _out_name = "risk_book" + ("_renorm" if BLEND_RENORM else "") + ("_graph" if USE_GRAPH else "") + ("_demand" if USE_DEMAND else "") + ("_gate" if GATE_E7_DEMAND else "")
 
-if CUSTOM_OUT:
-    _out_name = CUSTOM_OUT
-else:
-    _out_name = "seven_book"
-    if USE_RISK_OVERLAY:
-        _out_name = (
-            "risk_book"
-            + ("_renorm" if BLEND_RENORM else "")
-            + ("_graph" if USE_GRAPH else "")
-            + ("_demand" if USE_DEMAND else "")
-            + ("_gate" if GATE_E7_DEMAND else "")
-            + ("_tfm" if USE_TFM_MONTHLY else "")
-            + ("_tfmdaily" if USE_TFM_DAILY else "")
-        )
-OUT = ROOT / "artifacts" / _out_name
+
+def _arg_value(flag: str):
+    if flag in sys.argv:
+        index = sys.argv.index(flag)
+        if index + 1 >= len(sys.argv):
+            raise SystemExit(f"{flag} needs a value")
+        return sys.argv[index + 1]
+    return None
+
+
+SOURCE_CARDS = _arg_value("--source-cards")
+LIQUIDATIONS = _arg_value("--liquidations")
+TRIAL_COUNT = int(_arg_value("--trial-count") or 0)
+EVAL_ACCESS_COUNT = int(_arg_value("--evaluation-access-count") or 0)
+# Never default onto an existing artifact directory; a non-empty target needs --overwrite.
+OUT = Path(_arg_value("--out-dir") or (ROOT / "artifacts" / f"{_out_name}_hardened"))
 GRAPH_WORK = ROOT / "artifacts" / "graph_work"
 GAP_WORK = ROOT / "artifacts" / "valuation_work"
+FAMILIES = (
+    "inventory_retail",
+    "oplev_software",
+    "runway_micro",
+    "e7_surprise_breadth",
+    "conf_revision_gated",
+    "xgb_rank",
+    "filing_events",
+) + (("gap_micro",) if USE_GAP else ()) + (("demand",) if USE_DEMAND else ())
 
 
-def load_chars_panel() -> pd.DataFrame:
-    cols = [
-        "permno", "eom", "gics", "size_grp", "prc", "dolvol",
-        "cash_at", "ocf_at", "ret_3_1", "dsale_dinv", "dsale_dsga",
-    ]
-    chars = pd.read_parquet(PANEL, columns=cols)
-    chars["eom"] = pd.to_datetime(chars["eom"]).dt.to_period("M").dt.to_timestamp("M")
-    chars = chars.drop_duplicates(["permno", "eom"]).reset_index(drop=True)
-    chars["sector"] = chars["gics"].astype("string").str[:2]
-    chars["tradable"] = (
-        (chars["prc"].abs() >= 5.0)
-        & (chars.groupby("eom")["dolvol"].rank(pct=True) >= 0.2)
-        & chars["sector"].notna()
-    )
-    return chars
+def load_tb3ms() -> dict[str, float]:
+    ext = pd.read_parquet(EXTERNAL, columns=["table", "date", "series", "value"])
+    fred = ext[ext["table"] == "fred"].copy()
+    fred["date"] = pd.to_datetime(fred["date"])
+    tb = fred[fred["series"] == "TB3MS"].set_index("date")["value"]
+    return {f"{d.year}-{d.month:02d}": float(v) for d, v in tb.items()}
 
 
-def get_forecasts(panel_full: pd.DataFrame, factor_columns: list[str], reuse: bool):
+def get_forecasts(panel_full, factor_columns, reuse: bool):
     CACHE.mkdir(parents=True, exist_ok=True)
     xgb_path = CACHE / "xgb_rank.parquet"
-    filing_path = CACHE / "filing_events_crosswalk.parquet"
+    filing_path = CACHE / "filing_events.parquet"
     audits_path = CACHE / "fold_audits.json"
-
-    # Seed from final/output if reuse is requested and crosswalk cache is not yet copied
-    if reuse:
-        if not xgb_path.exists() and (FINAL_OUT / "xgb_rank" / "forecasts.parquet").exists():
-            shutil.copy2(FINAL_OUT / "xgb_rank" / "forecasts.parquet", xgb_path)
-        if not filing_path.exists() and (FINAL_OUT / "filing_events" / "forecasts.parquet").exists():
-            shutil.copy2(FINAL_OUT / "filing_events" / "forecasts.parquet", filing_path)
 
     audits: dict = {}
     if reuse and xgb_path.exists() and filing_path.exists():
@@ -186,6 +156,12 @@ def get_forecasts(panel_full: pd.DataFrame, factor_columns: list[str], reuse: bo
         if audits_path.exists():
             audits = json.loads(audits_path.read_text(encoding="utf-8"))
         return xgb_fc, filing_fc, audits
+    if (xgb_path.exists() or filing_path.exists()) and not OVERWRITE:
+        fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            f"forecast cache already exists at {CACHE}",
+            "Existing forecast artifacts are preserved: pass --reuse-forecasts or an explicit --overwrite.",
+        )
 
     t0 = time.time()
     print("training xgb_rank (24 fits)...", flush=True)
@@ -194,19 +170,29 @@ def get_forecasts(panel_full: pd.DataFrame, factor_columns: list[str], reuse: bo
         factor_columns,
         test_years=TEST_YEARS,
         last_target=LAST_TARGET,
+        on_fold=lambda a: print(
+            f"  {a.year}: train={a.train_rows:,} val={a.validation_rows:,} test={a.test_rows:,} iters={a.best_iterations}",
+            flush=True,
+        ),
     )
     xgb_fc.to_parquet(xgb_path, index=False)
     print(f"xgb_rank done in {time.time() - t0:.0f}s", flush=True)
 
     t0 = time.time()
-    print("building point-in-time EDGAR crosswalk + lockup features...", flush=True)
-    feat_cache = CACHE / "edgar_features_crosswalk.parquet"
-    if reuse and not feat_cache.exists() and (FINAL_OUT / "filing_events" / "features.parquet").exists():
-        shutil.copy2(FINAL_OUT / "filing_events" / "features.parquet", feat_cache)
-    events = build_edgar_crosswalk_features(
-        PANEL, FILINGS, EXTERNAL, last_target=LAST_TARGET, cache_path=feat_cache
+    print("building filing-event features...", flush=True)
+    ext = pd.read_parquet(EXTERNAL, columns=["table", "form_type", "date_filed", "cik"])
+    filings_index = ext[ext["table"] == "edgar"][["form_type", "date_filed", "cik"]].copy()
+    filings_index["date_filed"] = pd.to_datetime(filings_index["date_filed"])
+    corpus = pd.read_parquet(FILINGS, columns=["permno", "cik", "filing_date", "is_amendment"])
+    corpus = corpus[corpus["is_amendment"] == False]  # noqa: E712
+    links = corpus.dropna(subset=["permno", "cik"]).copy()
+    links = links.groupby(["cik", "permno"]).size().reset_index(name="n")
+    links["link_date"] = pd.Timestamp("2015-01-01")
+    months = pd.DatetimeIndex(
+        sorted({pd.Timestamp(m) + pd.offsets.MonthEnd(0) for m in panel_full["eom"].unique()})
     )
-    print(f"filing features ready in {time.time() - t0:.0f}s", flush=True)
+    events = build_filing_event_features(filings_index, links[["cik", "permno", "link_date"]], months)
+    print(f"filing features: {len(events):,} rows x {events.shape[1] - 2} cols in {time.time() - t0:.0f}s", flush=True)
 
     t0 = time.time()
     print("training filing_events (24 fits)...", flush=True)
@@ -215,6 +201,10 @@ def get_forecasts(panel_full: pd.DataFrame, factor_columns: list[str], reuse: bo
         events,
         test_years=TEST_YEARS,
         last_target=LAST_TARGET,
+        on_fold=lambda a: print(
+            f"  {a.year}: train={a.train_rows:,} val={a.validation_rows:,} test={a.test_rows:,} iters={a.best_iterations}",
+            flush=True,
+        ),
     )
     filing_fc.to_parquet(filing_path, index=False)
     print(f"filing_events done in {time.time() - t0:.0f}s", flush=True)
@@ -227,229 +217,160 @@ def get_forecasts(panel_full: pd.DataFrame, factor_columns: list[str], reuse: bo
     return xgb_fc, filing_fc, audits
 
 
-def get_demand_map() -> dict[tuple[str, pd.Period], float]:
-    """Combined demand signal keyed by (TICKER, return_month Period['M'])."""
-    card_path = ROOT / "artifacts" / "demand_card.parquet"
-    if not card_path.exists():
+def get_gap_map():
+    """Trains the valuation family once, returns {(sid, date): gap score}."""
+    import json as _json
+
+    from pod_platform.signals import valuation as val
+    from pod_platform.signals.ibes_state import set_external_path
+
+    set_external_path(str(EXTERNAL))
+    GAP_WORK.mkdir(parents=True, exist_ok=True)
+    out = val.directory(GAP_WORK)
+    if not (out / val.SELECTION_FILE).exists():
+        print("training valuation family (gap_micro) - long run...", flush=True)
+        val.build(PANEL, GAP_WORK, device="cpu")
+    selection = _json.loads((out / val.SELECTION_FILE).read_text())
+    xs = pd.read_parquet(out / val.XS_FILE)
+    pooled = pd.read_parquet(out / val.POOLED_FILE)
+    gap_map = {}
+    for year_s, fold in selection["folds"].items():
+        year = int(year_s)
+        model = fold["best_pricing_model"]
+        print(f"  gap_micro {year}: selected {model} (mdae {min(fold['validation_mdae'].values()):.3f})", flush=True)
+        if model in val.POOLED_MODELS or model == "M9":
+            needed = [c for c in val.ENSEMBLE if c not in val.POOLED_MODELS]
+            block = pooled[pooled.fold_year == year][["permno", "eom", "M6", "M8"]].merge(
+                xs[["permno", "eom", "y", *needed]], on=["permno", "eom"], how="left"
+            )
+            if model == "M9":
+                block["M9"] = block[list(val.ENSEMBLE)].mean(axis=1, skipna=False)
+        else:
+            block = xs
+        block = block.dropna(subset=[model, "y"])
+        for row in block.itertuples():
+            gap_map[(str(int(row.permno)), row.eom.date())] = float(getattr(row, model) - row.y)
+    return gap_map
+
+
+def get_demand_map():
+    """Combined demand signal: {(TICKER, formation date): scaled rank}.
+
+    Equal rank-mean of card spend 12m YoY and foot traffic 3m YoY (the
+    strongest belief features), formed at month+1 (T+3 lag), ranked
+    cross-sectionally per formation month.
+    """
+    card = pd.read_parquet(ROOT / "artifacts" / "demand_card.parquet") if (ROOT / "artifacts" / "demand_card.parquet").exists() else None
+    if card is None:
         card = pd.read_parquet(REPO / "data" / "carbon" / "raw" / "framework" / "card_panel_unified.parquet")
         ft = pd.read_parquet(REPO / "data" / "carbon" / "raw" / "framework" / "foot_traffic_panel.parquet")
         card = card[["ticker", "date", "credit_card_spend_12m_yoy"]].merge(
             ft[["ticker", "date", "foot_traffic_3m_yoy"]], on=["ticker", "date"], how="outer"
         )
         card["feature_month"] = pd.to_datetime(card["date"]) + pd.offsets.MonthEnd(1)
-        card_path.parent.mkdir(parents=True, exist_ok=True)
-        card.to_parquet(card_path, index=False)
-    else:
-        card = pd.read_parquet(card_path)
+        out = ROOT / "artifacts" / "demand_card.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        card.to_parquet(out, index=False)
     g = card.dropna(subset=["feature_month"]).copy()
     g["combo"] = (
         g["credit_card_spend_12m_yoy"].rank(pct=True).fillna(0.5)
         + g["foot_traffic_3m_yoy"].rank(pct=True).fillna(0.5)
     )
-    g["scaled"] = (g.groupby("feature_month")["combo"].rank(pct=True) - 0.5) * (12.0 ** 0.5)
-    g["return_month"] = pd.to_datetime(g["feature_month"]).dt.to_period("M") + 1
+    # rank within formation month across tickers
+    g["scaled"] = (g.groupby("feature_month")["combo"].rank(pct=True) - 0.5) * (12 ** 0.5)
     return {
-        (str(r.ticker).upper(), r.return_month): float(r.scaled)
+        (str(r.ticker).upper(), r.feature_month.date()): float(r.scaled)
         for r in g.dropna(subset=["scaled"]).itertuples()
     }
 
 
-def get_graph_forecasts() -> pd.DataFrame:
-    """Loads 3-seed ensemble of graph attention EPS forecasts."""
-    cached_final = FINAL_OUT / "graph_forecasts.parquet"
-    if cached_final.exists():
-        df = pd.read_parquet(cached_final)
-        return df.loc[pd.to_datetime(df["target_month"]).le(LAST_TARGET)].copy()
+def get_graph_map():
+    """3-seed ensemble of graph EPS forecasts: {(sid, formation date): pred}."""
     import glob as _glob
+
     files = sorted(_glob.glob(str(GRAPH_WORK / "graph_attention_*_seed*.parquet")))
     if not files:
-        raise FileNotFoundError("graph forecasts not found")
+        raise FileNotFoundError("graph forecasts not found - run scripts/train_graph.py first")
     frames = [pd.read_parquet(f) for f in files]
     allf = pd.concat(frames, ignore_index=True)
-    ens = (
-        allf.groupby(["permno", "eom", "target_month"], as_index=False)["pred_eps"]
-        .mean()
-        .rename(columns={"pred_eps": "graph_attention_eps"})
-    )
-    return ens.loc[pd.to_datetime(ens["target_month"]).le(LAST_TARGET)].copy()
+    ens = allf.groupby(["permno", "eom"], as_index=False)["pred_eps"].mean()
+    return {(str(int(r.permno)), r.eom.date()): float(r.pred_eps) for r in ens.itertuples()}
 
 
-def apply_graph_overlay(scores: pd.DataFrame, graph_fc: pd.DataFrame, formation: pd.DataFrame, weight: float = 0.05) -> pd.DataFrame:
-    """Applies the 95/5 rank blend with company-mapped graph EPS forecasts."""
-    g = graph_fc[["permno", "eom", "target_month", "graph_attention_eps"]].copy()
-    g["eom"] = pd.to_datetime(g["eom"]).dt.to_period("M")
-    g["return_month"] = pd.to_datetime(g["target_month"]).dt.to_period("M")
-    g = g.loc[g["return_month"].eq(g["eom"] + 1)].copy()
-    g = g.merge(
-        formation[["eom", "permno", "permco"]].drop_duplicates(["eom", "permno"]),
-        on=["eom", "permno"],
-        how="left",
-    )[["return_month", "permco", "graph_attention_eps"]].drop_duplicates(["return_month", "permco"])
-
-    res = scores.merge(g, on=["return_month", "permco"], how="left")
-    months = res["return_month"]
-    res["sleeve_rank"] = res["sleeve_score"].groupby(months, sort=False).rank(method="average", pct=True)
-    res["graph_rank"] = res["graph_attention_eps"].groupby(months, sort=False).rank(method="average", pct=True)
-    avail = res["graph_attention_eps"].notna()
-    res["final_score"] = (1.0 - weight) * res["sleeve_rank"] + weight * res["graph_rank"]
-    res.loc[~avail, "final_score"] = res.loc[~avail, "sleeve_rank"]
-    res["graph_available"] = avail
-    return res
-
-
-def blend_wide_sleeves(
-    wide: pd.DataFrame,
-    sleeve_names: list[str],
-    equal_denominator: bool = True,
-    *,
-    neutral_uncertainty: float = 0.1,
-    missing_uncertainty_multiplier: float = 2.0,
-) -> pd.DataFrame:
-    """Integrates scaled family forecasts via FamilyIntegrator (spec 16.3, C2/C6).
-
-    When equal_denominator=True (the C2/C6 reference baseline), divides by F = len(sleeve_names)
-    so missing families contribute 0 active alpha with inflated uncertainty
-    (missing_uncertainty_multiplier * neutral_uncertainty) rather than renormalizing by coverage count.
-    """
-    integrator = FamilyIntegrator(
-        sleeve_names,
-        neutral_uncertainty=neutral_uncertainty,
-        missing_uncertainty_multiplier=missing_uncertainty_multiplier,
-    )
-    score = wide[[f"score_{name}" for name in sleeve_names]].to_numpy(float)
-    available = wide[[f"available_{name}" for name in sleeve_names]].to_numpy(bool)
-    count = available.sum(axis=1)
-    f_total = float(len(sleeve_names))
-    if equal_denominator:
-        denom = np.full((len(wide), 1), f_total)
-        weights = np.where(available, 1.0 / denom, 0.0)
-    else:
-        weights = np.divide(
-            available,
-            count[:, None],
-            out=np.zeros_like(score),
-            where=count[:, None] > 0,
+def gate_sources() -> tuple:
+    """Source eligibility gate + explicit lineage; runs before any heavy work."""
+    if not SOURCE_CARDS and not RESEARCH_ONLY:
+        fail(
+            ErrorCode.SOURCE_NOT_FORMATION_ELIGIBLE,
+            "no source cards supplied",
+            "Pass --source-cards FILE for a formation run, or --research-only for a labeled exploratory run that cannot claim freeze.",
         )
-
-    # Family-specific uncertainty (uses empirical quantile spread for tfm_daily when available)
-    unc_cols = []
-    for name in sleeve_names:
-        u_col = f"uncertainty_{name}"
-        if u_col in wide.columns:
-            unc_cols.append(wide[u_col].fillna(neutral_uncertainty).to_numpy(float))
-        else:
-            unc_cols.append(np.full(len(wide), neutral_uncertainty, dtype=float))
-    unc_mat = np.column_stack(unc_cols)
-    missing_unc = missing_uncertainty_multiplier * neutral_uncertainty
-    var_mat = np.where(available, unc_mat ** 2, missing_unc ** 2)
-    integrated_unc = np.sqrt(var_mat.sum(axis=1)) / f_total
-
-    # Spot-check first row against FamilyIntegrator.integrate contract
-    if len(wide) > 0:
-        row0_estimates = [
-            FamilyEstimate(
-                family_id=name,
-                security_id=str(int(wide["permno"].iloc[0])),
-                expected_excess_return=float(score[0, j]),
-                uncertainty=float(unc_mat[0, j]),
-                available=bool(available[0, j]),
-            )
-            for j, name in enumerate(sleeve_names)
-        ]
-        check0 = integrator.integrate(row0_estimates)
-        if equal_denominator:
-            assert abs(check0.alpha - float((weights[0] * score[0]).sum())) < 1e-12
-        assert abs(check0.uncertainty - float(integrated_unc[0])) < 1e-12
-
-    blended = wide[["return_month", "permno"]].copy()
-    blended["available_count"] = count
-    blended["sleeve_score"] = (weights * score).sum(axis=1)
-    blended["integrated_uncertainty"] = integrated_unc
-    return blended
+    cards = load_source_cards(Path(SOURCE_CARDS)) if SOURCE_CARDS else {}
+    components = list(FAMILIES) + ["short_interest", "risk_free_benchmark"]
+    if GATE_E7_DEMAND:
+        components += ["gate_e7_demand"]
+    if USE_GRAPH:
+        components += ["graph_tilt"]
+    gate = SourceEligibilityGate(research_only=RESEARCH_ONLY).evaluate(legacy_source_uses(components, cards))
+    lineage = CoreSourceLineage()
+    for source_id, path, role in (
+        ("core_chars_panel", PANEL, "core"),
+        ("core_factor_list", FACTORS, "core"),
+        ("external_parquet", EXTERNAL, "external"),
+        ("filings_8k", FILINGS, "external"),
+    ):
+        if path.exists():
+            lineage.add(source_id, path, role=role, hash_content=HASH_INPUTS)
+    return gate, lineage
 
 
-def register_platform_contracts(active_sleeves: list[str], out_dir: Path) -> dict:
-    """Validates SourceCards & HypothesisSpecs and issues AdmissionCertificates (spec 13, 14, 21)."""
-    import hashlib as _hashlib
-
-    configs_dir = ROOT / "configs"
-    cards_loaded = []
-    for card_path in sorted((configs_dir / "source_cards").glob("COMP_*.json")):
-        card = SourceCard.model_validate(json.loads(card_path.read_text(encoding="utf-8")))
-        if card.formation_eligible:
-            cards_loaded.append(card.dataset_id)
-
-    hypos_loaded = []
-    for hypo_path in sorted((configs_dir / "hypotheses").glob("*.json")):
-        hypo = HypothesisSpec.model_validate(json.loads(hypo_path.read_text(encoding="utf-8")))
-        hypos_loaded.append(hypo.hypothesis_id)
-
-    db_path = out_dir / "research_registry.db"
-    if db_path.exists():
-        db_path.unlink()
-    registry = Registry(db_path)
-    ledger = ResearchLedger(registry)
-    reg_at = dt.datetime(2020, 12, 31, 23, 59, 59, tzinfo=dt.timezone.utc)
-    certificates = []
-    for fam in active_sleeves:
-        h_hex = _hashlib.sha256(f"spec:{fam}:v2".encode("utf-8")).hexdigest()
-        exp = RegisteredExperiment(
-            created_at=reg_at,
-            owner="research_integrity",
-            registration_id=f"reg_{fam}_v2",
-            experiment_spec_id=f"exp_{fam}_v2",
-            spec_content_hash=h_hex,
-            primary_metric="information_ratio_vs_tb3ms_plus_4pct",
-            baseline_experiment_ids=["zero_rank", "equal_weight_sector_neutral"],
-            promotion_conditions="Positive out-of-training validation IC and positive net marginal IR under tiered costs",
-            failure_conditions="Negative net contribution or timing/availability violation",
-            variant_budget=3,
-            registered_at=reg_at,
-        )
-        ledger.register(exp)
-        cert = AdmissionCertificate(
-            created_at=reg_at,
-            owner="research_integrity",
-            certificate_id=f"cert_{fam}_v2",
-            model_id=f"model_{fam}_v2",
-            model_hash=h_hex,
-            feature_hashes={fam: _hashlib.sha256(f"feat:{fam}".encode("utf-8")).hexdigest()},
-            data_hashes={"COMP_CHARS": _hashlib.sha256(b"COMP_CHARS").hexdigest()},
-            approved_universe="us_public_equities_tradable_v1",
-            target_id="twenty_day_residual_return",
-            horizon_trading_days=20,
-            effective_start=reg_at,
-            approved_mode="ADMITTED",
-            risk_restrictions=["max_abs_weight<=0.05", "short_me>=500m", "adv_participation_capped"],
-            capacity_restrictions=["compounding_1b_nav_5d_adv_cap"],
-            expiry_policy="annual_walk_forward_refit",
-            known_limitations=["previously_seen_chronological_replay_2021_2026"],
-            promotion_evidence_ids=[f"reg_{fam}_v2"],
-        )
-        certificates.append(cert.model_dump(mode="json"))
-
-    payload = {
-        "formation_eligible_competition_sources": cards_loaded,
-        "registered_hypotheses": hypos_loaded,
-        "admitted_families": active_sleeves,
-        "integration_policy": "coverage_renormalized" if BLEND_RENORM else "family_equal_C2_C6",
-        "compounding_nav_sizing": COMPOUND_NAV_SIZING,
-        "trial_count": ledger.trial_count(),
-        "certificates": certificates,
-    }
-    (out_dir / "admission_certificates.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    registry.close()
-    return payload
+def load_liquidations() -> dict:
+    """{formation date: {security_id: LiquidationEvidence}} from explicit dated evidence only."""
+    if not LIQUIDATIONS:
+        return {}
+    out: dict = {}
+    for record in json.loads(Path(LIQUIDATIONS).read_text(encoding="utf-8")):
+        record = dict(record)
+        day = dt.date.fromisoformat(record.pop("period_formation_date"))
+        evidence = LiquidationEvidence.model_validate(record)
+        out.setdefault(day, {})[evidence.security_id] = evidence
+    return out
 
 
 def main() -> None:
     reuse = "--reuse-forecasts" in sys.argv
-    OUT.mkdir(parents=True, exist_ok=True)
+    gate, lineage = gate_sources()  # fails closed before any training or heavy IO
+    print(f"source policy: {gate.run_label}; blocked sources: {sorted(gate.blocked) or 'none'}", flush=True)
+    writer = ArtifactWriter(OUT, overwrite=OVERWRITE)
+    compliance = PeriodComplianceLog(OfficialLimits())
+    monthly: list[dict] = []
+    try:
+        run(reuse, gate, lineage, writer, compliance, monthly)
+    except Exception as error:  # persist evidence for a fail-closed stop, then re-raise
+        code = error.response.error.code.value if isinstance(error, PodPlatformError) else type(error).__name__
+        writer.write_json(
+            "failure.json",
+            {
+                "status": "FAILED_CLOSED",
+                "error": code,
+                "summary": str(error),
+                "periods_completed": len(monthly),
+                "frozen": False,
+                "run_label": gate.run_label,
+            },
+        )
+        writer.write_json("compliance.partial.json", compliance.as_dict())
+        writer.write_json("monthly.partial.json", monthly)
+        raise
 
-    t_start = time.time()
-    print(f"Loading formation panel and point-in-time verified labels...", flush=True)
-    chars = load_chars_panel()
-    formation = load_formation_fields(PANEL, FILINGS)
+
+def run(reuse, gate, lineage, writer, compliance, monthly) -> None:
+    loader = CharsPanelLoader(PANEL, FACTORS)
+    panel = loader.load()
+    panel["eom"] = pd.to_datetime(panel["eom"])
+    signals = PortedSignals(EXTERNAL)
+    tb3ms = load_tb3ms()
+    liquidations_by_day = load_liquidations()
 
     factor_columns = pd.read_csv(FACTORS)["variable"].tolist()
     panel_columns = list(
@@ -457,545 +378,419 @@ def main() -> None:
     )
     panel_full = pd.read_parquet(PANEL, columns=panel_columns)
     panel_full["eom"] = pd.to_datetime(panel_full["eom"])
-
     overlay_panel = panel_full[OVERLAY_COLUMNS].copy()
     overlay_panel["eom"] = overlay_panel["eom"].dt.to_period("M")
     overlay_panel["permno"] = overlay_panel["permno"].astype(int).astype(str)
 
     xgb_fc, filing_fc, audits = get_forecasts(panel_full, factor_columns, reuse)
-
-    e7_cache = CACHE / "e7_delayed.parquet"
-    if reuse and not e7_cache.exists() and (FINAL_OUT / "e7" / "delayed.parquet").exists():
-        shutil.copy2(FINAL_OUT / "e7" / "delayed.parquet", e7_cache)
-    e7_delayed = build_e7_delayed_panel(chars, EXTERNAL, cache_path=e7_cache)
-
-    conf_cache = CACHE / "conf_revisions.parquet"
-    if reuse and not conf_cache.exists() and (FINAL_OUT / "conf_lm_gated" / "revisions.parquet").exists():
-        shutil.copy2(FINAL_OUT / "conf_lm_gated" / "revisions.parquet", conf_cache)
-    conf_revisions = build_conf_revisions_panel(chars, EXTERNAL, cache_path=conf_cache)
-
-    tfm_fc = None
-    if USE_TFM_MONTHLY:
-        tfm_path = FINAL_OUT / "timesfm" / "forecasts.parquet"
-        if tfm_path.exists():
-            tfm_fc = pd.read_parquet(tfm_path)
-
-    print("Scoring sleeves with broad-vs-native empirical CDF scaling...", flush=True)
-    wide = score_sleeves_table(
-        chars,
-        e7_delayed,
-        conf_revisions,
-        xgb_fc,
-        filing_fc,
-        test_years=TEST_YEARS,
-        tfm_fc=tfm_fc,
-    )
-
-    # Optional Carbon Arc demand sleeve or demand gate on e7
+    gap_map = get_gap_map() if USE_GAP else {}
+    graph_map = get_graph_map() if USE_GRAPH else {}
     demand_map = get_demand_map() if (USE_DEMAND or GATE_E7_DEMAND) else {}
     if USE_DEMAND or GATE_E7_DEMAND:
-        wide_with_tk = wide[["return_month", "permno"]].merge(
-            formation[["return_month", "permno", "ticker"]], on=["return_month", "permno"], how="left"
+        print(f"demand scores: {len(demand_map):,}")
+
+    si_table = build_short_interest(str(EXTERNAL), str(PANEL))
+    si_map = {
+        (str(int(r.permno)), r.return_month.date()): (
+            float("nan") if pd.isna(r.short_pct) else float(r.short_pct)
         )
-        d_vals = [
-            demand_map.get((str(t).upper(), rm), float("nan"))
-            for t, rm in zip(wide_with_tk["ticker"], wide_with_tk["return_month"])
-        ]
-        d_ser = pd.Series(d_vals, index=wide.index, dtype=float)
-        if USE_DEMAND:
-            wide["score_demand"] = d_ser.fillna(0.0).to_numpy(float)
-            wide["available_demand"] = d_ser.notna().to_numpy()
-            wide["native_demand"] = d_ser.notna().to_numpy()
-        if GATE_E7_DEMAND:
-            for e7_col in ("e7_lm", "e7_small_gated"):
-                s_col = wide[f"score_{e7_col}"].to_numpy(float).copy()
-                av_col = wide[f"available_{e7_col}"].to_numpy(bool).copy()
-                disagree = (s_col != 0.0) & d_ser.notna().to_numpy() & (d_ser.fillna(0.0).to_numpy() != 0.0) & ((s_col > 0) != (d_ser.fillna(0.0).to_numpy() > 0))
-                s_col[disagree] = 0.0
-                av_col[disagree] = False
-                wide[f"score_{e7_col}"] = s_col
-                wide[f"available_{e7_col}"] = av_col
+        for r in si_table.itertuples()
+    }
+    print(f"short-interest rows: {len(si_table):,}")
+    xgb_map = {
+        (str(int(r.permno)), r.eom.date()): float(r.pred_xgb_rank) for r in xgb_fc.itertuples()
+    }
+    filing_map = {
+        (str(int(r.permno)), r.eom.date()): float(r.pred_filing_events) for r in filing_fc.itertuples()
+    }
 
-    # Optional Daily TimesFM 21d trajectory sleeve / tilt / squeeze gate
-    tfm_daily_lookup: dict[tuple[pd.Period, str], tuple[float, float, float]] = {}
-    if USE_TFM_DAILY or USE_TFM_DAILY_TILT or USE_TFM_DAILY_SQUEEZE:
-        tfm_daily_path = ROOT / "artifacts" / "timesfm_daily" / "forecasts.parquet"
-        if tfm_daily_path.exists():
-            td = pd.read_parquet(tfm_daily_path)
-            td["return_month"] = pd.to_datetime(td["return_month"]).dt.to_period("M")
-            td["rk_cum21"] = td.groupby("return_month")["tfm_daily_cum21"].rank(pct=True)
-            td["rk_qspread"] = td.groupby("return_month")["tfm_daily_q_spread"].rank(pct=True)
-            td["rk_uptail"] = td.groupby("return_month")["tfm_daily_upside_tail_5d"].rank(pct=True)
-            for r_td in td.itertuples():
-                tfm_daily_lookup[(r_td.return_month, str(int(r_td.permno)))] = (
-                    float(r_td.rk_cum21),
-                    float(r_td.rk_qspread),
-                    float(r_td.rk_uptail),
-                )
-            if USE_TFM_DAILY:
-                td_m = wide[["return_month", "permno"]].merge(
-                    td[["return_month", "permno", "rk_cum21", "rk_qspread"]],
-                    on=["return_month", "permno"],
-                    how="left",
-                )
-                sc = ((td_m["rk_cum21"] - 0.5) * np.sqrt(12.0)).fillna(0.0)
-                unc = (0.05 + 0.10 * td_m["rk_qspread"].fillna(0.5)).to_numpy(float)
-                wide["score_tfm_daily"] = sc.to_numpy(float)
-                wide["uncertainty_tfm_daily"] = unc
-                wide["available_tfm_daily"] = td_m["rk_cum21"].notna().to_numpy()
-                wide["native_tfm_daily"] = td_m["rk_cum21"].notna().to_numpy()
+    integrator = FamilyIntegrator(FAMILIES, neutral_uncertainty=0.1)
+    engine = ConstructionEngine(OfficialLimits(), InternalPolicy(target_positions=300))
 
-    all_sleeves = [
-        "e7_lm",
-        "e7_small_gated",
-        "runway_micro",
-        "conf_lm_gated",
-        "inventory_retail",
-        "oplev_software",
-        "xgb_rank",
-        "filing_events",
-    ]
-    if USE_TFM_MONTHLY:
-        all_sleeves.append("timesfm_monthly")
-    if USE_DEMAND:
-        all_sleeves.append("demand")
-    if USE_TFM_DAILY and "score_tfm_daily" in wide.columns:
-        all_sleeves.append("tfm_daily")
+    months = sorted({m for m in panel["eom"].dt.date.unique() if TEST_START <= m <= TEST_END})
+    print(f"formation months: {len(months)} ({months[0]} .. {months[-1]})")
 
-    liquid_sleeves = [s for s in all_sleeves if s not in MICRO_SLEEVES]
-    active_sleeves = liquid_sleeves if ENDOWMENT_NAV > MICRO_SLEEVES_MAX_NAV else all_sleeves
-
-    # Register & validate SourceCards, HypothesisSpecs, RegisteredExperiments, and AdmissionCertificates
-    contracts_meta = register_platform_contracts(active_sleeves, OUT)
-    equal_denom = not BLEND_RENORM
-    print(
-        f"Integrating {len(active_sleeves)} admitted families via FamilyIntegrator "
-        f"(policy={contracts_meta['integration_policy']}, compounding_nav={COMPOUND_NAV_SIZING})...",
-        flush=True,
-    )
-
-    blended_all = blend_wide_sleeves(wide, all_sleeves, equal_denominator=equal_denom)
-    blended_liq = blend_wide_sleeves(wide, liquid_sleeves, equal_denominator=equal_denom).rename(
-        columns={
-            "sleeve_score": "sleeve_score_liquid",
-            "available_count": "available_count_liquid",
-            "integrated_uncertainty": "integrated_uncertainty_liquid",
-        }
-    )
-    scores = blended_all.merge(blended_liq, on=["return_month", "permno"], how="left")
-    scores = scores.merge(formation, on=["return_month", "permno"], how="left")
-
-    if USE_GRAPH:
-        graph_fc = get_graph_forecasts()
-        graph_months = pd.to_datetime(graph_fc["target_month"]).dt.to_period("M").unique()
-        scores = scores.loc[scores["return_month"].isin(graph_months)].copy()
-        scored = apply_graph_overlay(scores, graph_fc, formation)
-        scored_liq = apply_graph_overlay(
-            scores.assign(sleeve_score=scores["sleeve_score_liquid"]), graph_fc, formation
-        )
-        scored["final_score_liquid"] = scored_liq["final_score"].to_numpy()
-    else:
-        months_s = scores["return_month"]
-        scores["final_score"] = scores["sleeve_score"].groupby(months_s, sort=False).rank(method="average", pct=True)
-        scores["final_score_liquid"] = scores["sleeve_score_liquid"].groupby(months_s, sort=False).rank(method="average", pct=True)
-        scored = scores
-
-    score_col = "final_score_liquid" if ENDOWMENT_NAV > MICRO_SLEEVES_MAX_NAV else "final_score"
-    if USE_TFM_DAILY_TILT and tfm_daily_lookup:
-        base_s = scored[score_col].to_numpy(float).copy()
-        for idx_i, r_sc in enumerate(scored[["return_month", "permno"]].itertuples(index=False)):
-            tup = tfm_daily_lookup.get((r_sc.return_month, str(int(r_sc.permno))))
-            if tup is not None and np.isfinite(base_s[idx_i]):
-                # 95% base rank + 5% Daily TimesFM 21d trajectory rank
-                base_s[idx_i] = 0.95 * base_s[idx_i] + 0.05 * tup[0]
-        scored[score_col] = base_s
-    scored["active_score"] = scored[score_col]
-    scored["active_available_count"] = (
-        scored["available_count_liquid"] if ENDOWMENT_NAV > MICRO_SLEEVES_MAX_NAV else scored["available_count"]
-    )
-
-    # Short interest table
-    si_cache = FINAL_OUT / "short_interest" / "short_interest.parquet"
-    if si_cache.exists():
-        si_table = pd.read_parquet(si_cache)
-    else:
-        si_table = build_short_interest(str(EXTERNAL), str(PANEL))
-    si_table["return_month"] = pd.to_datetime(si_table["return_month"]).dt.to_period("M")
-    scored = scored.merge(
-        si_table[["permno", "return_month", "short_pct"]], on=["permno", "return_month"], how="left"
-    )
-
-    # Prior-month missing-return closures clear the retention buffer
-    outcomes_na = panel_full.loc[panel_full["ret_exc_lead1m"].isna(), ["permno", "eom"]]
-    settled_closed = set(
-        zip(outcomes_na["eom"].dt.to_period("M") + 1, outcomes_na["permno"].astype(int).astype(str))
-    )
-
-    official_limits = OfficialLimits()
-    compliance = ComplianceEngine(official_limits)
-
-    return_months = sorted(scored["return_month"].unique())
-    print(f"Holding months to construct: {len(return_months)} ({return_months[0]} .. {return_months[-1]})", flush=True)
-
-    print("Loading evaluation universe and market series for compounding NAV path...", flush=True)
-    universe = load_evaluation_universe(PANEL)
-    mkt = load_market_series(EXTERNAL)
-
-    books_by_month: dict[pd.Period, dict[int, float]] = {}
-    portfolio_rows: list[dict] = []
-    score_history: list[pd.DataFrame] = []
-    overlay_log: list[dict] = []
-    coverage_log: list[dict] = []
-    prev_weights: dict[str, float] = {}
-    last_holdings: list[ActualHolding] = []
-    running_nav = ENDOWMENT_NAV
-
-    for ret_month in return_months:
-        form_month = ret_month - 1
-        form_ts = form_month.to_timestamp("M")
-        form_date = form_ts.date()
-        current = scored.loc[scored["return_month"] == ret_month].copy()
-        if len(current) < 250:
-            continue
-
-        # Clear settled closures from previous weights before retention selection
-        prev_weights = {
-            sid: w for sid, w in prev_weights.items() if (ret_month - 1, sid) not in settled_closed
-        }
-        prev_long = {sid for sid, w in prev_weights.items() if w > 0}
-        prev_short = {sid for sid, w in prev_weights.items() if w < 0}
-
-        capital = running_nav if COMPOUND_NAV_SIZING else ENDOWMENT_NAV
-        internal_policy = InternalPolicy(
-            target_positions=N_PER_SIDE * 2,
-            target_gross=TARGET_GROSS,
-            target_net=0.0,
-            max_abs_net=MAX_ABS_NET,
-            retention_band=0.5,
-            sector_neutral=True,
-            min_sector_names=4,
-            beta_neutral=True,
-            beta_tilt=0.25,
-            beta_lower=0.2,
-            beta_upper=3.0,
-            max_short_interest=0.15,
-            min_price_usd=5.0,
-            execution_days=5,
-            long_adv_participation=0.05,
-            short_adv_participation=0.02,
-            require_verified_labels=True,
-            capital_usd=capital,
-            enforce_max_abs_net=CAP_NET_EXPOSURE,
-            allow_all_ranked_sides=True,
-            ceil_retention_zone=True,
-        )
-        engine = ConstructionEngine(official_limits, internal_policy)
-
-        candidates: list[Candidate] = []
-        for r in current.itertuples():
-            if not (r.active_available_count > 0 and np.isfinite(r.active_score) and np.isfinite(r.prc) and r.dolvol_126d > 0):
-                continue
-            sid = str(int(r.permno))
-            verified = (
-                pd.notna(r.ticker)
-                and pd.notna(r.company_name)
-                and str(r.ticker_name_status) != UNVERIFIED_LABEL
+    # Every formation month must have realized outcomes; none is skipped silently.
+    labelled = panel_full.groupby("eom")["ret_exc_lead1m"].apply(lambda s: int(s.notna().sum()))
+    unlabelled = [m for m in months if int(labelled.get(pd.Timestamp(m), 0)) == 0]
+    excluded_terminal: list[str] = []
+    if unlabelled:
+        if ALLOW_TERMINAL and unlabelled == [months[-1]]:
+            excluded_terminal = [str(months[-1])]
+            months = months[:-1]
+            print(f"explicitly excluding unevaluable terminal formation month {excluded_terminal[0]}", flush=True)
+        else:
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"no realized outcomes for formation months: {', '.join(str(m) for m in unlabelled)}",
+                "Months without outcomes are never skipped silently; shorten TEST_END or pass --allow-terminal-unevaluated for the final month only.",
             )
-            b_val = float(r.beta_60m) if pd.notna(r.beta_60m) and np.isfinite(r.beta_60m) else 1.0
-            si_val = float(r.short_pct) if pd.notna(r.short_pct) and np.isfinite(r.short_pct) else float("nan")
+    validate_contiguous_periods([(m, (pd.Timestamp(m) + pd.offsets.MonthEnd(1)).date()) for m in months])
+
+    replay = MonthlyAccountingReplay(
+        START_NAV,
+        borrow_schedule=BorrowSchedule(
+            schedule_id="legacy_flat_borrow",
+            large_cap_threshold_usd=Decimal("0"),
+            large_cap_annual_rate=Decimal(str(BORROW_ANNUAL)),
+            other_annual_rate=Decimal(str(BORROW_ANNUAL)),
+        ),
+    )
+    nav_path = [{"month": "start", "nav": float(replay.nav())}]
+    holdings_rows: list[list] = []
+    caps: dict[str, Decimal] = {}
+    identities: dict[str, tuple[str, str]] = {}
+    coverage_log = []
+    score_history: list[pd.DataFrame] = []
+    overlay_log = []
+    last_drifted: dict = {}
+
+    for month_date in months:
+        month_ts = pd.Timestamp(month_date)
+        month_df, _ = loader.formation_month(
+            dt.datetime(month_date.year, month_date.month, month_date.day, tzinfo=dt.timezone.utc)
+        )
+        if len(month_df) < 250:
+            fail(
+                ErrorCode.INSUFFICIENT_HISTORY,
+                f"formation universe too small at {month_date}: {len(month_df)} rows",
+                "A thin month is reported, never skipped.",
+            )
+
+        ret_date = (month_ts + pd.offsets.MonthEnd(1)).date()
+        results = {
+            "inventory_retail": signals.inventory_retail(month_df),
+            "oplev_software": signals.oplev_software(month_df),
+            "runway_micro": signals.runway_micro(month_df),
+            "e7_surprise_breadth": signals.e7_surprise_breadth(month_df, month_ts),
+            "conf_revision_gated": signals.conf_revision_gated(month_df, month_ts),
+        }
+        scaled = {name: scaled_rank(res) for name, res in results.items()}
+        coverage = {name: int(res.eligible.fillna(False).sum()) for name, res in results.items()}
+
+        merged = month_df.copy()
+        merged["sid"] = merged["permno"].astype(int).astype(str)
+        if merged["ret_exc_lead1m"].notna().sum() == 0:
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"no forward labels for the return month after {month_date}",
+                "A formation month without outcomes is never skipped.",
+            )
+        keys = [(sid, month_date) for sid in merged["sid"]]
+        merged["xgb_rank"] = [xgb_map.get(k) for k in keys]
+        merged["filing_events"] = [filing_map.get(k) for k in keys]
+        if USE_DEMAND:
+            merged["demand"] = [
+                demand_map.get((str(t).upper(), month_date), float("nan"))
+                for t in merged["ticker"]
+            ]
+            dv = merged["demand"]
+            scaled["demand"] = dv.where(dv.notna()).fillna(0.0)
+            coverage["demand"] = int(dv.notna().sum())
+        if USE_GAP:
+            merged["gap_micro"] = [gap_map.get(k) for k in keys]
+            micro = merged["size_grp"].eq("micro") & merged["gap_micro"].notna()
+            ranked = merged.loc[micro, "gap_micro"].rank(pct=True)
+            scaled["gap_micro"] = ((ranked - 0.5) * (12 ** 0.5)).reindex(merged.index).fillna(0.0)
+            coverage["gap_micro"] = int(micro.sum())
+        coverage["xgb_rank"] = int(merged["xgb_rank"].notna().sum())
+        coverage["filing_events"] = int(merged["filing_events"].notna().sum())
+        coverage_log.append({"month": str(month_date), "coverage": coverage})
+
+        for name in ("xgb_rank", "filing_events"):
+            series = merged[name]
+            ranked = series.rank(pct=True)
+            scaled[name] = ((ranked - 0.5) * (12 ** 0.5)).where(series.notna()).fillna(0.0)
+
+        if GATE_E7_DEMAND:
+            e7s = scaled["e7_surprise_breadth"]
+            gate_dropped = 0
+            for idx in merged.index:
+                e7 = float(e7s.get(idx, 0.0))
+                d = demand_map.get((str(merged.loc[idx, "ticker"]).upper(), month_date))
+                if e7 != 0.0 and d is not None and d != 0.0 and (e7 > 0) != (d > 0):
+                    e7s[idx] = 0.0
+                    gate_dropped += 1
+            coverage["e7_gate_dropped"] = gate_dropped
+
+        raw_alpha = {}
+        for sid, idx in zip(merged["sid"], merged.index):
+            fams = []
+            for name in FAMILIES:
+                value = float(scaled[name].get(idx, 0.0))
+                if value != 0.0:
+                    fams.append(FamilyEstimate(name, sid, value, 0.1))
+            if not fams:
+                continue
+            raw_alpha[sid] = sum(f.expected_excess_return for f in fams) / (
+                len(fams) if BLEND_RENORM else len(FAMILIES)
+            )
+
+        candidates_alpha = {}
+        if USE_GRAPH and raw_alpha:
+            sr = pd.Series(raw_alpha)
+            sr_rank = sr.rank(pct=True)
+            gv = pd.Series({sid: graph_map.get((sid, month_date)) for sid in raw_alpha})
+            covered = gv.notna()
+            tilted = sr_rank.copy()
+            if covered.any():
+                gr_rank = gv[covered].rank(pct=True)
+                tilted[covered] = 0.95 * sr_rank[covered] + 0.05 * gr_rank
+            candidates_alpha = (tilted - 0.5).to_dict()
+        else:
+            candidates_alpha = dict(raw_alpha)
+
+        # Incumbents are the drifted actual holdings, not raw prior target weights.
+        held_before = replay.held()
+        candidates = []
+        for sid, idx in zip(merged["sid"], merged.index):
+            if sid not in candidates_alpha:
+                continue
+            alpha = candidates_alpha[sid]
+            row = merged.loc[idx]
+            beta_value = row.get("beta_60m")
+            si_value = si_map.get((sid, ret_date))
             candidates.append(
                 Candidate(
                     security_id=sid,
-                    alpha=float(r.active_score),
-                    market_cap_usd=float(r.me) * 1_000_000.0 if pd.notna(r.me) else 0.0,
+                    alpha=alpha,
+                    market_cap_usd=float(row["me_usd"]),
                     tradable=True,
-                    incumbent=sid in prev_weights,
-                    incumbent_long=sid in prev_long,
-                    incumbent_short=sid in prev_short,
-                    sector=str(r.sector) if pd.notna(r.sector) else "na",
-                    beta=b_val,
-                    short_interest_pct=si_val,
-                    price_usd=float(r.prc),
-                    adv_usd=float(r.dolvol_126d),
-                    verified_label=verified,
-                    size_grp=str(r.size_grp) if pd.notna(r.size_grp) else "large",
+                    incumbent=sid in held_before,
+                    sector=str(row["gics"])[:2] if row["gics"] else "unknown",
+                    beta=float(beta_value) if beta_value == beta_value and beta_value is not None else 1.0,
+                    short_interest_pct=si_value if si_value is not None else float("nan"),
                 )
             )
+        if len(candidates) < 250:
+            fail(
+                ErrorCode.INSUFFICIENT_HISTORY,
+                f"too few candidates at {month_date}: {len(candidates)}",
+                "A thin candidate set is reported, never skipped.",
+            )
 
-        book = engine.build(
-            candidates,
-            run_id=f"seven_{ret_month}",
-            decision_at=dt.datetime(form_date.year, form_date.month, form_date.day, tzinfo=dt.timezone.utc),
-            forecast_publication_ids=[f"fc_{ret_month}"],
-            current_book_snapshot_id=f"snap_{ret_month}",
-            nav_snapshot_id=f"nav_{ret_month}",
-            price_snapshot_id=f"px_{ret_month}",
-            risk_envelope_version="envelope_v2",
-            covariance_version="cov_v2",
-            cost_model_version="tiered_cost_v2",
-            attribution_method=contracts_meta["integration_policy"],
-        )
-        weights = {p.security_id: float(p.target_weight) for p in book.positions}
+        try:
+            book = engine.build(
+                candidates,
+                run_id=f"seven_{month_date}",
+                decision_at=dt.datetime(month_date.year, month_date.month, month_date.day, tzinfo=dt.timezone.utc),
+                forecast_publication_ids=[f"fc_{month_date}"],
+                current_book_snapshot_id=f"snap_{month_date}",
+                nav_snapshot_id=f"nav_{month_date}",
+                price_snapshot_id=f"px_{month_date}",
+                risk_envelope_version="envelope_v1",
+                covariance_version="cov_v1",
+                cost_model_version="cost_v1",
+                attribution_method="family_equal_contribution",
+            )
+        except PodPlatformError:
+            neg = sum(1 for c in candidates if c.alpha < 0)
+            si_blocked = sum(1 for c in candidates if c.alpha < 0 and c.short_interest_pct == c.short_interest_pct and c.short_interest_pct >= 0.15)
+            print(f"construction failed at {month_date}: candidates={len(candidates)} neg_alpha={neg} si_blocked={si_blocked}", flush=True)
+            raise
 
-        # Append month's scores for edge throttle
-        score_history.append(
-            pd.DataFrame(
+        construction_weights = {p.security_id: p.target_weight for p in book.positions}
+        post_risk_weights = {k: float(v) for k, v in construction_weights.items()}
+
+        ret_month = (month_ts + pd.offsets.MonthEnd(1)).to_period("M")
+        for sid, idx in zip(merged["sid"], merged.index):
+            score_history.append(
                 {
                     "return_month": ret_month,
-                    "permno": current["permno"].astype(int).astype(str).to_numpy(),
-                    "final_score": current["active_score"].astype(float).to_numpy(),
-                    "prc": current["prc"].astype(float).to_numpy(),
-                }
-            )
-        )
-
-        squeeze_df = pd.DataFrame()
-        if USE_RISK_OVERLAY and weights:
-            scores_df = pd.concat(score_history, ignore_index=True)
-            overlay_result = protect(
-                weights,
-                ret_month,
-                overlay_panel,
-                scores_df,
-                max_abs_net=MAX_ABS_NET if CAP_NET_EXPOSURE else None,
-            )
-            weights = overlay_result.weights
-            if USE_TFM_DAILY_SQUEEZE and tfm_daily_lookup:
-                # Shrink shorts in top 5% of Daily TimesFM 5-day upside jump tail / 21-day quantile spread
-                w_ser = pd.Series(weights, dtype=float)
-                short_ids = [sid for sid, w in weights.items() if w < 0]
-                tfm_flagged = [
-                    sid
-                    for sid in short_ids
-                    if tfm_daily_lookup.get((ret_month, sid), (0.5, 0.0, 0.0))[2] >= 0.95
-                    or tfm_daily_lookup.get((ret_month, sid), (0.5, 0.0, 0.0))[1] >= 0.95
-                ]
-                if tfm_flagged:
-                    before_short_sum = float(-w_ser[w_ser < 0].sum())
-                    for sid in tfm_flagged:
-                        w_ser[sid] *= 0.5
-                    after_short_sum = float(-w_ser[w_ser < 0].sum())
-                    safe_shorts = [sid for sid in short_ids if sid not in tfm_flagged]
-                    if safe_shorts and after_short_sum > 0:
-                        freed = before_short_sum - after_short_sum
-                        safe_sum = float(-w_ser[safe_shorts].sum())
-                        if safe_sum > 0:
-                            for sid in safe_shorts:
-                                w_ser[sid] *= (safe_sum + freed) / safe_sum
-                    weights = w_ser.to_dict()
-                overlay_result.summary["tfm_daily_squeeze_flagged"] = len(tfm_flagged)
-            squeeze_df = overlay_result.stats
-            overlay_log.append({"return_month": str(ret_month), "formation_date": str(form_date), **overlay_result.summary})
-
-        books_by_month[ret_month] = {int(k): float(v) for k, v in weights.items()}
-        prev_weights = weights
-        if COMPOUND_NAV_SIZING:
-            eval_so_far = evaluate_monthly_books(books_by_month, universe, mkt)
-            if not eval_so_far.empty:
-                running_nav = ENDOWMENT_NAV * float((1.0 + eval_so_far["total"]).prod())
-
-        attr_lookup = current.set_index(current["permno"].astype(int).astype(str))
-        for sid, w in weights.items():
-            row = attr_lookup.loc[sid]
-            sq_info = squeeze_df.loc[sid].to_dict() if not squeeze_df.empty and sid in squeeze_df.index else {}
-            portfolio_rows.append(
-                {
-                    "return_month": ret_month,
-                    "formation_date": form_date,
-                    "permno": int(sid),
-                    "ticker": row["ticker"],
-                    "company_name": row["company_name"],
-                    "ticker_name_reference_date": row["ticker_name_reference_date"],
-                    "ticker_name_source": row["ticker_name_source"],
-                    "ticker_name_status": row["ticker_name_status"],
-                    "prc": float(row["prc"]),
-                    "me": float(row["me"]),
-                    "size_grp": str(row["size_grp"]),
-                    "sector": str(row["sector"]),
-                    "beta_60m": float(row["beta_60m"]) if pd.notna(row["beta_60m"]) else 1.0,
-                    "dolvol_126d": float(row["dolvol_126d"]),
-                    "final_score": float(row["active_score"]),
-                    "target_weight": float(w),
-                    "target_dollars": float(w) * capital,
-                    "side": "long" if w > 0 else "short",
-                    "capital": capital,
-                    **sq_info,
+                    "permno": sid,
+                    "final_score": float(candidates_alpha.get(sid, 0.0)),
+                    "prc": float(merged.loc[idx, "prc"]),
                 }
             )
 
-        last_holdings = [
-            ActualHolding(
-                security_id=sid,
-                weight=Decimal(str(round(w, 10))),
-                market_cap_usd=Decimal(str(float(attr_lookup.loc[sid, "me"]) * 1_000_000.0)),
-                formation_market_cap_usd=Decimal(str(float(attr_lookup.loc[sid, "me"]) * 1_000_000.0)),
+        if USE_RISK_OVERLAY and post_risk_weights:
+            scores_df = pd.DataFrame(score_history)
+            overlay_result = protect(post_risk_weights, ret_month, overlay_panel, scores_df)
+            post_risk_weights = dict(overlay_result.weights)
+            overlay_log.append({"month": str(month_date), **overlay_result.summary})
+
+        # Caps for every name ever held or targeted (finite only; compliance fails closed otherwise).
+        for sid, cap in zip(merged["sid"], merged["me_usd"]):
+            if cap == cap and cap is not None and float(cap) not in (float("inf"), float("-inf")):
+                caps[sid] = Decimal(str(float(cap)))
+
+        month_key = f"{month_date.year}-{month_date.month:02d}"
+        if month_key not in tb3ms:
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"TB3MS risk-free rate missing for {month_key}",
+                "The risk-free input is never zero-filled.",
             )
-            for sid, w in weights.items()
-        ]
+        rf_m = tb3ms[month_key] / 1200.0
+        bench_m = rf_m + 0.04 / 12.0
 
-        w_Month = wide.loc[wide["return_month"] == ret_month]
-        cov_m = {s: int(w_Month[f"available_{s}"].sum()) for s in active_sleeves if f"available_{s}" in w_Month}
-        coverage_log.append({"return_month": str(ret_month), "formation_date": str(form_date), "coverage": cov_m})
-
-    # Evaluate monthly returns with drifted-weight turnover, last-quote liquidation, and size-tiered costs/borrow
-    print("Evaluating monthly returns and size-tiered transaction/borrow costs...", flush=True)
-    monthly_eval = evaluate_monthly_books(books_by_month, universe, mkt)
-
-    # Evaluate daily spine on dsf_mini_from_2014.csv
-    daily_df = pd.DataFrame()
-    daily_summary: dict[str, object] = {}
-    dsf = pd.DataFrame()
-    if DSF_PATH.exists():
-        print("Evaluating daily return spine on dsf_mini_from_2014.csv...", flush=True)
-        held_permnos = {int(r["permno"]) for r in portfolio_rows}
-        # Also include scored permnos if computing daily alpha decay, or load held permnos first
-        dsf = load_dsf_daily(
-            DSF_PATH,
-            permnos=held_permnos,
-            first_date=pd.Timestamp("2021-01-01"),
-            last_date=pd.Timestamp("2026-08-31"),
+        accounted = account_period(
+            replay,
+            compliance,
+            period=str(month_date),
+            formation_at=utc_close(month_date),
+            end_at=utc_close(ret_date),
+            construction_weights=construction_weights,
+            post_risk_weights=post_risk_weights,
+            outcomes=merged.set_index("sid")["ret_exc_lead1m"].to_dict(),
+            liquidations=liquidations_by_day.get(month_date),
+            rf_monthly=rf_m,
+            cost_bp_per_side=COST_BP_PER_SIDE,
+            market_caps=caps,
         )
-        fred = load_fred(EXTERNAL)
-        daily_df, daily_summary = evaluate_daily_spine(books_by_month, dsf, fred, monthly_df=monthly_eval)
-
-    portfolio_df = pd.DataFrame(portfolio_rows)
-    hold_period = compute_holding_period(portfolio_df)
-
-    # Build NAV path and monthly.json
-    nav = ENDOWMENT_NAV
-    nav_path = [{"month": "start", "nav": nav}]
-    monthly_records = []
-    for m_period, row in monthly_eval.iterrows():
-        nav *= 1.0 + float(row["total"])
-        nav_path.append({"month": str(m_period), "nav": nav})
-        monthly_records.append(
+        trade, result = accounted.trade, accounted.result
+        last_drifted = result.drifted_weights
+        nav_path.append({"month": str(month_date), "nav": float(result.nav_end)})
+        monthly.append(
             {
-                "month": str(m_period),
-                "gross_return": float(row["gross_return"]),
-                "net_return": float(row["total"]),
-                "rf_monthly": float(row["rf"]),
-                "benchmark_monthly": float(row["benchmark"]),
-                "sp500_monthly": float(row["spx"]) if pd.notna(row["spx"]) else 0.0,
-                "active_return": float(row["active"]),
-                "pnl_long": float(row["pnl_long"]),
-                "pnl_short": float(row["pnl_short"]),
-                "borrow": float(row["borrow"]),
-                "cost": float(row["cost"]),
-                "turnover": float(row["turnover_oneway"]),
-                "turnover_two_way": float(row["traded"]),
-                "names": int(row["names"]),
-                "longs": int(row["longs"]),
-                "shorts": int(row["shorts"]),
-                "gross_exposure": float(row["gross"]),
-                "net_exposure": float(row["net"]),
-                "beta_exante": float(row["beta_exante"]),
+                "month": str(month_date),
+                "gross_return": result.gross_return,
+                "net_return": result.net_return,
+                "rf_monthly": rf_m,
+                "benchmark_monthly": bench_m,
+                "active_return": result.active_return,
+                "borrow": result.borrow_return,
+                "cost": result.cost_return,
+                "turnover": trade.turnover_one_way,
+                "names": result.names,
+                "gross_exposure": result.gross_exposure,
+                "net_exposure": result.net_exposure,
+                "liquidated": result.liquidated,
+                "nav_residuals": result.reconciliation,
             }
         )
+        for sid, weight in sorted(trade.post_weights.items()):
+            holdings_rows.append([str(month_date), sid, str(weight), "long" if weight > 0 else "short"])
+        id_rows = merged.set_index("sid")
+        for sid in trade.post_weights:
+            row = id_rows.loc[sid]
+            ticker = row.get("ticker")
+            name = row.get("comp_name", row.get("name", ""))
+            identities[sid] = (str(ticker) if ticker == ticker and ticker is not None else sid, str(name) if name == name and name is not None else "", str(month_date))
 
-    avg_pos_musd = float((portfolio_df["target_weight"].abs() * portfolio_df["capital"] / 1e6).mean())
+    net_returns = [m["net_return"] for m in monthly]
     table = RequiredTable(
-        ending_value=nav,
-        starting_value=ENDOWMENT_NAV,
-        elapsed_years=len(monthly_records) / 12.0,
+        ending_value=float(replay.nav()),
+        starting_value=float(START_NAV),
+        elapsed_years=len(monthly) / 12.0,
         periods_per_year=12,
-        portfolio_returns=tuple(m["net_return"] for m in monthly_records),
-        benchmark_returns=tuple(m["benchmark_monthly"] for m in monthly_records),
-        risk_free_returns=tuple(m["rf_monthly"] for m in monthly_records),
-        gross_returns=tuple(m["gross_return"] for m in monthly_records),
-        cost_returns=tuple(m["cost"] for m in monthly_records),
-        borrow_returns=tuple(m["borrow"] for m in monthly_records),
-        position_counts=tuple(m["names"] for m in monthly_records),
-        gross_exposures=tuple(m["gross_exposure"] for m in monthly_records),
-        net_exposures=tuple(m["net_exposure"] for m in monthly_records),
-        turnover_per_rebalance=tuple(m["turnover"] for m in monthly_records),
-        spx_returns=tuple(m["sp500_monthly"] for m in monthly_records),
-        max_one_day_loss=daily_summary.get("max_one_day_loss"),
-        max_one_day_loss_date=daily_summary.get("max_one_day_loss_date"),
-        beta_daily=daily_summary.get("beta_daily"),
-        beta_daily_se=daily_summary.get("beta_daily_se"),
-        beta_daily_t_hac=daily_summary.get("beta_daily_t_hac"),
-        avg_holding_period_days=hold_period["avg_holding_period_trading_days"],
-        avg_position_size_musd=avg_pos_musd,
+        portfolio_returns=tuple(net_returns),
+        benchmark_returns=tuple(m["benchmark_monthly"] for m in monthly),
+        risk_free_returns=tuple(m["rf_monthly"] for m in monthly),
+        gross_returns=tuple(m["gross_return"] for m in monthly),
+        cost_returns=tuple(m["cost"] for m in monthly),
+        borrow_returns=tuple(m["borrow"] for m in monthly),
+        position_counts=tuple(m["names"] for m in monthly),
+        gross_exposures=tuple(m["gross_exposure"] for m in monthly),
+        net_exposures=tuple(m["net_exposure"] for m in monthly),
+        turnover_per_rebalance=tuple(m["turnover"] for m in monthly),
     ).as_table()
 
-    compliance_report = compliance.check(last_holdings, max_abs_internal_net=Decimal(str(MAX_ABS_NET))) if last_holdings else None
-
-    # Save portfolio & predictions parquets + required JSONs
-    portfolio_df_save = portfolio_df.copy()
-    portfolio_df_save["return_month"] = portfolio_df_save["return_month"].dt.to_timestamp("M")
-    portfolio_df_save.to_parquet(OUT / "portfolio.parquet", index=False)
-
-    predictions_save = scored[["return_month", "permno", "prc", "me", "size_grp", "sector", "final_score", "final_score_liquid"]].copy()
-    predictions_save["return_month"] = predictions_save["return_month"].dt.to_timestamp("M")
-    predictions_save.to_parquet(OUT / "predictions.parquet", index=False)
-
-    (OUT / "nav_path.json").write_text(json.dumps(nav_path, indent=2), encoding="utf-8")
-    (OUT / "monthly.json").write_text(json.dumps(monthly_records, indent=2), encoding="utf-8")
-    (OUT / "required_table.json").write_text(json.dumps(table, indent=2), encoding="utf-8")
-    (OUT / "coverage.json").write_text(json.dumps(coverage_log, indent=2), encoding="utf-8")
-    if daily_summary:
-        (OUT / "daily_summary.json").write_text(json.dumps(daily_summary, indent=2), encoding="utf-8")
-    if overlay_log:
-        (OUT / "overlay_log.json").write_text(json.dumps(overlay_log, indent=2, default=str), encoding="utf-8")
-    if compliance_report is not None:
-        (OUT / "compliance.json").write_text(
-            json.dumps(compliance_report.as_dict(), indent=2), encoding="utf-8"
+    final_rows = []
+    for sid, weight in sorted(last_drifted.items()):
+        ticker, name, ref = identities[sid]
+        final_rows.append(
+            HoldingsRow(sid, ticker, name, PANEL.name, ref, float(replay.ledger.positions[sid].quantity), float(weight), "long" if weight > 0 else "short")
         )
 
-    # Export offline Arcana attribution audit, Section 9.4 exhibits, and submission CSVs
-    print("Exporting offline Arcana attribution audit, Section 9.4 exhibits, and submission CSVs...", flush=True)
-    arcana_out = export_submission_and_exhibits(
-        portfolio_df=portfolio_df,
-        predictions_df=predictions_save,
-        universe=universe,
-        mkt=mkt,
-        monthly_eval_df=monthly_eval,
-        daily_df=daily_df,
-        daily_summary=daily_summary,
-        dsf=dsf,
-        external_path=EXTERNAL,
-        panel_path=PANEL,
-        out_dir=OUT,
-        score_col=score_col,
-        demand_card_path=ROOT / "artifacts" / "demand_card.parquet",
+    config = {
+        "families": list(FAMILIES),
+        "test_start": str(TEST_START),
+        "test_end": str(TEST_END),
+        "cost_bp_per_side": COST_BP_PER_SIDE,
+        "borrow_annual": BORROW_ANNUAL,
+        "risk_overlay": USE_RISK_OVERLAY,
+        "blend_renorm": BLEND_RENORM,
+        "with_graph": USE_GRAPH,
+        "with_gap": USE_GAP,
+        "with_demand": USE_DEMAND,
+        "gate_e7_demand": GATE_E7_DEMAND,
+        "target_positions": 300,
+        "research_only": RESEARCH_ONLY,
+        "excluded_terminal_months": excluded_terminal,
+    }
+    writer.write_json("nav_path.json", nav_path)
+    writer.write_json("monthly.json", monthly)
+    writer.write_json("required_table.json", table)
+    writer.write_json("coverage.json", coverage_log)
+    if overlay_log:
+        writer.write_json("overlay_log.json", overlay_log)
+    writer.write_json("compliance.json", compliance.as_dict())
+    writer.write_text("returns_export.csv", returns_csv([(m["month"], m["net_return"]) for m in monthly]))
+    writer.write_text("holdings_export.csv", holdings_csv(final_rows))
+    lines = ["period,security_id,post_trade_weight,side"] + [",".join(r) for r in holdings_rows]
+    writer.write_text("holdings_by_period.csv", "\n".join(lines) + "\n")
+    writer.write_json("lineage.json", lineage.as_dict())
+
+    assessment = assess_freeze(
+        manifest=None,  # the legacy path declares no security-master/graph versions or certificates
+        outputs=dict(writer.payloads),
+        gate=gate,
+        certificate_count=0,
+        deployed_forecast_count=len(FAMILIES),
+        accounting_reconciled=True,  # advance() raises on any NAV residual; reaching here is measured
+        compliance=compliance,
+        trial_count=TRIAL_COUNT,
+        evaluation_access_count=EVAL_ACCESS_COUNT,
+        frozen_at=utc_close(months[-1]),
     )
+    writer.write_json(
+        "run_status.json",
+        {
+            "labels": {
+                "run_kind": "replay",
+                "evidence_class": "legacy_monthly_replay",
+                "trial_count_declared": TRIAL_COUNT,
+                "evaluation_access_count_declared": EVAL_ACCESS_COUNT,
+            },
+            "freeze": assessment.as_dict(),
+            "source_policy": gate.as_dict(),
+            "config_hash": canonical_digest(config),
+            "config": config,
+            "environment_lock_hash": environment_lock_hash(),
+            "python": sys.version.split()[0],
+            "input_hashed": HASH_INPUTS,
+            "periods": len(monthly),
+            "excluded_terminal_months": excluded_terminal,
+            "internal_warnings": compliance.internal_warnings(),
+            "liquidations_supplied": bool(liquidations_by_day),
+            "limitations": list(MONTHLY_LIMITATIONS),
+            "llm_called": False,
+        },
+    )
+    writer.write_json("artifact_hashes.json", dict(sorted(writer.hashes.items())))
 
     avg_coverage = {
         name: sum(c["coverage"].get(name, 0) for c in coverage_log) / max(len(coverage_log), 1)
-        for name in active_sleeves
+        for name in FAMILIES
     }
     print()
     label = "WITH RISK OVERLAY" if USE_RISK_OVERLAY else "no risk overlay"
-    print(f"=== final_v2 68-month institutional run ({label}) | gross={TARGET_GROSS:.2f}x | sleeves={len(active_sleeves)} ===")
+    blend = "coverage-renormalized (challenger)" if BLEND_RENORM else "family-equal (C2 baseline)"
+    print(f"=== seven sleeves (5 deterministic + 2 trained) — {label} | blend: {blend} ===")
+    print(f"run label               : {gate.run_label}  freeze: {assessment.status}")
+    for reason in assessment.reasons:
+        print(f"  not frozen because    : {reason}")
     if overlay_log:
         scales = [o["risk_scale"] for o in overlay_log]
         edges = [o["edge_scale"] for o in overlay_log]
         flagged = sum(o["peer_flagged_shorts"] for o in overlay_log)
         capped = sum(o["runup_capped_shorts"] for o in overlay_log)
-        net_caps = sum(1 for o in overlay_log if o.get("post_overlay_net_capped"))
-        print(f"overlay: avg risk_scale={sum(scales)/len(scales):.3f} avg edge_scale={sum(edges)/len(edges):.3f} net_recentered={net_caps}")
+        print(f"overlay: avg risk_scale={sum(scales)/len(scales):.3f} avg edge_scale={sum(edges)/len(edges):.3f}")
         print(f"overlay: peer-flagged shorts={flagged} runup-capped={capped}")
-    print(f"holding months evaluated: {len(monthly_records)} ({monthly_records[0]['month']} .. {monthly_records[-1]['month']})")
+    print(f"months evaluated        : {len(monthly)}")
     print(f"avg coverage per sleeve : " + ", ".join(f"{k}={v:.0f}" for k, v in avg_coverage.items()))
-    print(f"ending NAV              : ${nav:,.0f}")
+    print(f"ending NAV              : ${float(replay.nav()):,.0f}")
     print(f"cumulative return       : {table['cumulative_return']:.2%}")
     print(f"CAGR                    : {table['cagr']:.2%}")
     print(f"annualized volatility   : {table['annualized_volatility']:.2%}")
-    print(f"max drawdown (monthly)  : {table['max_drawdown']:.2%} (duration: {table['max_drawdown_duration_months']}m)")
-    if daily_summary:
-        print(f"max 1-day loss (daily)  : {daily_summary['max_one_day_loss']:.2%} on {daily_summary['max_one_day_loss_date']}")
-        print(f"daily beta vs S&P 500   : {daily_summary.get('beta_daily', 0.0):.3f} (t_hac={daily_summary.get('beta_daily_t_hac', 0.0):.2f})")
-    print(f"IR vs TB3MS+4%          : {table['information_ratio']:.2f}")
-    print(f"Sharpe vs TB3MS         : {table['sharpe_ratio']:.2f}")
-    print(f"hit rate vs TB3MS+4%    : {table['hit_rate_vs_benchmark']:.1%}")
-    print(f"turnover per rebalance  : {table['turnover_per_rebalance_avg']:.2%} (holding period: {table['average_holding_period_trading_days']:.1f}d)")
+    print(f"max drawdown            : {table['max_drawdown']:.2%}")
+    print(f"IR vs cash+4%           : {table['information_ratio']:.2f}")
+    print(f"Sharpe                  : {table['sharpe_ratio']:.2f}")
+    print(f"turnover per rebalance  : {table['turnover_per_rebalance_avg']:.2%}")
     print(f"annual cost % NAV       : {table['annual_cost_pct_nav']:.2%}")
-    print(f"idiosyncratic ret share : {arcana_out['factor_vs_idiosyncratic']['idiosyncratic_share_of_mean_return']:.1%}")
-    print(f"selection share of P&L  : {arcana_out['sizing_vs_selection']['selection_share_of_pnl']:.1%}")
-    if compliance_report is not None:
-        warns = [c.name for c in compliance_report.checks if c.status == "warn"]
-        print(f"compliance official pass: {compliance_report.official_pass} | internal warnings: {warns}")
-    print(f"elapsed runtime         : {time.time() - t_start:.1f}s | artifacts: {OUT}")
+    print(f"compliance official pass: {compliance.all_official_pass} ({len(compliance.records)} period-stage checks)")
+    print(f"artifacts written to    : {OUT}")
 
 
 if __name__ == "__main__":

@@ -8,8 +8,9 @@ from typing import Optional
 
 from pydantic import Field, model_validator
 
-from ..contracts.base import DurableModel, StrictModel, require_aware
+from ..contracts.base import DIGEST_FIELD, DurableModel, StrictModel, canonical_digest, require_aware
 from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
+from .certificates import CertificateScope
 
 
 class ModelState(str, enum.Enum):
@@ -89,14 +90,37 @@ class AdmissionCertificate(DurableModel):
     expiry_policy: str = Field(min_length=1)
     known_limitations: list[str] = Field(default_factory=list)
     promotion_evidence_ids: list[str] = Field(min_length=1)
+    # Machine-readable, verifiable restrictions (see research/certificates.py). The free-text
+    # fields above stay for compatibility but are informational: only ``scope`` is enforced, and
+    # production policy rejects a certificate that has no scope.
+    scope: Optional[CertificateScope] = None
 
     @model_validator(mode="after")
     def _check(self) -> "AdmissionCertificate":
         require_aware(self.effective_start, "effective_start")
+        if self.scope is not None and self.scope.valid_until is not None:
+            if self.scope.valid_until <= self.effective_start:
+                raise ValueError("scope.valid_until must lie after effective_start")
         return self
 
+    def digest(self) -> str:
+        """As ``DurableModel.digest`` but an absent scope is not part of the payload, so
+        seals issued before ``scope`` existed still verify."""
+        payload = self.model_dump(mode="json", exclude={DIGEST_FIELD})
+        if payload.get("scope") is None:
+            payload.pop("scope", None)
+        return canonical_digest(payload)
+
     def is_valid_at(self, when: dt.datetime) -> bool:
-        return require_aware(when, "when") >= self.effective_start
+        when = require_aware(when, "when")
+        if when < self.effective_start:
+            return False
+        if self.scope is not None:
+            if self.scope.valid_from is not None and when < self.scope.valid_from:
+                return False
+            if self.scope.valid_until is not None and when >= self.scope.valid_until:
+                return False
+        return True
 
 
 class PromotionCriteria(StrictModel):
@@ -163,6 +187,8 @@ class PromotionOutcome(StrictModel):
                     stop_condition="If promotion conditions are not configured and met, the evaluator cannot issue an admission certificate.",
                 )
             )
+        # Sealed at issuance: production certificate policy only accepts certificates whose seal verifies.
+        # Pass ``scope=CertificateScope(...)`` for a machine-readable, enforceable certificate.
         return AdmissionCertificate(
             owner="integrity",
             created_at=self.evaluated_at,
@@ -170,7 +196,7 @@ class PromotionOutcome(StrictModel):
             model_id=model_id,
             model_hash=model_hash,
             **kwargs,
-        )
+        ).sealed()  # type: ignore[return-value]
 
 
 class ModelLifecycle:

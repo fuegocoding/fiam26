@@ -1,43 +1,35 @@
-data/raw/*.parquet
-data/scrubbed/*.parquet
-data/scoring/council_scores.db
-data/scoring/council_scores.db-*
-data/scoring/jev_scores.db
-data/scoring/jev_scores.db-*
-output/council_features.parquet
-output/jev_features.parquet
-output/preds_xgb_agentic.csv
-output/preds_xgb_jev.csv
-output/economic_graph_refined/
-output/business_text_evidence.parquet
-output/expectations/
-local/
-.env
-.deps/
-src/__pycache__/
+# Input data are provided separately.
+data/*
+!data/README.md
+external_data/*.parquet
+external_data/raw/
+final/
+
+# Generated models, reports and local caches.
+output/
+output_500M/
+submission/output_500M/
 __pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.venv/
+.env
 
-# Local agent tooling and RunPod configuration
-.agents/
-skills-lock.json
-.runpod/
-
-# Local time-series experiment caches and backtest outputs
-output/time_series_*/
-output/time_series_search
-output/timesfm_safe/
-
-# final/: competition data is supplied by the user (final/data/README.md);
-# external parquet files stay out of git (I/B/E/S is WRDS-licensed); outputs are rebuilt
-final/data/*
-!final/data/README.md
-final/external_data/*.parquet
-final/external_data/raw/
-final/output/
-final/output_500M/
-final/submission/output_500M/
-final/.ruff_cache/
-output/final_cleanup_20261004/
+# Local research archive, environments and agent tooling.
+/stuff_tried/
+/local/
+/.deps/
+/.agents/
+/.codex/
+/.aws/
+/.claude/
+/.autohand/
+/skills-lock.json
+/.runpod/
 
 # Local opencode tooling config and Carbon Arc API token
 opencode.json
@@ -57,5 +49,10 @@ final_v2/artifacts/sweep_gross_*/
 final_v2/artifacts/tfm_daily_sleeve_150/
 final_v2/artifacts/tfm_daily_squeeze_100/
 final_v2/artifacts/tfm_daily_tilt_100/
-data/raw/final/
 fiam2025/
+
+# Private pod research state and local package builds.
+.pod_state/
+*.egg-info/
+final_v2/build/
+final_v2/dist/

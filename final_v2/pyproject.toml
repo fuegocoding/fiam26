@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fiam-pod-platform"
+version = "0.1.0"
+description = "Auditable strategy research and portfolio replay platform"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2,<3"]
+
+[project.optional-dependencies]
+research = ["numpy>=1.26", "pandas>=2", "pyarrow>=14", "pypdf>=5"]
+signals = ["numpy>=1.26", "pandas>=2", "pyarrow>=14", "scipy>=1.11", "xgboost>=2"]
+graph = ["torch>=2"]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pod_platform*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

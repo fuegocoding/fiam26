@@ -148,10 +148,14 @@ class ModelRegistry:
         *,
         policy: TemporalPolicy = TemporalPolicy.RELEASE_GATED,
     ) -> str:
+        simulated_at = require_aware(simulated_at, "simulated_at")
         candidates = [
             record
             for record in self._adoptions
-            if record.role == role and self.eligible_at(record.checkpoint_id, simulated_at, policy=policy)
+            if record.role == role
+            and record.effective_start <= simulated_at
+            and record.temporal_policy == policy
+            and self.eligible_at(record.checkpoint_id, simulated_at, policy=policy)
         ]
         if not candidates:
             raise PodPlatformError(
