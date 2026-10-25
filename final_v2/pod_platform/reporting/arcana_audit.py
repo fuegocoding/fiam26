@@ -18,6 +18,14 @@ from ..accounting.evaluation import (
     ols_hac,
     position_returns,
 )
+from .arcana import make_bundle as make_arcana_bundle, write_bundle as write_arcana_bundle
+from .attribution import (
+    PositionContribution,
+    SizingPeriod,
+    hit_rate_win_loss as platform_hit_rate_win_loss,
+    regression_factor_attribution,
+    selection_vs_sizing,
+)
 
 MONTHLY_HORIZONS = (1, 2, 3, 6, 12)
 DELISTED_RETAIL_TICKERS = ("BBBY", "PRTY", "EXPR", "JOAN", "TUP", "BIG", "CONN", "LL", "RAD")
@@ -461,13 +469,89 @@ def export_submission_and_exhibits(
         else {}
     )
 
+    # 8b. Integrate Franck's pod_platform.reporting.attribution & pod_platform.reporting.arcana controls
+    panel_factors = build_panel_factors(universe)
+    f_joined = monthly_eval_df[["total", "rf", "spx"]].join(panel_factors, how="inner").dropna()
+    reg_attr = regression_factor_attribution(
+        labels=[str(idx) for idx in f_joined.index],
+        portfolio_excess=(f_joined["total"] - f_joined["rf"]).astype(float).tolist(),
+        factors={
+            "mkt": (f_joined["spx"] - f_joined["rf"]).astype(float).tolist(),
+            "smb": f_joined["smb"].astype(float).tolist(),
+            "hml": f_joined["hml"].astype(float).tolist(),
+            "mom": f_joined["mom"].astype(float).tolist(),
+        },
+        factor_set_label="internal_diagnostic_4f_mkt_smb_hml_mom",
+    )
+    sizing_periods = [
+        SizingPeriod(
+            label=str(month),
+            weights=dict(zip(g["permno"].astype(int).astype(str), g["target_weight"].astype(float), strict=True)),
+            returns=dict(zip(g["permno"].astype(int).astype(str), g["ret"].fillna(0.0).astype(float), strict=True)),
+        )
+        for month, g in p.groupby("return_month")
+    ]
+    sel_vs_size_ctrl = selection_vs_sizing(sizing_periods, seed=42, n_draws=200)
+    pos_contribs = [
+        PositionContribution(
+            security_id=str(int(r.permno)),
+            period=str(r.return_month),
+            side=str(r.side),
+            pnl=float(r.pnl) if pd.notna(r.pnl) else 0.0,
+        )
+        for r in p.itertuples()
+    ]
+    hit_wl_ctrl = platform_hit_rate_win_loss(pos_contribs, unit="return_contribution")
+    platform_attribution_controls = {
+        "regression_factor_vs_idiosyncratic": reg_attr["aggregate"],
+        "regression_alpha_per_period": reg_attr["alpha_per_period"],
+        "regression_r_squared": reg_attr["r_squared"],
+        "selection_vs_sizing_seeded_control": sel_vs_size_ctrl["aggregate"],
+        "hit_rate_win_loss_by_side": {
+            "all": hit_wl_ctrl["all"],
+            "by_side": hit_wl_ctrl["by_side"],
+        },
+    }
+    (out_dir / "platform_attribution.json").write_text(
+        json.dumps(
+            {
+                "regression_factor_attribution": reg_attr,
+                "selection_vs_sizing": sel_vs_size_ctrl,
+                "hit_rate_win_loss": hit_wl_ctrl,
+            },
+            indent=2,
+            default=str,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    arcana_records = [
+        {
+            "date": str(pd.Timestamp(r.formation_date).date()),
+            "security_id": str(int(r.permno)),
+            "weight": float(r.target_weight),
+            "source_classification": "formation",
+        }
+        for r in p.itertuples()
+    ]
+    arcana_bundle = make_arcana_bundle(
+        arcana_records,
+        weight_unit="decimal",
+        source_files=[f for f in (panel_path, external_path) if Path(f).exists()],
+        descriptive=False,
+    )
+    write_arcana_bundle(arcana_bundle, out_dir / "arcana_bundle", overwrite=True)
+
     arcana_payload = {
         "score_column": score_col,
         "factor_vs_idiosyncratic": factor_vs_idiosyncratic_split(
-            monthly_eval_df, build_panel_factors(universe)
+            monthly_eval_df, panel_factors
         ),
         "sizing_vs_selection": sizing_vs_selection_split(p),
         "hit_rate_and_win_loss": hit_rate_and_win_loss(p, monthly_eval_df),
+        "platform_attribution_controls": platform_attribution_controls,
+        "arcana_bundle_sha256": arcana_bundle["payload_sha256"],
         "monthly_alpha_decay": m_decay,
         "daily_alpha_decay": d_decay,
         "earnings_vs_ex_earnings_window": earn_decomp,

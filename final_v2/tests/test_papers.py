@@ -405,9 +405,13 @@ def test_ingest_local_validation(tmp_path):
     ok = tmp_path / "ok.txt"
     ok.write_text("hello")
     link = tmp_path / "link.txt"
-    os.symlink(ok, link)
-    with pytest.raises(PaperValidationError):
-        s.ingest_local(link, title="t", first_public_date=FIRST)
+    try:
+        os.symlink(ok, link)
+    except OSError:
+        pass
+    else:
+        with pytest.raises(PaperValidationError):
+            s.ingest_local(link, title="t", first_public_date=FIRST)
     with pytest.raises(PaperValidationError):
         s.ingest_local(tmp_path / "missing.txt", title="t", first_public_date=FIRST)
     with pytest.raises(Exception):

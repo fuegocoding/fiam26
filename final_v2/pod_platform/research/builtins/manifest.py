@@ -248,7 +248,7 @@ def resolve_manifest_path(manifest_path: "str | Path | None" = None) -> Path:
 
 
 def _confined_path(raw: str, base: Path, roots: list[Path], what: str) -> Path:
-    if not raw or "\x00" in raw or "\\" in raw or raw.startswith("~"):
+    if not raw or "\x00" in raw or raw.startswith("~") or (not Path(raw).is_absolute() and "\\" in raw):
         raise BuiltinConfigError(f"{what}: unsafe path {raw!r}")
     candidate = Path(raw)
     if ".." in candidate.parts:

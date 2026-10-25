@@ -46,11 +46,19 @@ from pod_platform.allocation import (  # noqa: E402
     InternalPolicy,
     OfficialLimits,
 )
+from pod_platform.contracts.base import canonical_digest  # noqa: E402
 from pod_platform.contracts.hypotheses import HypothesisSpec  # noqa: E402
 from pod_platform.contracts.sources import SourceCard  # noqa: E402
 from pod_platform.data.security_master import (  # noqa: E402
     UNVERIFIED_LABEL,
     load_formation_fields,
+)
+from pod_platform.orchestration.replay import (  # noqa: E402
+    CoreSourceLineage,
+    PeriodComplianceLog,
+    SourceEligibilityGate,
+    SourceUse,
+    environment_lock_hash,
 )
 from pod_platform.reporting.arcana_audit import (  # noqa: E402
     compute_holding_period,
@@ -74,12 +82,21 @@ from pod_platform.signals import (  # noqa: E402
 from pod_platform.signals.short_interest import build_short_interest  # noqa: E402
 
 REPO = ROOT.parent
-PANEL = REPO / "final" / "data" / "chars_final_with_names.parquet"
-FACTORS = REPO / "final" / "data" / "factor_char_list.csv"
-EXTERNAL = REPO / "final" / "external_data" / "external.parquet"
-FILINGS = REPO / "final" / "data" / "8k_20150101_20260831_identified.parquet"
-DSF_PATH = REPO / "data" / "raw" / "final" / "dsf_mini_from_2014.csv"
-FINAL_OUT = REPO / "final" / "output"
+
+
+def _first_existing(*candidates: Path) -> Path:
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
+
+
+PANEL = _first_existing(REPO / "final" / "data" / "chars_final_with_names.parquet", REPO / "data" / "chars_final_with_names.parquet")
+FACTORS = _first_existing(REPO / "final" / "data" / "factor_char_list.csv", REPO / "data" / "factor_char_list.csv")
+EXTERNAL = _first_existing(REPO / "final" / "external_data" / "external.parquet", REPO / "external_data" / "external.parquet")
+FILINGS = _first_existing(REPO / "final" / "data" / "8k_20150101_20260831_identified.parquet", REPO / "data" / "8k_20150101_20260831_identified.parquet")
+DSF_PATH = _first_existing(REPO / "data" / "raw" / "final" / "dsf_mini_from_2014.csv", REPO / "data" / "dsf_mini_from_2014.csv")
+FINAL_OUT = _first_existing(REPO / "final" / "output", REPO / "output")
 CACHE = ROOT / "artifacts" / "seven_book" / "forecasts"
 
 # Formation months 2020-12-31 .. 2026-07-31 -> Holding months 2021-01 .. 2026-08 (68 months)
@@ -438,6 +455,40 @@ def register_platform_contracts(active_sleeves: list[str], out_dir: Path) -> dic
         "certificates": certificates,
     }
     (out_dir / "admission_certificates.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    # Evaluate Franck's SourceEligibilityGate & CoreSourceLineage
+    cards_by_id = {
+        c.source_id: c
+        for p_card in sorted((configs_dir / "source_cards").glob("*.json"))
+        for c in (SourceCard.model_validate(json.loads(p_card.read_text(encoding="utf-8"))),)
+    }
+    uses = [
+        SourceUse(name=fam, source_id="comp_chars_panel", role="core", card=cards_by_id.get("comp_chars_panel"))
+        for fam in active_sleeves
+    ]
+    if "comp_dsf_daily" in cards_by_id:
+        uses.append(
+            SourceUse(
+                name="daily_spine_and_timesfm_3",
+                source_id="comp_dsf_daily",
+                role="core",
+                card=cards_by_id.get("comp_dsf_daily"),
+            )
+        )
+    gate_result = SourceEligibilityGate(research_only=False).evaluate(uses)
+    lineage = CoreSourceLineage()
+    for src_id, src_path, src_role in (
+        ("core_chars_panel", PANEL, "core"),
+        ("core_factor_list", FACTORS, "core"),
+        ("external_parquet", EXTERNAL, "external"),
+        ("filings_8k", FILINGS, "external"),
+    ):
+        if src_path.exists():
+            lineage.add(src_id, src_path, role=src_role, hash_content=False)
+    if DSF_PATH.exists():
+        lineage.add("dsf_daily_spine", DSF_PATH, role="core", hash_content=False)
+    (out_dir / "lineage.json").write_text(json.dumps(lineage.as_dict(), indent=2), encoding="utf-8")
+    payload["source_gate"] = gate_result.as_dict()
     registry.close()
     return payload
 
@@ -633,6 +684,8 @@ def main() -> None:
 
     official_limits = OfficialLimits()
     compliance = ComplianceEngine(official_limits)
+    period_compliance = PeriodComplianceLog(official_limits, fail_closed=True)
+    market_caps_all: dict[str, Decimal] = {}
 
     return_months = sorted(scored["return_month"].unique())
     print(f"Holding months to construct: {len(return_months)} ({return_months[0]} .. {return_months[-1]})", flush=True)
@@ -795,6 +848,24 @@ def main() -> None:
                 running_nav = ENDOWMENT_NAV * float((1.0 + eval_so_far["total"]).prod())
 
         attr_lookup = current.set_index(current["permno"].astype(int).astype(str))
+        for sid_c, me_val in zip(current["permno"].astype(int).astype(str), current["me"]):
+            if pd.notna(me_val) and np.isfinite(me_val) and float(me_val) > 0:
+                market_caps_all[sid_c] = Decimal(str(float(me_val) * 1_000_000.0))
+        construction_weights_pre = {p.security_id: float(p.target_weight) for p in book.positions}
+        period_compliance.record(
+            str(ret_month),
+            "formation_target",
+            prev_weights,
+            construction_weights_pre,
+            market_caps_all,
+        )
+        period_compliance.record(
+            str(ret_month),
+            "post_risk",
+            construction_weights_pre,
+            weights,
+            market_caps_all,
+        )
         for sid, w in weights.items():
             row = attr_lookup.loc[sid]
             sq_info = squeeze_df.loc[sid].to_dict() if not squeeze_df.empty and sid in squeeze_df.index else {}
@@ -941,6 +1012,32 @@ def main() -> None:
         (OUT / "compliance.json").write_text(
             json.dumps(compliance_report.as_dict(), indent=2), encoding="utf-8"
         )
+    (OUT / "compliance_by_period.json").write_text(
+        json.dumps(period_compliance.as_dict(), indent=2), encoding="utf-8"
+    )
+    run_status = {
+        "labels": {
+            "run_kind": "institutional_68m_replay",
+            "evidence_class": "68m_daily_spine_and_monthly_ledger",
+            "trial_count_declared": contracts_meta["trial_count"],
+        },
+        "source_policy": contracts_meta.get("source_gate", {}),
+        "integration_policy": contracts_meta["integration_policy"],
+        "compounding_nav_sizing": COMPOUND_NAV_SIZING,
+        "environment_lock_hash": environment_lock_hash(),
+        "periods": len(monthly_records),
+        "all_period_official_compliance_pass": period_compliance.all_official_pass,
+        "period_stage_checks": len(period_compliance.records),
+        "config_hash": canonical_digest(
+            {
+                "sleeves": active_sleeves,
+                "target_gross": TARGET_GROSS,
+                "max_abs_net": MAX_ABS_NET,
+                "compound_nav_sizing": COMPOUND_NAV_SIZING,
+            }
+        ),
+    }
+    (OUT / "run_status.json").write_text(json.dumps(run_status, indent=2), encoding="utf-8")
 
     # Export offline Arcana attribution audit, Section 9.4 exhibits, and submission CSVs
     print("Exporting offline Arcana attribution audit, Section 9.4 exhibits, and submission CSVs...", flush=True)

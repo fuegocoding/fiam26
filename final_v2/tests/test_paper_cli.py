@@ -92,7 +92,7 @@ def test_cli_errors_are_structured(tmp_path):
 def test_local_ingest_claim_and_replicate(tmp_path):
     db = tmp_path / "c.sqlite"
     f = tmp_path / "p.txt"
-    f.write_text("1. Data\nThe sample consists of all US stocks.\n", encoding="utf-8")
+    f.write_text("1. Data\nThe sample consists of all US stocks.\n", encoding="utf-8", newline="\n")
     code, r = run(db, "ingest-local", str(f), "--title", "Local", "--first-public",
                   "2020-01-01T00:00:00+00:00", "--author", "Ann Lee")
     assert code == 0 and r["paper"]["text_status"] == "full_text"
