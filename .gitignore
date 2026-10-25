@@ -43,3 +43,7 @@ output/final_cleanup_20261004/
 opencode.json
 carbon/.carbontoken
 carbon/out/
+
+# rebuildable training caches (regenerate via scripts/train_*.py)
+final_v2/artifacts/graph_work/
+final_v2/artifacts/valuation_work/
