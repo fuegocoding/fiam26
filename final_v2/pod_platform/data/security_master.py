@@ -176,3 +176,122 @@ class SecurityMaster:
 
     def __len__(self) -> int:
         return len(self._links)
+
+
+UNVERIFIED_LABEL = "no_verified_label_for_observation_period"
+CARRIED_LABEL = "carried_forward_last_verified"
+COVER_LABEL = "verified_in_earlier_8k_cover"
+MAX_LABEL_AGE_DAYS = 366
+LABEL_COLUMNS = [
+    "ticker",
+    "company_name",
+    "ticker_name_status",
+    "ticker_name_reference_date",
+    "ticker_name_source",
+]
+
+
+def _cover_symbol(text: str) -> Optional[str]:
+    import re
+    not_sym = {"LLC", "INC", "THE", "NYSE", "PAR", "USD", "N/A", "NONE", "ADS", "ADR", "CLASS", "A", "B"}
+    tbl = re.search(r"Trading\s+Symbol", text[:6000], re.I)
+    if not tbl:
+        return None
+    sym_re = re.compile(
+        r"\b([A-Z]{1,5}(?:\.[A-Z])?)\s+(?:on\s+)?(?:[Tt]he\s+)?"
+        r"(?:Nasdaq|NASDAQ|New York Stock Exchange|NYSE|Cboe|CBOE)"
+    )
+    for m in sym_re.finditer(text[tbl.end() : tbl.end() + 1500]):
+        if m.group(1) not in not_sym:
+            return m.group(1)
+    return None
+
+
+def load_formation_fields(panel_path, filings_path=None) -> "pd.DataFrame":
+    """Loads formation fields with point-in-time verified ticker and company_name labels."""
+    import pandas as pd
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
+    cols = [
+        "permno", "permco", "eom", "prc", "me", "size_grp",
+        "dolvol_126d", "gics", "beta_60m", *LABEL_COLUMNS,
+    ]
+    panel = pq.read_table(panel_path, columns=cols).to_pandas()
+    panel["eom_ts"] = pd.to_datetime(panel["eom"])
+    panel["eom"] = panel["eom_ts"].dt.to_period("M")
+    panel["return_month"] = panel["eom"] + 1
+    panel["prc"] = panel["prc"].abs()
+    panel["sector"] = panel["gics"].astype("string").str[:2].fillna("na")
+    ref = pd.to_datetime(panel["ticker_name_reference_date"])
+    panel["ticker_name_reference_date"] = ref
+    future = ref.notna() & ref.gt(panel["eom"].dt.to_timestamp("M"))
+    panel.loc[future, ["ticker", "company_name"]] = None
+    panel.loc[future, "ticker_name_status"] = UNVERIFIED_LABEL
+
+    if filings_path is not None:
+        p_sorted = panel[["permno", "eom_ts", *LABEL_COLUMNS]].rename(columns={"eom_ts": "eom"}).sort_values(["permno", "eom"]).reset_index(drop=True)
+        r_sorted = pd.to_datetime(p_sorted["ticker_name_reference_date"])
+        verified = (
+            p_sorted["ticker"].notna()
+            & p_sorted["company_name"].notna()
+            & p_sorted["ticker_name_status"].ne(UNVERIFIED_LABEL)
+            & r_sorted.notna()
+            & r_sorted.le(p_sorted["eom"])
+        )
+        known = p_sorted[["ticker", "company_name"]].where(verified)
+        known["label_date"] = r_sorted.where(verified)
+        known["permno"] = p_sorted["permno"]
+        known = known.groupby("permno")[["ticker", "company_name", "label_date"]].ffill()
+        need = ~verified
+        carried = p_sorted.loc[need, ["permno", "eom"]].join(known.loc[need])
+        age = (carried["eom"] - carried["label_date"]).dt.days
+        carried = carried[carried["label_date"].notna() & (age <= MAX_LABEL_AGE_DAYS)]
+        if not carried.empty:
+            since = carried["label_date"].min()
+            filings = (
+                ds.dataset(filings_path)
+                .to_table(
+                    filter=(ds.field("filing_date") >= since.date())
+                    & ds.field("permno").isin(carried["permno"].unique().tolist()),
+                    columns=["permno", "filing_date", "text", "company_name", "document_id"],
+                )
+                .to_pandas()
+            )
+            filings["symbol"] = filings["text"].map(_cover_symbol)
+            filings = filings.drop(columns="text").dropna(subset=["symbol"])
+            filings["filing_date"] = pd.to_datetime(filings["filing_date"])
+            filings = filings.rename(columns={"company_name": "sec_name"})
+            out = pd.merge_asof(
+                carried.assign(eom=carried["eom"].astype("datetime64[ns]")).sort_values("eom"),
+                filings.assign(filing_date=filings["filing_date"].astype("datetime64[ns]")).sort_values("filing_date"),
+                left_on="eom",
+                right_on="filing_date",
+                by="permno",
+                direction="backward",
+            )
+            cover = (
+                out["filing_date"].notna()
+                & (out["filing_date"] > out["label_date"])
+                & out["symbol"].eq(out["ticker"])
+            )
+            label_day = out["label_date"].dt.strftime("%Y-%m-%d")
+            doc = out["document_id"].astype(str)
+            out["company_name"] = out["company_name"].where(~cover, out["sec_name"])
+            out["ticker_name_status"] = CARRIED_LABEL
+            out.loc[cover, "ticker_name_status"] = COVER_LABEL
+            out["ticker_name_reference_date"] = out["label_date"].where(~cover, out["filing_date"])
+            out["ticker_name_source"] = "panel verified label of " + label_day
+            out.loc[cover, "ticker_name_source"] = "8-K cover trading symbol, document " + doc
+            found = out[["permno", "eom", *LABEL_COLUMNS]].rename(columns={"eom": "eom_ts"})
+            panel = panel.merge(found, on=["permno", "eom_ts"], how="left", suffixes=("", "_verified"))
+            fill = panel["ticker_verified"].notna() & panel["ticker_name_status"].eq(UNVERIFIED_LABEL)
+            for col in LABEL_COLUMNS:
+                vals = panel[col].astype(object)
+                vals[fill] = panel.loc[fill, col + "_verified"]
+                if col == "ticker_name_reference_date":
+                    vals = pd.to_datetime(vals)
+                panel[col] = vals
+                panel = panel.drop(columns=[col + "_verified"])
+    return panel.drop(columns=["eom_ts"])
+

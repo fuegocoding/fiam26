@@ -65,6 +65,8 @@ def protect(
     month: pd.Period,
     panel: pd.DataFrame,
     scores: pd.DataFrame,
+    *,
+    max_abs_net: float | None = None,
 ) -> OverlayResult:
     book = pd.Series(weights, dtype=float)
     if book.empty:
@@ -91,12 +93,29 @@ def protect(
     edge_t, edge_scale = _edge_throttle(scores, history, month)
     adjusted = adjusted * scale * edge_scale
 
+    net_capped = False
+    if max_abs_net is not None and max_abs_net >= 0.0:
+        net_val = float(adjusted.sum())
+        long_mask = adjusted > 0
+        short_mask = adjusted < 0
+        long_sum = float(adjusted[long_mask].sum())
+        short_sum = float(-adjusted[short_mask].sum())
+        if net_val > max_abs_net and long_sum > 0:
+            target_long = short_sum + max_abs_net
+            adjusted[long_mask] *= target_long / long_sum
+            net_capped = True
+        elif net_val < -max_abs_net and short_sum > 0:
+            target_short = long_sum + max_abs_net
+            adjusted[short_mask] *= target_short / short_sum
+            net_capped = True
+
     table = pd.DataFrame(
         {
             "peer_squeeze_probability": probability.reindex(book.index),
             "jump_1_in_100_months": _jump_level(history, shorts, formation).reindex(book.index),
             "risk_multiplier": (adjusted / book).to_numpy(),
-        }
+        },
+        index=book.index,
     )
     summary = {
         "peer_flagged_shorts": int(flagged.sum()),
@@ -107,6 +126,7 @@ def protect(
         "edge_t": float(edge_t) if np.isfinite(edge_t) else None,
         "edge_scale": edge_scale,
         "short_weight_in_flagged": float(-adjusted[flagged[flagged].index].sum()) if flagged.any() else 0.0,
+        "post_overlay_net_capped": net_capped,
     }
     return OverlayResult(adjusted.to_dict(), table, summary)
 

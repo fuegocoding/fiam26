@@ -261,3 +261,148 @@ def build_filing_events(
         device=device,
         on_fold=on_fold,
     )
+
+
+_NAME_FORMS = (
+    "10-K", "10-Q", "8-K", "10-K/A", "10-Q/A", "S-1", "S-1/A",
+    "424B4", "424B5", "S-3", "10-KT", "DEF 14A", "8-A12B", "10-12B",
+)
+_LOCKUP_DAYS = 180
+_FIRST_FEATURE_MONTH = pd.Period("2015-02", "M")
+
+
+def _normalise_company_name(name: str | None) -> str:
+    import re
+    if not isinstance(name, str):
+        return ""
+    suffix = re.compile(
+        r"\b(INCORPORATED|INC|CORPORATION|CORP|COMPANY|CO|LIMITED|LTD|LLC|LP|L P"
+        r"|PLC|NV|N V|SA|S A|AG|HOLDINGS|HOLDING|HLDGS|HLDG|GROUP|GRP|THE|NEW|DEL"
+        r"|COM|CLASS [A-Z]|CL [A-Z]|ORD|ADR|SPONSORED|COMMON|STOCK|SHS|SHARES"
+        r"|TRUST|FUND|INTERNATIONAL|INTL|TECHNOLOGIES|TECHNOLOGY|TECH|SYSTEMS"
+        r"|THERAPEUTICS|PHARMACEUTICALS|PHARMA|BANCORP|BANCORPORATION|FINANCIAL"
+        r"|ENTERPRISES|INDUSTRIES|BIOSCIENCES|BIOPHARMA|SCIENCES|LABORATORIES"
+        r"|LABS|ENERGY|RESOURCES)\b"
+    )
+    text = name.upper().replace("&", " AND ")
+    text = re.sub(r"/[A-Z]{2,3}/?", " ", text)
+    text = re.sub(r"[^A-Z0-9 ]", " ", text)
+    for _ in range(2):
+        text = suffix.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def build_edgar_crosswalk_features(
+    panel_path: Path,
+    filings_path: Path,
+    external_path: Path,
+    last_target: pd.Timestamp = pd.Timestamp("2026-08-31"),
+    cache_path: Path | None = None,
+) -> pd.DataFrame:
+    """Point-in-time EDGAR filing event features + 180-day IPO lockup indicator."""
+    if cache_path is not None and cache_path.exists():
+        df = pd.read_parquet(cache_path)
+        if "return_month" in df.columns:
+            df = df.rename(columns={"return_month": "target_month"})
+        df["target_month"] = pd.to_datetime(df["target_month"])
+        return df
+
+    ext = pd.read_parquet(
+        external_path,
+        columns=["table", "form_type", "date_filed", "cik", "company_name", "accession"],
+    )
+    index = ext[ext["table"] == "edgar"].drop(columns=["table"]).copy()
+    index["date_filed"] = pd.to_datetime(index["date_filed"])
+
+    linked = pd.read_parquet(
+        filings_path, columns=["permno", "permco", "cik", "filing_date"]
+    ).dropna(subset=["permno"])
+    linked["filing_date"] = pd.to_datetime(linked["filing_date"])
+    linked["permno"] = linked["permno"].astype(int)
+    linked["cik"] = pd.to_numeric(linked["cik"], errors="coerce")
+    linked = linked.dropna(subset=["cik"]).astype({"cik": "int64"}).drop_duplicates()
+
+    panel = pd.read_parquet(
+        panel_path,
+        columns=["permno", "permco", "company_name", "eom", "ticker_name_reference_date"],
+    ).dropna(subset=["company_name"])
+    panel["eom"] = pd.to_datetime(panel["eom"])
+    ref = pd.to_datetime(panel["ticker_name_reference_date"])
+    panel = panel.loc[ref.notna() & ref.le(panel["eom"])].copy()
+    panel["key"] = panel["company_name"].map(_normalise_company_name)
+    panel = panel[panel["key"].str.len() >= 4]
+
+    columns = [f"{family}_{window}" for family in FILING_FAMILIES for window in WINDOWS] + ["lockup_m"]
+    family_of = {form: family for family, forms in FILING_FAMILIES.items() for form in forms}
+
+    parts = []
+    for month in pd.period_range(_FIRST_FEATURE_MONTH, last_target.to_period("M"), freq="M"):
+        cutoff = (month - 1).to_timestamp("M")
+        known = index.loc[index["date_filed"] <= cutoff]
+        p_cut = panel.loc[panel["eom"] <= cutoff].drop_duplicates(["permno", "company_name"])
+        l_cut = linked.loc[linked["filing_date"] <= cutoff, ["permno", "permco", "cik"]].drop_duplicates()
+        filers = known[known["form_type"].isin(_NAME_FORMS)]
+        names = filers.groupby(["cik", "company_name"]).size().reset_index()
+        names["key"] = names["company_name"].map(_normalise_company_name)
+        names = names[names["key"].str.len() >= 4]
+        one_company = p_cut.groupby("key")["permco"].nunique()
+        one_filer = names.groupby("key")["cik"].nunique()
+        matched = p_cut[p_cut["key"].isin(one_company[one_company == 1].index)].merge(
+            names[names["key"].isin(one_filer[one_filer == 1].index)], on="key"
+        ).drop_duplicates(["permno", "cik"])
+        matched = matched[~matched["permno"].isin(l_cut["permno"])]
+        matched["cik"] = matched["cik"].astype("int64")
+        crosswalk = pd.concat([l_cut, matched[["permno", "permco", "cik"]]], ignore_index=True)
+
+        recent = known.loc[known["date_filed"] >= (month - 12).start_time]
+        ev = recent[recent["form_type"].isin(family_of)].copy()
+        ev["family"] = ev["form_type"].map(family_of)
+        ev["cik"] = pd.to_numeric(ev["cik"], errors="coerce")
+        ev = ev.dropna(subset=["cik"]).astype({"cik": "int64"}).merge(crosswalk, on="cik")
+        companies = ev.groupby(["accession", "family"])["permco"].nunique()
+        ambiguous = companies[companies > 1].index
+        ev = ev.set_index(["accession", "family"])
+        ev = ev.loc[~ev.index.isin(ambiguous)].reset_index()
+        ev["month"] = ev["date_filed"].dt.to_period("M")
+        ev = ev.drop_duplicates(["permno", "accession", "family"])[["permno", "family", "month"]]
+
+        periodic = known[known["form_type"].isin(["10-K", "10-Q", "8-K"])]
+        first_report = periodic.groupby("cik")["date_filed"].min().rename("first")
+        offering = known[known["form_type"] == "424B4"]
+        ipo = offering.groupby("cik")["date_filed"].min().rename("ipo")
+        both = pd.concat([ipo, first_report], axis=1).dropna(subset=["ipo"])
+        new_issuer = both["first"].isna() | (both["first"] >= both["ipo"] - pd.Timedelta(days=5))
+        both = both[new_issuer & (both["ipo"] >= pd.Timestamp("2014-06-01"))]
+        both = both.rename_axis("cik").reset_index()
+        both["cik"] = pd.to_numeric(both["cik"], errors="coerce")
+        both = both.dropna(subset=["cik"]).astype({"cik": "int64"}).merge(crosswalk[["permno", "cik"]], on="cik")
+        both = both.drop_duplicates("permno")
+        both["return_month"] = (both["ipo"] + pd.Timedelta(days=_LOCKUP_DAYS)).dt.to_period("M")
+        lockups = both.assign(lockup_m=1)[["permno", "return_month", "lockup_m"]]
+
+        wide = None
+        for family, group in ev.groupby("family"):
+            counts = group.groupby(["permno", "month"]).size().rename("n").reset_index()
+            for label, m_back in WINDOWS.items():
+                sub = []
+                for shift in range(m_back):
+                    part = counts.copy()
+                    part["return_month"] = part["month"] + 1 + shift
+                    sub.append(part[["permno", "return_month", "n"]])
+                col = pd.concat(sub).groupby(["permno", "return_month"])["n"].sum().rename(f"{family}_{label}")
+                wide = col.to_frame() if wide is None else wide.join(col, how="outer")
+        if wide is None:
+            wide = pd.DataFrame({"permno": pd.Series(dtype="int64"), "return_month": pd.Series(dtype="period[M]")})
+        else:
+            wide = wide.reset_index()
+        wide = wide.merge(lockups, on=["permno", "return_month"], how="outer")
+        wide = wide.reindex(columns=["permno", "return_month", *columns], fill_value=0).fillna(0)
+        parts.append(wide.loc[wide["return_month"] == month])
+
+    out = pd.concat(parts, ignore_index=True)
+    out["target_month"] = out.pop("return_month").dt.to_timestamp("M")
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        out.to_parquet(cache_path, index=False)
+    return out
+

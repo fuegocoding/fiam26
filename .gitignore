@@ -48,3 +48,14 @@ carbon/out/
 final_v2/artifacts/graph_work/
 final_v2/artifacts/valuation_work/
 final_v2/artifacts/demand_card.parquet
+final_v2/artifacts/timesfm_daily/dsf_liquid.parquet
+final_v2/artifacts/timesfm_daily/tfm_bundle.zip
+final_v2/artifacts/*/predictions.parquet
+final_v2/artifacts/*/portfolio.parquet
+final_v2/artifacts/*/research_registry.db
+final_v2/artifacts/sweep_gross_*/
+final_v2/artifacts/tfm_daily_sleeve_150/
+final_v2/artifacts/tfm_daily_squeeze_100/
+final_v2/artifacts/tfm_daily_tilt_100/
+data/raw/final/
+fiam2025/

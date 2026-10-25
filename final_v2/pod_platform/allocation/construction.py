@@ -10,6 +10,7 @@ relaxation order and every relaxation is recorded.
 from __future__ import annotations
 
 import datetime as dt
+import math
 from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, Decimal
 from typing import Optional, Sequence
@@ -58,6 +59,15 @@ class InternalPolicy(StrictModel):
     beta_lower: float = Field(gt=0, default=0.2)
     beta_upper: float = Field(gt=0, default=3.0)
     max_short_interest: float = Field(ge=0.0, le=1.5, default=0.15)
+    min_price_usd: float = Field(ge=0.0, default=0.0)
+    execution_days: int = Field(ge=1, default=5)
+    long_adv_participation: float = Field(ge=0.0, le=1.0, default=0.0)
+    short_adv_participation: float = Field(ge=0.0, le=1.0, default=0.0)
+    require_verified_labels: bool = False
+    capital_usd: float = Field(gt=0.0, default=1_000_000_000.0)
+    enforce_max_abs_net: bool = False
+    allow_all_ranked_sides: bool = False
+    ceil_retention_zone: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> "InternalPolicy":
@@ -75,9 +85,15 @@ class Candidate:
     market_cap_usd: float
     tradable: bool = True
     incumbent: bool = False
+    incumbent_long: Optional[bool] = None
+    incumbent_short: Optional[bool] = None
     sector: str = "unknown"
     beta: float = 1.0
     short_interest_pct: float = float("nan")
+    price_usd: float = 10.0
+    adv_usd: float = 1_000_000_000.0
+    verified_label: bool = True
+    size_grp: str = "large"
 
 
 @dataclass
@@ -154,22 +170,48 @@ class ConstructionEngine:
     def _construct(self, candidates: Sequence[Candidate]) -> ConstructionResult:
         official = self._official
         internal = self._internal
-        tradable = [c for c in candidates if c.tradable]
+        n_per_side = max(1, internal.target_positions // 2)
+        one_usd = internal.capital_usd * (internal.target_gross / 2.0) / n_per_side
+
+        base_tradable = [
+            c
+            for c in candidates
+            if c.tradable
+            and c.price_usd >= internal.min_price_usd
+            and (not internal.require_verified_labels or c.verified_label)
+        ]
+        tradable = [
+            c
+            for c in base_tradable
+            if internal.long_adv_participation <= 0.0
+            or (c.adv_usd * internal.long_adv_participation * internal.execution_days >= one_usd)
+        ]
         shortable = [
             c
-            for c in tradable
+            for c in base_tradable
             if c.market_cap_usd >= official.min_short_market_cap_usd
             and not (c.short_interest_pct >= internal.max_short_interest)
+            and (
+                internal.short_adv_participation <= 0.0
+                or (c.adv_usd * internal.short_adv_participation * internal.execution_days >= one_usd)
+            )
         ]
 
-        longs = sorted(
-            (c for c in tradable if c.alpha > 0),
-            key=lambda c: (-c.alpha, c.security_id),
-        )
-        shorts = sorted(
-            (c for c in shortable if c.alpha < 0),
-            key=lambda c: (c.alpha, c.security_id),
-        )
+        def _tie_key(sid: str):
+            return (0, int(sid)) if sid.isdigit() else (1, sid)
+
+        if internal.allow_all_ranked_sides:
+            longs = sorted(tradable, key=lambda c: (-c.alpha, _tie_key(c.security_id)))
+            shorts = sorted(shortable, key=lambda c: (c.alpha, _tie_key(c.security_id)))
+        else:
+            longs = sorted(
+                (c for c in tradable if c.alpha > 0),
+                key=lambda c: (-c.alpha, c.security_id),
+            )
+            shorts = sorted(
+                (c for c in shortable if c.alpha < 0),
+                key=lambda c: (c.alpha, c.security_id),
+            )
 
         result = ConstructionResult(status=SolverStatus.FEASIBLE)
         k = min(internal.target_positions // 2, len(longs), len(shorts))
@@ -201,17 +243,17 @@ class ConstructionEngine:
                 k_pair = min(k_sector, len(lo), len(so))
                 if k_pair <= 0:
                     continue
-                picked_shorts = self._select_with_retention(so, k_pair)
+                picked_shorts = self._select_with_retention(so, k_pair, side="short")
                 short_ids = {c.security_id for c in picked_shorts}
                 picked_longs = self._select_with_retention(
-                    [c for c in lo if c.security_id not in short_ids], k_pair
+                    [c for c in lo if c.security_id not in short_ids], k_pair, side="long"
                 )
                 k_pair = min(len(picked_shorts), len(picked_longs))
                 selected_longs += picked_longs[:k_pair]
                 selected_shorts += picked_shorts[:k_pair]
         else:
-            selected_longs = self._select_with_retention(longs, k)
-            selected_shorts = self._select_with_retention(shorts, k)
+            selected_longs = self._select_with_retention(longs, k, side="long")
+            selected_shorts = self._select_with_retention(shorts, k, side="short")
 
         if not selected_longs or not selected_shorts:
             result.status = SolverStatus.INFEASIBLE
@@ -243,6 +285,9 @@ class ConstructionEngine:
             tilt = Decimal(str(internal.beta_tilt))
             raw = gross * short_beta / (long_beta + short_beta)
             long_notional = min(max(raw, half * (1 - tilt)), half * (1 + tilt))
+            if internal.enforce_max_abs_net:
+                max_dev = Decimal(str(internal.max_abs_net)) / Decimal(2)
+                long_notional = min(max(long_notional, half - max_dev), half + max_dev)
             short_notional = gross - long_notional
 
         long_unit = (long_notional / Decimal(len(selected_longs))).quantize(
@@ -349,10 +394,25 @@ class ConstructionEngine:
         }
         return result
 
-    def _select_with_retention(self, ranked: Sequence[Candidate], k: int) -> list[Candidate]:
+    def _select_with_retention(
+        self, ranked: Sequence[Candidate], k: int, side: Optional[str] = None
+    ) -> list[Candidate]:
         if k <= 0:
             return []
-        incumbents = [c for c in ranked[: int(k * (1.0 + self._internal.retention_band))] if c.incumbent]
+        zone_size = (
+            int(math.ceil(k * (1.0 + self._internal.retention_band)))
+            if self._internal.ceil_retention_zone
+            else int(k * (1.0 + self._internal.retention_band))
+        )
+
+        def _is_inc(c: Candidate) -> bool:
+            if side == "long" and c.incumbent_long is not None:
+                return c.incumbent_long
+            if side == "short" and c.incumbent_short is not None:
+                return c.incumbent_short
+            return c.incumbent
+
+        incumbents = [c for c in ranked[:zone_size] if _is_inc(c)]
         selected: list[Candidate] = []
         seen: set[str] = set()
         for candidate in incumbents[:k]:

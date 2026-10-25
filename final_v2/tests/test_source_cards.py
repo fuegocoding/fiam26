@@ -25,11 +25,21 @@ def _card(name: str) -> SourceCard:
 
 def test_all_s1_source_cards_validate():
     cards = sorted(CARDS.glob("*.json"))
-    assert len(cards) == 8
+    assert len(cards) == 9
     for path in cards:
         card = _card(path.name)
         assert card.dataset_id.startswith(("CA", "COMP"))
         assert card.owner == "data"
+
+
+def test_competition_dsf_daily_card_and_timesfm_hypothesis_validate():
+    dsf = _card("COMP_dsf_daily.json")
+    assert dsf.formation_eligible is True
+    assert dsf.screen.vintage.status == AssessmentStatus.ESTABLISHED
+    hypo = HypothesisSpec.model_validate(_load(HYPOS / "hyp_s4_timesfm_daily_diffusion_001.json"))
+    assert hypo.owner == "strategy_4"
+    assert hypo.target_id == "twenty_day_residual_return"
+    assert len(hypo.falsification) == 4
 
 
 def test_competition_panel_is_formation_eligible():
