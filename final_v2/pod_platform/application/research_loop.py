@@ -112,7 +112,7 @@ class AutonomousResearchLoop:
     def __init__(self, state_dir, *, providers: RoleProviders, manifest_path, clock=utc_now,
                  run_id='research', on_publication=None, on_cycle=None, max_role_calls=8,
                  max_role_tokens=200000, check_start=dt.date(2019, 1, 1), check_end=dt.date(2019, 6, 30),
-                 publication_dates=None, discovery=None, papers=None):
+                 publication_dates=None, discovery=None, papers=None, scheduler_clock=None):
         self.state_dir = Path(state_dir).resolve()
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.state_dir, 0o700)
@@ -136,12 +136,15 @@ class AutonomousResearchLoop:
         self.publication_dates = tuple(publication_dates or
             ([dt.datetime.fromisoformat(p) for p in prior_profile['publication_dates']] if prior_profile
              else [self.started_at]))
-        if not 1 <= len(self.publication_dates) <= 4 or check_start > check_end:
+        if not 1 <= len(self.publication_dates) <= 12 or check_start > check_end:
             raise ValueError('bounded publication schedule/check window required')
         self.memory_root = self.state_dir / 'memory'
-        self.queue = ResearchQueue(self.state_dir / 'queue.sqlite', clock=clock)
+        # A retrospective operational study has a separate calendar. Provider,
+        # registration and evidence receipt times always retain the real clock.
+        self.scheduler_clock = scheduler_clock or clock
+        self.queue = ResearchQueue(self.state_dir / 'queue.sqlite', clock=self.scheduler_clock)
         self.scheduler = ResearchScheduler(self.state_dir / 'scheduler.sqlite', queue=self.queue,
-            clock=clock, memory_root=self.memory_root)
+            clock=self.scheduler_clock, memory_root=self.memory_root, research_clock=clock if scheduler_clock else None)
         self.executors = ExecutorRegistry()
         self.builtin = register_executors(self.executors, manifest_path=manifest_path,
             state_dir=self.state_dir / 'builtin', clock=clock, research_asof=self.started_at, variant_budget=4)
@@ -152,6 +155,7 @@ class AutonomousResearchLoop:
             'code': tree_sha256(Path(__file__).parents[1]), 'max_role_calls': max_role_calls,
             'max_role_tokens': max_role_tokens, 'check_start': str(check_start), 'check_end': str(check_end),
             'publication_dates': [require_aware(p, 'publication date').isoformat() for p in self.publication_dates]}
+        self.profile['calendar_mode'] = 'separate_study_calendar' if scheduler_clock else 'research_clock'
         self._verify()
         self._event('profile', 'host', 'profile', self.profile)
         self.authority = CheckAuthority.load_or_init(self.state_dir / 'private' / 'check_authority.key')
@@ -250,7 +254,8 @@ class AutonomousResearchLoop:
         rv = AdaptationReview.model_validate(review)
         if rv.namespace != namespace:
             raise ValueError('foreign adaptation review')
-        return self._event('review:' + namespace, namespace, 'review', rv.model_dump(mode='json'))
+        payload = rv.model_dump(mode='json')
+        return self._event('review:' + namespace + ':' + digest(payload), namespace, 'review', payload)
 
     def add_evidence(self, namespace, *, subject, question, paper_cards=(), dataset_cards=(), source_cards=(),
                      kind='source', line_id=None):
@@ -304,20 +309,27 @@ class AutonomousResearchLoop:
                         validator=validate)
                     self._event('critique:' + job.job_id, ns, 'critique', {'draft_entry_id': draft_id,
                         'value': critique.value.model_dump(mode='json'), 'provider': critique.provider, 'model': critique.model})
-                    rv = self._get('review:' + ns)
-                    if critique.value.disposition != 'proceed' or rv is None:
+                    if critique.value.disposition != 'proceed':
                         raise ValueError('review_required')
                     # Lead cannot introduce new methods/data or expand the reviewed one-variant budget.
                     plan = proposal.experiment_plan
-                    expected = {k: rv[k] for k in ('dataset_id','recipe_id','method_id','feature_set','ridge_lambda') if rv.get(k) is not None}
-                    if len(plan.variants) != 1 or plan.variants[0].params != expected or plan.executor_id != EXECUTOR_IDS[pod_spec(ns).charter.value]:
+                    keys = ('dataset_id','recipe_id','method_id','feature_set','ridge_lambda')
+                    reviews = [r for r in self._events('review', ns)
+                        if len(plan.variants) == 1 and plan.variants[0].params == {k:r[k] for k in keys if r.get(k) is not None}]
+                    # The matching paper must actually be in this private draft;
+                    # multiple host reviews never grant an uncited method.
+                    import re
+                    reviews = [r for r in reviews if re.sub(r'[^A-Za-z0-9_.:\-]', '_',
+                        r['paper_id'] + '.' + r['version_key'])[:128] in evidence_ids or r['paper_id'] in evidence_ids]
+                    if len(reviews) != 1 or plan.executor_id != EXECUTOR_IDS[pod_spec(ns).charter.value]:
                         raise ValueError('unknown_method_review_required')
+                    rv = reviews[0]
                     rec = self.adapters[ns].adapt(rv)  # registers hypothesis/spec BEFORE executor data access
                     self._event('adaptation:' + rec['adaptation_id'], ns, 'adaptation', rec)
                     trigger = self.scheduler.add_trigger(ns, 'replication', 'execute:' + rec['adaptation_id'],
                         'Execute the reviewed evidence-grounded adaptation on design only.', SCORES,
                         payload={'draft_entry_id': rec['draft_entry_id'], 'variants': [rec['variant']]},
-                        line_id='line_' + digest(rv['recipe_id'])[:16])
+                        line_id='line_' + digest(rec['adaptation_id'])[:16])
                     route = {'status': 'scheduled', 'adaptation_id': rec['adaptation_id'], 'trigger_id': trigger['trigger_id']}
                 except Exception as exc:
                     route = {'status': 'review_required', 'reason': type(exc).__name__}
@@ -404,8 +416,8 @@ class AutonomousResearchLoop:
     def _semantic_stop(self, ns, aid, category):
         self.diagnose(ns, diagnosis_id=aid, category=category)
         # Rejected semantics must not be retried as an infrastructure failure.
-        self.scheduler.pause(ns, 'semantic stopping rule: reviewed hypothesis rejected', line_id='line_' + digest(
-            self._get('review:' + ns)['recipe_id'])[:16])
+        self.scheduler.pause(ns, 'semantic stopping rule: reviewed hypothesis rejected',
+                             line_id='line_' + digest(aid)[:16])
 
     def _deliver(self, kind, key, payload, callback):
         stored = self._get('receipt:' + key)
@@ -462,7 +474,7 @@ class AutonomousResearchLoop:
                          'budgets': {r: self.budgets[ns,r].snapshot() for r in ('lead','challenger','extractor')}} for ns in selected}}
 
 
-def build_fixture_loop(state_dir, *, on_publication=None, on_cycle=None):
+def build_fixture_loop(state_dir, *, on_publication=None, on_cycle=None, year=None):
     """Planted synthetic worlds, independently measured; no hard-coded admission.
 
     The fundamentals world has an observed noisy leading indicator of a later
@@ -474,9 +486,12 @@ def build_fixture_loop(state_dir, *, on_publication=None, on_cycle=None):
     state = Path(state_dir).resolve()
     data = state / 'fixture_data'
     data.mkdir(parents=True, exist_ok=True)
-    at = dt.datetime(2026, 6, 29, 12, tzinfo=UTC)
+    if year is not None and not 2021 <= year <= 2025:
+        raise ValueError('fixture year must be a complete supported year in 2021..2025')
+    at = dt.datetime(year, 1, 1, tzinfo=UTC) if year else dt.datetime(2026, 6, 29, 12, tzinfo=UTC)
+    approval = (at - dt.timedelta(days=1)).isoformat()
     manifest = {'schema_version': 'dataset_manifest.v1', 'manifest_id': 'runtime_planted_v1',
-                'approved_by': 'fixture_generator', 'approved_at': '2026-06-28T00:00:00Z', 'datasets': {}}
+                'approved_by': 'fixture_generator', 'approved_at': approval, 'datasets': {}}
     for spec in POD_SPECS.values():
         dataset_id = 'fixture_' + spec.pod_id
         rows = generate_rows(seed=7, ret_signal=0.0, missing_rate=0.0, last=(2026, 7))
@@ -504,7 +519,7 @@ def build_fixture_loop(state_dir, *, on_publication=None, on_cycle=None):
             write_csv(rows, panel)
         ds = fixture_manifest(panel.name, dataset_id)['datasets'][dataset_id]
         ds['universe_id'] = 'fixture_universe'
-        ds['source_card']['created_at'] = '2026-06-28T00:00:00Z'
+        ds['source_card']['created_at'] = approval
         ds['source_id'] = 'fixture_' + spec.pod_id + '_source'
         ds['source_card']['source_id'] = ds['source_id']
         # Separate synthetic identities; sealed fixture provenance is required.
@@ -547,7 +562,8 @@ def build_fixture_loop(state_dir, *, on_publication=None, on_cycle=None):
     loop = AutonomousResearchLoop(state, providers=providers, manifest_path=manifest_path, clock=lambda: at,
         run_id='fixture_research_v1', on_publication=on_publication, on_cycle=on_cycle,
         check_end=dt.date(2019, 12, 31),
-        publication_dates=(dt.datetime(2026, 7, 1, tzinfo=UTC), dt.datetime(2026, 8, 1, tzinfo=UTC)))
+        publication_dates=tuple(dt.datetime(year,m,1,tzinfo=UTC) for m in range(1,13)) if year else
+            (dt.datetime(2026, 7, 1, tzinfo=UTC), dt.datetime(2026, 8, 1, tzinfo=UTC)))
     text = ('Synthetic leading indicators predict a later fixture target.\n'
             'The mechanism is planted information that is tested against a cheap baseline.\n')
     for spec in POD_SPECS.values():

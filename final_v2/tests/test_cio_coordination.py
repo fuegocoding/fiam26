@@ -517,3 +517,14 @@ def test_shared_broad_source_with_distinct_mechanisms_is_not_duplicate_economics
     # identical economics under different labels and namespaces still collapse to one family
     d1, d2 = intention("p1", family_label="momA"), intention("p2", family_label="momB", prefix="q")
     assert len(coordinator().coordinate(make_inputs([d1, d2])).groups) == 1
+
+
+def test_old_information_is_not_rejuvenated_by_new_publication():
+    from dataclasses import replace
+    from pod_platform.contracts.errors import PodPlatformError
+    inputs=make_inputs((intention("pod_a"),))
+    pod=inputs.intentions[0]
+    forecasts=tuple(replace(f,as_of=T0,information_cutoff=T0-dt.timedelta(days=10)) for f in pod.forecasts)
+    changed=replace(inputs,intentions=(replace(pod,forecasts=forecasts),)+inputs.intentions[1:])
+    with pytest.raises(PodPlatformError,match='STALE_FORECAST'):
+        coordinator().coordinate(changed)

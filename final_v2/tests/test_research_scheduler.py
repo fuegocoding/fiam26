@@ -269,3 +269,15 @@ def test_new_midweek_paper_uses_persisted_trigger_clock(env):
     sched.tick()
     assert len(queue.list(namespace=VAL))==1
     assert queue.list(namespace=VAL)[0].payload['research_asof']==NOW.isoformat()
+
+
+def test_study_calendar_never_backdates_current_model_execution(env):
+    sched,queue,clock,tmp=env
+    actual=NOW+dt.timedelta(days=400)
+    study=ResearchScheduler(tmp/'s.sqlite',queue=queue,clock=clock,memory_root=str(tmp/'mem'),research_clock=lambda:actual)
+    study.add_trigger(VAL,'paper','separate_clock','Compare the available study-date paper.',sc(),payload=cards('public'))
+    study.tick()
+    job=queue.list(namespace=VAL)[0]
+    assert job.created_at==NOW
+    assert job.payload['research_asof']==actual.isoformat()
+    assert job.payload['mode']=='contemporary'

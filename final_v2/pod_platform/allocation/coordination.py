@@ -167,6 +167,7 @@ class PodForecast:
     supersedes: Optional[str] = None
     measurement_ids: tuple[str, ...] = ()  # same economic measurement of the same mechanism: merges
     exposure_ids: tuple[str, ...] = ()  # declared correlated exposure: diagnostic only (covariance handles it)
+    information_cutoff: Optional[dt.datetime] = None  # evidence age is separate from publication/authorization time
 
 
 @dataclass(frozen=True)
@@ -978,7 +979,10 @@ class CIOCoordinator:
                 _fail(ErrorCode.ASOF_VIOLATION, "FUTURE_FORECAST", f.forecast_id)
             if f.as_of < auth[f.pod_id].authorized_from:
                 _fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, "FORECAST_BEFORE_AUTHORIZATION", f.forecast_id)
-            if decision_at >= require_aware(f.expires_at, "expires_at") or decision_at - f.as_of > dt.timedelta(hours=pol.max_forecast_age_hours):
+            information_at = require_aware(f.information_cutoff or f.as_of, 'information_cutoff')
+            if information_at > f.as_of:
+                raise ValueError('forecast information cutoff follows publication')
+            if decision_at >= require_aware(f.expires_at, "expires_at") or decision_at - information_at > dt.timedelta(hours=pol.max_forecast_age_hours):
                 _fail(ErrorCode.FORECAST_EXPIRED, "STALE_FORECAST", f.forecast_id)
         if not live:
             _fail(ErrorCode.INSUFFICIENT_HISTORY, "NO_LIVE_FORECASTS", "no authorized live forecast")

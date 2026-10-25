@@ -6,6 +6,10 @@ reference workflow connects challenge, scoped admission, portfolio replay, accou
 dossiers and freeze evidence. Synthetic certificates authorize test books only. See
 `BUILD_STATUS.md`, `SPEC_COVERAGE.md` and `HANDOFF.md` for verified behavior and remaining evidence.
 
+## One-year trial
+
+[2025 trial results](YEAR_TRIAL_2025.md): full-year synthetic execution passed; live paper research produced proposals, but the real ideas remain unadmitted. See the report for provider failures, registered design follow-ups and remaining automation/data gaps.
+
 ## Complete application
 
 [Source-to-book commands and remaining gates](AUTONOMOUS_PLATFORM.md). The complete offline run uses the actual four-pod scheduler, registered paper adaptations, frozen independent checks, publications, covariance/shared-hedge CIO, fills/NAV and feedback:

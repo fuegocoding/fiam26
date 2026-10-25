@@ -23,6 +23,7 @@ def main(argv=None):
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--dataset-id")
     parser.add_argument("--research-asof")
+    parser.add_argument('--fixture-year', type=int, help='Twelve synthetic monthly decisions in a complete supported year')
     args = parser.parse_args(argv)
     try:
         if not 1 <= args.max_jobs <= 64 or not 1 <= args.max_iterations <= 8:
@@ -30,7 +31,7 @@ def main(argv=None):
         workflow = CompletePlatformWorkflow(args.state_dir, args.output_dir, run_id=args.run_id,
                                             policy_path=args.coordination_policy)
         if args.mode == "demo":
-            result = workflow.run_demo(max_jobs=args.max_jobs, max_iterations=args.max_iterations)
+            result = workflow.run_demo(max_jobs=args.max_jobs, max_iterations=args.max_iterations, year=args.fixture_year)
         else:
             if not all((args.manifest, args.dataset_id, args.research_asof)):
                 raise ValueError("research mode requires --manifest --dataset-id --research-asof")

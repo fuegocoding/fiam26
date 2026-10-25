@@ -86,3 +86,7 @@ to the model provider and never treat descriptive historical output as causal sk
 Completed-stage resume verifies hashes. Interrupted stages retain immutable attempts and
 quarantined incomplete outputs; call/trial charges survive restart. Changed inputs/code require
 a new run identity. Read the failure record before retrying rather than resetting private state.
+
+## 2025 trial follow-up
+
+Read [YEAR_TRIAL_2025.md](YEAR_TRIAL_2025.md) before treating fixture acceptance as live research autonomy. Actual paper ideas stopped at review; the separately executed operator controls had negative net bridge spreads. Current API ledger: 39/40 attempts across all preserved amendments, under `.pod_state/year_trial_2025/live/`. Raw data, keys and full diary remain ignored. The final suite passes 847 tests. The next research work is authentic inputs/controls and reliable paper-to-feature mapping, not loosening admission criteria.

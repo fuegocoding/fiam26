@@ -68,9 +68,9 @@ class CompletePlatformWorkflow:
         return {"status": "research_received", "cycle_digest": digest(cycle),
                 "consumer": "CompletePlatformWorkflow", "next_stage": "coordinated_replay"}
 
-    def run_demo(self, *, max_jobs=16, max_iterations=4):
+    def run_demo(self, *, max_jobs=16, max_iterations=4, year=None):
         from .research_loop import build_fixture_loop
-        self.loop = build_fixture_loop(self.state / "research", on_publication=self._on_publication, on_cycle=self._on_cycle)
+        self.loop = build_fixture_loop(self.state / "research", on_publication=self._on_publication, on_cycle=self._on_cycle, year=year)
         result = self.loop.tick(max_jobs=max_jobs, max_iterations=max_iterations)
         publications = result.get("publications", [])
         # Receipts can already be committed by an earlier process; consume the

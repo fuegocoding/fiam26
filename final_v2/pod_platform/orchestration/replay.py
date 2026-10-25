@@ -1292,8 +1292,9 @@ def default_coordination_inputs(ctx: CoordinationContext, hook: CoordinationHook
         pod_forecasts = tuple(
             PodForecast(
                 f.forecast_id, p, f.security_id, float(f.return_forecast.expected_excess_return), ctx.neutral_uncertainty,
-                f.information_cutoff, f.expires_at, f.forecast_id, decl.get("family_label"), tuple(f.source_family_ids),
-                tuple(decl.get("event_ids", ())), None, tuple(decl.get("measurement_ids", ())), tuple(decl.get("exposure_ids", ())))
+                f.created_at, f.expires_at, f.forecast_id, decl.get("family_label"), tuple(f.source_family_ids),
+                tuple(decl.get("event_ids", ())), None, tuple(decl.get("measurement_ids", ())), tuple(decl.get("exposure_ids", ())),
+                information_cutoff=f.information_cutoff)
             for f in ctx.forecasts if f.strategy_id == p and f.security_id in ctx.rows and f.security_id not in wanted
         )
         intentions.append(PodIntention(p, pod_forecasts, hedge_requests=tuple(requests.get(p, ()))))

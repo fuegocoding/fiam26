@@ -1,6 +1,6 @@
 # Verification — 2026-10-25
 
-The final integrated source-to-book workspace passed **836 tests**, with one sandbox-dependent socket check skipped and three existing NumPy/pandas deprecation warnings (54.21 seconds). This includes the final live-clock restart/default-publication assertion.
+The final integrated source-to-book workspace passed **847 tests**, with one sandbox-dependent socket check skipped and three existing NumPy/pandas deprecation warnings (80.69 seconds). This includes the final live-clock restart/default-publication assertion.
 
 - Actual four-pod paper/evidence -> structured extractor/lead/challenger -> reviewed adaptation -> registration before data access -> executor -> frozen independent check -> scoped publication -> coordinated CIO -> risk -> partial fills -> NAV/dossier -> feedback review is exercised in `test_autonomous_pods.py` and `test_complete_platform.py`.
 - Positive fixtures measure two admissions. Valuation stays shadow after a timing-placebo failure; events fails design evidence sufficiency. No fixture certificate authorizes a competition book.
@@ -26,3 +26,7 @@ python scripts/run_complete_platform.py --state-dir /tmp/complete/state --output
 ```
 
 This laptop uses `local/carbonarc-venv/bin/python` with locally cached pytest/pyarrow via a temporary wrapper. No GPU training or heavy market backtest was started. See [AUTONOMOUS_PLATFORM.md](AUTONOMOUS_PLATFORM.md) for configuration and the explicit remaining operational/evidence gates.
+
+## One-year follow-up
+
+The final suite now passes **847 tests**, with one socket-dependent skip and three existing warnings, in 80.69 seconds. [The 2025 trial report](YEAR_TRIAL_2025.md) and [compact receipts](artifacts/year_trial_2025/summary.json) distinguish 72 calendar ticks, actual public-paper/Groq research, four operator-only design comparisons and 12 synthetic accounted periods. The shared Groq ledger stopped at 39 of 40 allowed attempts, including failures; no budget was reset.

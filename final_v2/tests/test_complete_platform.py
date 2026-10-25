@@ -85,3 +85,15 @@ def test_incompatible_return_horizons_fail_before_allocation(complete,tmp_path):
     replay=ControlledReplay(fixture,tmp_path)
     with pytest.raises(PodPlatformError,match='incompatible return horizons'):
         replay._active_forecasts(dt.datetime(2026,7,1,21,tzinfo=dt.timezone.utc))
+
+
+def test_full_year_fixture_runs_twelve_actual_decisions_and_net_hedges(tmp_path):
+    workflow=CompletePlatformWorkflow(tmp_path/'state',tmp_path/'out')
+    summary=workflow.run_demo(year=2025)
+    assert summary['book']['periods']==12 and summary['publication_count']==24
+    receipts=read(tmp_path/'out','book/coordination_receipts.json')
+    assert len(receipts)==12
+    assert all(len(r['hedge_netting']['original_requests'])==3 and len(r['hedge_netting']['plan']['lines'])==1 for r in receipts)
+    periods=read(tmp_path/'out','book/periods.json')
+    assert periods[0]['period'].startswith('2025-01') and periods[-1]['period'].startswith('2025-12')
+    assert all(p['actual_fill_risk_decision']=='PASS' for p in periods)

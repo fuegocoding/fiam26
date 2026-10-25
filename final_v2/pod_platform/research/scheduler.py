@@ -146,8 +146,9 @@ def latest_matured_cohort(now: dt.datetime, maturity_days: int) -> str:
 
 class ResearchScheduler:
     def __init__(self, path, *, queue: ResearchQueue, clock: Callable[[], dt.datetime] = utc_now,
-                 memory_root: "str | None" = None):
+                 memory_root: "str | None" = None, research_clock=None):
         self.path, self.queue, self._clock, self.memory_root = path, queue, clock, memory_root
+        self.research_clock = research_clock
         with open_sqlite(path) as conn:
             conn.executescript(_SCHEMA)
 
@@ -375,7 +376,8 @@ class ResearchScheduler:
             raise _Reject(f"invalid_evidence: {exc}"[:300]) from None
         if not items:
             return None, None, f"review_only: no executor performs a {kind} check without evidence cards"
-        body = {"question": spec["question"], "research_asof": _iso(starts), "mode": "contemporary", "policy": "release_gated",
+        research_at = self.research_clock() if self.research_clock else starts
+        body = {"question": spec["question"], "research_asof": _iso(research_at), "mode": "contemporary", "policy": "release_gated",
                 "checkpoint_id": None, "executors": list(pol.allowed_executors), "prior_work": [],
                 **{name: payload.get(name) or [] for name, _ in CARD_FIELDS}}
         return "propose", body, ""
