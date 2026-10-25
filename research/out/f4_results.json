@@ -1,0 +1,85 @@
+{
+  "sample": {
+    "rows": 268428,
+    "window": "2021-01 .. 2026-08"
+  },
+  "final_score__1m": {
+    "months": 68,
+    "mean_ic": 0.11988060432663093,
+    "t_stat": 10.19226160507982,
+    "hit_rate": 0.8823529411764706
+  },
+  "final_score__2m": {
+    "months": 67,
+    "mean_ic": 0.13110864820871915,
+    "t_stat": 11.135138884887146,
+    "hit_rate": 0.9253731343283582
+  },
+  "final_score__3m": {
+    "months": 66,
+    "mean_ic": 0.14007315035048956,
+    "t_stat": 12.5394279691125,
+    "hit_rate": 0.9393939393939394
+  },
+  "final_score__6m": {
+    "months": 63,
+    "mean_ic": 0.15317682852746575,
+    "t_stat": 14.80960130500111,
+    "hit_rate": 0.9523809523809523
+  },
+  "final_score_liquid__1m": {
+    "months": 68,
+    "mean_ic": 0.12155148886039573,
+    "t_stat": 9.917878997219967,
+    "hit_rate": 0.8823529411764706
+  },
+  "final_score_liquid__2m": {
+    "months": 67,
+    "mean_ic": 0.13180188616923125,
+    "t_stat": 10.685385417475915,
+    "hit_rate": 0.9104477611940298
+  },
+  "final_score_liquid__3m": {
+    "months": 66,
+    "mean_ic": 0.1404614160869826,
+    "t_stat": 12.07769412479034,
+    "hit_rate": 0.9242424242424242
+  },
+  "final_score_liquid__6m": {
+    "months": 63,
+    "mean_ic": 0.15283484041233095,
+    "t_stat": 13.817204597289884,
+    "hit_rate": 0.9365079365079365
+  },
+  "sleeve_score__1m": {
+    "months": 68,
+    "mean_ic": 0.11752302358156819,
+    "t_stat": 10.235619452361632,
+    "hit_rate": 0.8823529411764706
+  },
+  "sleeve_score__2m": {
+    "months": 67,
+    "mean_ic": 0.1287904159252209,
+    "t_stat": 11.16167744284571,
+    "hit_rate": 0.9253731343283582
+  },
+  "sleeve_score__3m": {
+    "months": 66,
+    "mean_ic": 0.1377077953204141,
+    "t_stat": 12.51821371939844,
+    "hit_rate": 0.9545454545454546
+  },
+  "sleeve_score__6m": {
+    "months": 63,
+    "mean_ic": 0.1508938807144752,
+    "t_stat": 14.829594581975675,
+    "hit_rate": 0.9523809523809523
+  },
+  "final_score__decay_ratio_3m_over_1m": 1.1684388074057528,
+  "final_score_liquid__decay_ratio_3m_over_1m": 1.155571333628873,
+  "paired_ic3_minus_ic1": {
+    "months": 66,
+    "mean_diff": 0.02325098022493662,
+    "t_stat": 2.0976728900657475
+  }
+}
