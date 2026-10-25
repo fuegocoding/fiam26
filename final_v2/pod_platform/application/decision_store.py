@@ -81,46 +81,73 @@ class DecisionStore:
         return sqlite3.connect(str(self.path), timeout=30)
 
     # --------------------------------------------------------------- writes
-    def record(self, event: DecisionEvent, *, security_ids: Sequence[str], run_id: str) -> bool:
+    def record(
+        self, event: DecisionEvent, *, security_ids: Sequence[str], run_id: str
+    ) -> bool:
         """Append one event with explicit security tags. Identical re-record is a no-op."""
-        return self.record_many([(event, tuple(security_ids))], run_id=run_id) == 1
+        return (
+            self.record_many([(event, tuple(security_ids))], run_id=run_id) == 1
+        )
 
-    def record_many(self, items: Iterable[tuple[DecisionEvent, Sequence[str]]], *, run_id: str) -> int:
+    def record_many(
+        self,
+        items: Iterable[tuple[DecisionEvent, Sequence[str]]],
+        *,
+        run_id: str,
+    ) -> int:
         inserted = 0
         conn = self._connect()
         try:
             with conn:
                 for event, securities in items:
                     if not securities:
-                        fail(ErrorCode.SCHEMA_MISMATCH, f"decision event {event.event_id} has no security tag",
-                             "Events are stored with explicit security ids (no substring matching).")
+                        fail(
+                            ErrorCode.SCHEMA_MISMATCH,
+                            f"decision event {event.event_id} has no security tag",
+                            "Events are stored with explicit security ids (no substring matching).",
+                        )
                     sealed = event if event.content_hash else event.sealed()
-                    row = conn.execute("SELECT digest FROM events WHERE run_id = ? AND event_id = ?", (run_id, event.event_id)).fetchone()
+                    row = conn.execute(
+                        "SELECT digest FROM events WHERE run_id = ? AND event_id = ?",
+                        (run_id, event.event_id),
+                    ).fetchone()
                     if row is not None:
                         if row[0] != _event_digest(sealed):
-                            fail(ErrorCode.SCHEMA_MISMATCH, f"decision event {event.event_id} already stored with different content",
-                                 "The decision ledger is append-only.")
+                            fail(
+                                ErrorCode.SCHEMA_MISMATCH,
+                                f"decision event {event.event_id} already stored with different content",
+                                "The decision ledger is append-only.",
+                            )
                         continue
                     conn.execute(
                         "INSERT INTO events (run_id, event_id, effective_market_at, digest, payload_json) VALUES (?,?,?,?,?)",
                         (
                             run_id,
                             event.event_id,
-                            event.effective_market_at.astimezone(UTC).isoformat(),
+                            event.effective_market_at.astimezone(
+                                UTC
+                            ).isoformat(),
                             _event_digest(sealed),
-                            json.dumps(sealed.model_dump(mode="json"), sort_keys=True),
+                            json.dumps(
+                                sealed.model_dump(mode="json"), sort_keys=True
+                            ),
                         ),
                     )
                     conn.executemany(
                         "INSERT OR IGNORE INTO event_securities (run_id, event_id, security_id) VALUES (?,?,?)",
-                        [(run_id, event.event_id, sid) for sid in sorted(set(securities))],
+                        [
+                            (run_id, event.event_id, sid)
+                            for sid in sorted(set(securities))
+                        ],
                     )
                     inserted += 1
         finally:
             conn.close()
         return inserted
 
-    def record_positions(self, run_id: str, rows: Iterable[Mapping[str, Any]]) -> int:
+    def record_positions(
+        self, run_id: str, rows: Iterable[Mapping[str, Any]]
+    ) -> int:
         conn = self._connect()
         count = 0
         try:
@@ -129,7 +156,14 @@ class DecisionStore:
                     conn.execute(
                         "INSERT OR IGNORE INTO positions (run_id, security_id, formation_date, period_end, weight, side)"
                         " VALUES (?,?,?,?,?,?)",
-                        (run_id, row["security_id"], row["formation_date"], row["period_end"], str(row["weight"]), row["side"]),
+                        (
+                            run_id,
+                            row["security_id"],
+                            row["formation_date"],
+                            row["period_end"],
+                            str(row["weight"]),
+                            row["side"],
+                        ),
                     )
                     count += 1
         finally:
@@ -151,7 +185,9 @@ class DecisionStore:
         monthly = {m["period"]: m for m in read_json(run_dir / "monthly.json")}
         by_id = {f.forecast_id: f for f in forecasts}
         held: dict[str, dict[str, dict[str, str]]] = {}
-        with (run_dir / "holdings_by_period.csv").open("r", encoding="utf-8", newline="") as handle:
+        with (run_dir / "holdings_by_period.csv").open(
+            "r", encoding="utf-8", newline=""
+        ) as handle:
             for row in csv.DictReader(handle):
                 held.setdefault(row["period"], {})[row["security_id"]] = row
         position_rows: list[dict[str, Any]] = []
@@ -164,11 +200,22 @@ class DecisionStore:
             holdings = held.get(label, {})
             for sid, row in sorted(holdings.items()):
                 position_rows.append(
-                    {"security_id": sid, "formation_date": label, "period_end": period_end,
-                     "weight": row["post_trade_weight"], "side": row["side"]}
+                    {
+                        "security_id": sid,
+                        "formation_date": label,
+                        "period_end": period_end,
+                        "weight": row["post_trade_weight"],
+                        "side": row["side"],
+                    }
                 )
 
-                def event(event_id: str, action: str, result_id: str, inputs: dict[str, str], authority: str) -> DecisionEvent:
+                def event(
+                    event_id: str,
+                    action: str,
+                    result_id: str,
+                    inputs: dict[str, str],
+                    authority: str,
+                ) -> DecisionEvent:
                     return DecisionEvent(
                         owner="orchestration",
                         created_at=at,
@@ -193,32 +240,86 @@ class DecisionStore:
                     inputs = {f.forecast_id: _event_digest(f)}
                     if cert is not None:
                         inputs[cert.certificate_id] = _event_digest(cert)
-                    items.append((event(f"forecast_{label}_{sid}_{f.strategy_id}", f"admit forecast {fid} for {sid}", fid, inputs,
-                                        f.admission_certificate_id), [sid]))
-                items.append((event(f"target_{label}_{sid}", f"target position in {sid} from {period['target_book_id']}",
-                                    period["target_book_id"], {period["target_book_id"]: period["target_book_digest"]},
-                                    "rule_deterministic_construction_v1"), [sid]))
-                items.append((event(f"review_{label}_{sid}", f"risk review {period['risk_review_id']} for {sid}",
-                                    period["risk_review_id"], {period["risk_review_id"]: period["risk_review_digest"]},
-                                    "risk_policy_in_run_config"), [sid]))
+                    items.append(
+                        (
+                            event(
+                                f"forecast_{label}_{sid}_{f.strategy_id}",
+                                f"admit forecast {fid} for {sid}",
+                                fid,
+                                inputs,
+                                f.admission_certificate_id,
+                            ),
+                            [sid],
+                        )
+                    )
+                items.append(
+                    (
+                        event(
+                            f"target_{label}_{sid}",
+                            f"target position in {sid} from {period['target_book_id']}",
+                            period["target_book_id"],
+                            {
+                                period["target_book_id"]: period[
+                                    "target_book_digest"
+                                ]
+                            },
+                            "rule_deterministic_construction_v1",
+                        ),
+                        [sid],
+                    )
+                )
+                items.append(
+                    (
+                        event(
+                            f"review_{label}_{sid}",
+                            f"risk review {period['risk_review_id']} for {sid}",
+                            period["risk_review_id"],
+                            {
+                                period["risk_review_id"]: period[
+                                    "risk_review_digest"
+                                ]
+                            },
+                            "risk_policy_in_run_config",
+                        ),
+                        [sid],
+                    )
+                )
                 for order in period.get("orders", []):
                     if order["security_id"] == sid:
-                        items.append((event(f"fill_{label}_{order['order_id']}", f"fill order for {sid}", f"fill_{order['order_id']}",
-                                            {order["order_id"]: digest(order)}, "execution_policy_in_run_config"), [sid]))
+                        items.append(
+                            (
+                                event(
+                                    f"fill_{label}_{order['order_id']}",
+                                    f"fill order for {sid}",
+                                    f"fill_{order['order_id']}",
+                                    {order["order_id"]: digest(order)},
+                                    "execution_policy_in_run_config",
+                                ),
+                                [sid],
+                            )
+                        )
         events = self.record_many(items, run_id=run_id)
         positions = self.record_positions(run_id, position_rows)
-        return {"events": events, "positions": positions, "periods": len(periods)}
+        return {
+            "events": events,
+            "positions": positions,
+            "periods": len(periods),
+        }
 
     # -------------------------------------------------------------- reads
     def run_ids(self) -> list[str]:
         conn = self._connect()
         try:
-            rows = conn.execute("SELECT DISTINCT run_id FROM positions UNION SELECT DISTINCT run_id FROM events ORDER BY 1").fetchall()
+            rows = conn.execute(
+                "SELECT DISTINCT run_id FROM positions UNION SELECT DISTINCT run_id FROM events ORDER BY 1"
+            ).fetchall()
         finally:
             conn.close()
         return [r[0] for r in rows]
 
-    def positions_on(self, on: "dt.date | dt.datetime", run_id: str) -> list[dict[str, str]]:
+    def positions_on(
+        self, on: "dt.date | dt.datetime", run_id: str
+    ) -> list[dict[str, str]]:
         day = _as_date(on).isoformat()
         conn = self._connect()
         try:
@@ -230,10 +331,19 @@ class DecisionStore:
         finally:
             conn.close()
         return [
-            {"security_id": r[0], "weight": r[1], "side": r[2], "formation_date": r[3], "period_end": r[4]} for r in rows
+            {
+                "security_id": r[0],
+                "weight": r[1],
+                "side": r[2],
+                "formation_date": r[3],
+                "period_end": r[4],
+            }
+            for r in rows
         ]
 
-    def _events(self, conn: sqlite3.Connection, run_id: str, security_id: str, upto: str) -> list[tuple[str, DecisionEvent, str]]:
+    def _events(
+        self, conn: sqlite3.Connection, run_id: str, security_id: str, upto: str
+    ) -> list[tuple[str, DecisionEvent, str]]:
         rows = conn.execute(
             "SELECT e.event_id, e.effective_market_at, e.digest, e.payload_json FROM events e"
             " JOIN event_securities s ON s.run_id = e.run_id AND s.event_id = e.event_id"
@@ -245,33 +355,47 @@ class DecisionStore:
         for event_id, at, stored_digest, payload in rows:
             event = DecisionEvent.model_validate(json.loads(payload))
             if not event.verify_seal() or event.content_hash != stored_digest:
-                fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"stored decision event {event_id} failed its seal",
-                     "A damaged decision record is never narrated.")
+                fail(
+                    ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                    f"stored decision event {event_id} failed its seal",
+                    "A damaged decision record is never narrated.",
+                )
             out.append((at, event, stored_digest))
         return out
 
-    def explain(self, security_id: str, on: "dt.date | dt.datetime", run_id: Optional[str] = None) -> dict[str, Any]:
+    def explain(
+        self,
+        security_id: str,
+        on: "dt.date | dt.datetime",
+        run_id: Optional[str] = None,
+    ) -> dict[str, Any]:
         """The actual position on ``on`` and the formation decision chain that governed it."""
         day = _as_date(on)
         runs = [run_id] if run_id else self.run_ids()
         if not runs:
-            fail(ErrorCode.SCHEMA_MISMATCH, "the decision store is empty", "An arbitrary position/date must be explainable from stored evidence.")
-        last_error: Optional[str] = None
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "the decision store is empty",
+                "An arbitrary position/date must be explainable from stored evidence.",
+            )
         for rid in runs:
             result = self._explain_run(security_id, day, rid)
             if result is not None:
                 return result
-            last_error = rid
         fail(
             ErrorCode.SCHEMA_MISMATCH,
             f"no stored decision evidence for {security_id} on {day.isoformat()} (searched {', '.join(runs)})",
             "If a position/date cannot be explained from stored records, the run is incomplete.",
         )
 
-    def _explain_run(self, security_id: str, day: dt.date, run_id: str) -> Optional[dict[str, Any]]:
+    def _explain_run(
+        self, security_id: str, day: dt.date, run_id: str
+    ) -> Optional[dict[str, Any]]:
         conn = self._connect()
         try:
-            end_of_day = dt.datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=UTC).isoformat()
+            end_of_day = dt.datetime(
+                day.year, day.month, day.day, 23, 59, 59, tzinfo=UTC
+            ).isoformat()
             held = conn.execute(
                 "SELECT formation_date, period_end, weight, side FROM positions WHERE run_id = ? AND security_id = ?"
                 " AND formation_date <= ? AND ? < period_end ORDER BY formation_date DESC LIMIT 1",
@@ -292,10 +416,14 @@ class DecisionStore:
         governing = held or previous
         if governing is not None:
             governing_date = governing[0]
-            chain = [(at, e, d) for at, e, d in events if at[:10] == governing_date]
+            chain = [
+                (at, e, d) for at, e, d in events if at[:10] == governing_date
+            ]
         else:
             governing_date = events[-1][0][:10]
-            chain = [(at, e, d) for at, e, d in events if at[:10] == governing_date]
+            chain = [
+                (at, e, d) for at, e, d in events if at[:10] == governing_date
+            ]
         chain_events = [e for _at, e, _d in chain]
         earlier = len(events) - len(chain)
         return {
@@ -304,11 +432,24 @@ class DecisionStore:
             "as_of": day.isoformat(),
             "held_on_date": held is not None,
             "position": (
-                {"formation_date": held[0], "period_end": held[1], "weight": held[2], "side": held[3]} if held is not None else None
+                {
+                    "formation_date": held[0],
+                    "period_end": held[1],
+                    "weight": held[2],
+                    "side": held[3],
+                }
+                if held is not None
+                else None
             ),
             "last_held_period": (
-                {"formation_date": previous[0], "period_end": previous[1], "weight": previous[2], "side": previous[3]}
-                if previous is not None else None
+                {
+                    "formation_date": previous[0],
+                    "period_end": previous[1],
+                    "weight": previous[2],
+                    "side": previous[3],
+                }
+                if previous is not None
+                else None
             ),
             "governing_formation_date": governing_date,
             "decision_events": [
@@ -325,10 +466,37 @@ class DecisionStore:
                 }
                 for _at, e, d in chain
             ],
-            "forecast_ids": sorted({e.resulting_artifact_id for e in chain_events if e.event_id.startswith("forecast_")}),
-            "risk_review_ids": sorted({e.resulting_artifact_id for e in chain_events if e.event_id.startswith("review_")}),
-            "order_ids": sorted({e.resulting_artifact_id.removeprefix("fill_") for e in chain_events if e.event_id.startswith("fill_")}),
-            "target_book_ids": sorted({e.resulting_artifact_id for e in chain_events if e.event_id.startswith("target_")}),
+            "forecast_ids": sorted(
+                {
+                    e.resulting_artifact_id
+                    for e in chain_events
+                    if e.event_id.startswith("forecast_")
+                }
+            ),
+            "risk_review_ids": sorted(
+                {
+                    e.resulting_artifact_id
+                    for e in chain_events
+                    if e.event_id.startswith("review_")
+                }
+            ),
+            "order_ids": sorted(
+                {
+                    e.resulting_artifact_id.removeprefix("fill_")
+                    for e in chain_events
+                    if e.event_id.startswith("fill_")
+                }
+            ),
+            "target_book_ids": sorted(
+                {
+                    e.resulting_artifact_id
+                    for e in chain_events
+                    if e.event_id.startswith("target_")
+                }
+            ),
             "earlier_decision_events": earlier,
-            "provenance": {"events_digest": digest([d for _at, _e, d in chain]), "store": "decision_store.sqlite"},
+            "provenance": {
+                "events_digest": digest([d for _at, _e, d in chain]),
+                "store": "decision_store.sqlite",
+            },
         }

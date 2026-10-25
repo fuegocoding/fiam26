@@ -10,7 +10,9 @@ from torch import nn
 class OwnStock(nn.Module):
     """Predicts return, EPS-surprise and risk labels from a stock's tokens."""
 
-    def __init__(self, features: int, width: int = 32, dropout: float = 0.1) -> None:
+    def __init__(
+        self, features: int, width: int = 32, dropout: float = 0.1
+    ) -> None:
         """Initializes the encoder and the three-task head.
 
         Args:

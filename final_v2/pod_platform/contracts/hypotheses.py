@@ -37,7 +37,9 @@ class HypothesisSpec(DurableModel):
     def _check_no_duplicate_specs(self) -> "HypothesisSpec":
         if len(set(self.feature_spec_ids)) != len(self.feature_spec_ids):
             raise ValueError("feature_spec_ids must be unique")
-        if len(set(self.baseline_experiment_ids)) != len(self.baseline_experiment_ids):
+        if len(set(self.baseline_experiment_ids)) != len(
+            self.baseline_experiment_ids
+        ):
             raise ValueError("baseline_experiment_ids must be unique")
         return self
 

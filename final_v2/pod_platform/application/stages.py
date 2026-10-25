@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import shutil
+
+from .common import tree_sha256
+
 try:
     import fcntl
 except ImportError:
@@ -57,20 +59,31 @@ class StageRunner:
         stamp = self._clock()
         if stamp.tzinfo is None or stamp.utcoffset() is None:
             raise ValueError("stage clock must be timezone-aware")
-        line = {"at": stamp.astimezone(dt.timezone.utc).isoformat(), "run_id": self.run_id, **entry}
+        line = {
+            "at": stamp.astimezone(dt.timezone.utc).isoformat(),
+            "run_id": self.run_id,
+            **entry,
+        }
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(canonical_json(line) + "\n")
 
     def records(self) -> list[dict[str, Any]]:
         if not self.log_path.is_file():
             return []
-        return [json.loads(line) for line in self.log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return [
+            json.loads(line)
+            for line in self.log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
     def completed(self) -> list[str]:
         """Stage names with a checkpoint on disk, in log order."""
         names: list[str] = []
         for record in self.records():
-            if record.get("status") in ("completed", "resumed") and record["stage"] not in names:
+            if (
+                record.get("status") in ("completed", "resumed")
+                and record["stage"] not in names
+            ):
                 names.append(record["stage"])
         return names
 
@@ -93,25 +106,46 @@ class StageRunner:
         """
         safe_id(name, "stage name")
         sources = dict(sorted((source_hashes or {}).items()))
-        input_hash = digest({"stage": name, "inputs": dict(inputs), "sources": sources})
+        input_hash = digest(
+            {"stage": name, "inputs": dict(inputs), "sources": sources}
+        )
         # Bind even an interrupted first attempt: changed inputs cannot reuse a run.
         binding_dir = self.dir / "bindings"
         binding_dir.mkdir(exist_ok=True)
         binding = binding_dir / f"{name}.json"
         if binding.exists() and read_json(binding)["input_hash"] != input_hash:
-            fail(ErrorCode.SCHEMA_MISMATCH, f"stage {name!r}: inputs/source hashes changed after an attempted run",
-                 "Use a new run id for changed inputs, including after interruption.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"stage {name!r}: inputs/source hashes changed after an attempted run",
+                "Use a new run id for changed inputs, including after interruption.",
+            )
         if not binding.exists():
-            atomic_write_json(binding, {"input_hash": input_hash, "owned_outputs": list(owned_outputs)})
+            atomic_write_json(
+                binding,
+                {
+                    "input_hash": input_hash,
+                    "owned_outputs": list(owned_outputs),
+                },
+            )
         elif read_json(binding).get("owned_outputs", []) != list(owned_outputs):
-            fail(ErrorCode.SCHEMA_MISMATCH, "stage output ownership changed", "Use a new run id.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "stage output ownership changed",
+                "Use a new run id.",
+            )
         checkpoint = self.checkpoint_dir / f"{name}.json"
         if checkpoint.is_file():
             stored = read_json(checkpoint)
             if stored.get("input_hash") != input_hash:
-                self._log({"stage": name, "status": "failed", "input_hash": input_hash,
-                           "error_code": ErrorCode.SCHEMA_MISMATCH.value,
-                           "error": "stage inputs or source hashes changed since the checkpoint"})
+                self._log(
+                    {
+                        "stage": name,
+                        "status": "failed",
+                        "input_hash": input_hash,
+                        "error_code": ErrorCode.SCHEMA_MISMATCH.value,
+                        "error": "stage inputs or source hashes changed since the checkpoint",
+                    }
+                )
                 fail(
                     ErrorCode.SCHEMA_MISMATCH,
                     f"stage {name!r}: inputs/source hashes differ from the stored checkpoint of run {self.run_id}",
@@ -119,17 +153,30 @@ class StageRunner:
                 )
             output = stored.get("output")
             if digest(output) != stored.get("output_hash"):
-                self._log({"stage": name, "status": "failed", "input_hash": input_hash,
-                           "error_code": ErrorCode.ACCOUNTING_RECONCILIATION_FAILED.value,
-                           "error": "checkpoint output failed its hash"})
+                self._log(
+                    {
+                        "stage": name,
+                        "status": "failed",
+                        "input_hash": input_hash,
+                        "error_code": ErrorCode.ACCOUNTING_RECONCILIATION_FAILED.value,
+                        "error": "checkpoint output failed its hash",
+                    }
+                )
                 fail(
                     ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
                     f"stage {name!r}: stored checkpoint output failed its content hash",
                     "A damaged checkpoint is not trusted; start a new run id.",
                 )
             self._verify_artifacts(name, output, artifacts_root)
-            self._log({"stage": name, "status": "resumed", "input_hash": input_hash,
-                       "output_hash": stored["output_hash"], "source_hashes": sources})
+            self._log(
+                {
+                    "stage": name,
+                    "status": "resumed",
+                    "input_hash": input_hash,
+                    "output_hash": stored["output_hash"],
+                    "source_hashes": sources,
+                }
+            )
             return output
         attempt_dir = self.dir / "attempts" / name
         attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -145,39 +192,103 @@ class StageRunner:
                     raise BlockingIOError(str(_exc)) from _exc
         except BlockingIOError:
             lock.close()
-            fail(ErrorCode.SCHEMA_MISMATCH, "stage already has an active attempt", "Concurrent retries are denied.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "stage already has an active attempt",
+                "Concurrent retries are denied.",
+            )
         if checkpoint.exists():
             lock.close()
-            return self.run(name, fn, inputs=inputs, source_hashes=source_hashes,
-                            artifacts_root=artifacts_root, owned_outputs=owned_outputs)
+            return self.run(
+                name,
+                fn,
+                inputs=inputs,
+                source_hashes=source_hashes,
+                artifacts_root=artifacts_root,
+                owned_outputs=owned_outputs,
+            )
         try:
-            attempts = sorted(p for p in attempt_dir.glob("attempt_*") if p.is_dir())
-            attempt_id = f"attempt_{len(attempts)+1:06d}"
+            attempts = sorted(
+                p for p in attempt_dir.glob("attempt_*") if p.is_dir()
+            )
+            attempt_id = f"attempt_{len(attempts) + 1:06d}"
             current = attempt_dir / attempt_id
             current.mkdir()
-            atomic_write_json(current / "started.json", {"stage": name, "attempt_id": attempt_id,
-                "input_hash": input_hash, "source_hashes": sources, "owned_outputs": list(owned_outputs)})
+            atomic_write_json(
+                current / "started.json",
+                {
+                    "stage": name,
+                    "attempt_id": attempt_id,
+                    "input_hash": input_hash,
+                    "source_hashes": sources,
+                    "owned_outputs": list(owned_outputs),
+                },
+            )
             if attempts:
                 for previous in attempts:
                     if not (previous / "terminal.json").exists():
-                        atomic_write_json(previous / "terminal.json", {"status": "interrupted", "recovered_by": attempt_id})
-                        self._log({"stage": name, "status": "interrupted", "attempt_id": previous.name, "recovered_by": attempt_id})
+                        atomic_write_json(
+                            previous / "terminal.json",
+                            {
+                                "status": "interrupted",
+                                "recovered_by": attempt_id,
+                            },
+                        )
+                        self._log(
+                            {
+                                "stage": name,
+                                "status": "interrupted",
+                                "attempt_id": previous.name,
+                                "recovered_by": attempt_id,
+                            }
+                        )
                 self._quarantine(name, current, artifacts_root, owned_outputs)
-            self._log({"stage": name, "status": "started", "attempt_id": attempt_id, "input_hash": input_hash, "source_hashes": sources})
+            self._log(
+                {
+                    "stage": name,
+                    "status": "started",
+                    "attempt_id": attempt_id,
+                    "input_hash": input_hash,
+                    "source_hashes": sources,
+                }
+            )
             try:
                 raw = fn()
                 output = json.loads(canonical_json(dict(raw)))
             except PodPlatformError as exc:
-                atomic_write_json(current / "terminal.json", {"status": "failed", "error": exc.response.summary[:500]})
+                atomic_write_json(
+                    current / "terminal.json",
+                    {"status": "failed", "error": exc.response.summary[:500]},
+                )
                 lock.close()
-                self._log({"stage": name, "status": "failed", "input_hash": input_hash,
-                           "error_code": exc.response.error.code.value, "error": exc.response.summary[:500]})
+                self._log(
+                    {
+                        "stage": name,
+                        "status": "failed",
+                        "input_hash": input_hash,
+                        "error_code": exc.response.error.code.value,
+                        "error": exc.response.summary[:500],
+                    }
+                )
                 raise
             except BaseException as exc:
-                atomic_write_json(current / "terminal.json", {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:400]}"})
+                atomic_write_json(
+                    current / "terminal.json",
+                    {
+                        "status": "failed",
+                        "error": f"{type(exc).__name__}: {str(exc)[:400]}",
+                    },
+                )
                 lock.close()
-                self._log({"stage": name, "status": "failed", "input_hash": input_hash,
-                           "error_code": "UNTYPED_EXCEPTION", "error": f"{type(exc).__name__}: {str(exc)[:400]}"})
+                self._log(
+                    {
+                        "stage": name,
+                        "status": "failed",
+                        "input_hash": input_hash,
+                        "error_code": "UNTYPED_EXCEPTION",
+                        "error": f"{type(exc).__name__}: {str(exc)[:400]}",
+                    }
+                )
                 raise
             output_hash = digest(output)
             atomic_write_json(
@@ -189,13 +300,26 @@ class StageRunner:
                     "source_hashes": sources,
                     "output": output,
                     "output_hash": output_hash,
-                    "completed_at": self._clock().astimezone(dt.timezone.utc).isoformat(),
+                    "completed_at": self._clock()
+                    .astimezone(dt.timezone.utc)
+                    .isoformat(),
                 },
             )
-            atomic_write_json(current / "terminal.json", {"status": "completed", "output_hash": output_hash})
+            atomic_write_json(
+                current / "terminal.json",
+                {"status": "completed", "output_hash": output_hash},
+            )
             lock.close()
-            self._log({"stage": name, "status": "completed", "attempt_id": attempt_id, "input_hash": input_hash,
-                       "output_hash": output_hash, "source_hashes": sources})
+            self._log(
+                {
+                    "stage": name,
+                    "status": "completed",
+                    "attempt_id": attempt_id,
+                    "input_hash": input_hash,
+                    "output_hash": output_hash,
+                    "source_hashes": sources,
+                }
+            )
             return output
         finally:
             lock.close()
@@ -214,22 +338,44 @@ class StageRunner:
         plan = []
         for rel in owned_outputs:
             target = root / rel
-            if not target.resolve().is_relative_to(root) or Path(rel).is_absolute() or ".." in Path(rel).parts:
+            if (
+                not target.resolve().is_relative_to(root)
+                or Path(rel).is_absolute()
+                or ".." in Path(rel).parts
+            ):
                 raise ValueError("stage output escapes declared root")
-            if any(p == rel or p.startswith(rel.rstrip("/")+"/") for p in protected):
-                raise ValueError("cannot quarantine evidence committed by a completed stage")
+            if any(
+                p == rel or p.startswith(rel.rstrip("/") + "/")
+                for p in protected
+            ):
+                raise ValueError(
+                    "cannot quarantine evidence committed by a completed stage"
+                )
             if target.exists():
-                from .common import tree_sha256
-                plan.append({"relative_path": rel, "sha256": tree_sha256(target)})
-        atomic_write_json(attempt / "quarantine_manifest.json", {"stage": name, "outputs": plan})
+                plan.append(
+                    {"relative_path": rel, "sha256": tree_sha256(target)}
+                )
+        atomic_write_json(
+            attempt / "quarantine_manifest.json",
+            {"stage": name, "outputs": plan},
+        )
         for item in plan:
             source = root / item["relative_path"]
             destination = attempt / "quarantine" / item["relative_path"]
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(destination))
-        self._log({"stage": name, "status": "quarantined", "attempt_id": attempt.name, "outputs": plan})
+        self._log(
+            {
+                "stage": name,
+                "status": "quarantined",
+                "attempt_id": attempt.name,
+                "outputs": plan,
+            }
+        )
 
-    def _verify_artifacts(self, name: str, output: Any, artifacts_root: Optional["str | Path"]) -> None:
+    def _verify_artifacts(
+        self, name: str, output: Any, artifacts_root: Optional["str | Path"]
+    ) -> None:
         if artifacts_root is None or not isinstance(output, dict):
             return
         artifacts = output.get("artifacts")
@@ -239,8 +385,14 @@ class StageRunner:
         for rel, expected in sorted(artifacts.items()):
             target = root / rel
             if not target.is_file() or file_sha256(target) != expected:
-                self._log({"stage": name, "status": "failed", "error_code": ErrorCode.ACCOUNTING_RECONCILIATION_FAILED.value,
-                           "error": f"artifact {rel} missing or altered since the checkpoint"})
+                self._log(
+                    {
+                        "stage": name,
+                        "status": "failed",
+                        "error_code": ErrorCode.ACCOUNTING_RECONCILIATION_FAILED.value,
+                        "error": f"artifact {rel} missing or altered since the checkpoint",
+                    }
+                )
                 fail(
                     ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
                     f"stage {name!r}: artifact {rel} is missing or no longer matches its checkpoint hash",

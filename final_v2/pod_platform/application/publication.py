@@ -26,6 +26,7 @@ from pydantic import Field
 from ..contracts.base import DurableModel, require_aware
 from ..contracts.errors import ErrorCode
 from ..contracts.forecasts import RETURN_UNIT, Forecast
+from ..research.certificates import CertificatePolicy, validate_certificate
 from ..research.promotion import AdmissionCertificate
 from ..research.registry import Registry
 from .common import (
@@ -52,8 +53,14 @@ def certificate_scope(certificate: AdmissionCertificate) -> str:
     """
     explicit = getattr(certificate, "scope", None)
     if explicit is not None and hasattr(explicit, "environment"):
-        environment = getattr(explicit.environment, "value", explicit.environment)
-        return {"test": SCOPE_FIXTURE, "shadow": SCOPE_RESEARCH, "formation": SCOPE_FORMATION}.get(environment, SCOPE_RESEARCH)
+        environment = getattr(
+            explicit.environment, "value", explicit.environment
+        )
+        return {
+            "test": SCOPE_FIXTURE,
+            "shadow": SCOPE_RESEARCH,
+            "formation": SCOPE_FORMATION,
+        }.get(environment, SCOPE_RESEARCH)
     if isinstance(explicit, enum.Enum):
         explicit = explicit.value
     if isinstance(explicit, str) and explicit:
@@ -64,7 +71,10 @@ def certificate_scope(certificate: AdmissionCertificate) -> str:
             return SCOPE_FORMATION
         return SCOPE_RESEARCH
     mode = str(certificate.approved_mode).lower()
-    if mode.startswith(FIXTURE_MODE_PREFIX) or FIXTURE_LIMITATION in certificate.known_limitations:
+    if (
+        mode.startswith(FIXTURE_MODE_PREFIX)
+        or FIXTURE_LIMITATION in certificate.known_limitations
+    ):
         return SCOPE_FIXTURE
     if mode.startswith(FORMATION_MODE_PREFIX):
         return SCOPE_FORMATION
@@ -160,12 +170,16 @@ class PublicationStore:
     def has_batch(self, batch_id: str) -> Optional[str]:
         conn = self._connect()
         try:
-            row = conn.execute("SELECT digest FROM batches WHERE batch_id = ?", (batch_id,)).fetchone()
+            row = conn.execute(
+                "SELECT digest FROM batches WHERE batch_id = ?", (batch_id,)
+            ).fetchone()
         finally:
             conn.close()
         return row[0] if row else None
 
-    def insert_batch(self, batch: ForecastBatch, forecasts: Sequence[Forecast]) -> None:
+    def insert_batch(
+        self, batch: ForecastBatch, forecasts: Sequence[Forecast]
+    ) -> None:
         conn = self._connect()
         try:
             with conn:
@@ -180,7 +194,9 @@ class PublicationStore:
                         batch.scope,
                         _ts(batch.published_at),
                         batch.content_hash or batch.digest(),
-                        json.dumps(batch.model_dump(mode="json"), sort_keys=True),
+                        json.dumps(
+                            batch.model_dump(mode="json"), sort_keys=True
+                        ),
                     ),
                 )
                 conn.executemany(
@@ -199,7 +215,9 @@ class PublicationStore:
                             _ts(f.created_at),
                             _ts(f.expires_at),
                             f.content_hash or f.digest(),
-                            json.dumps(f.model_dump(mode="json"), sort_keys=True),
+                            json.dumps(
+                                f.model_dump(mode="json"), sort_keys=True
+                            ),
                         )
                         for f in forecasts
                     ],
@@ -207,7 +225,9 @@ class PublicationStore:
         finally:
             conn.close()
 
-    def fetch(self, namespaces: Optional[Sequence[str]] = None) -> list[tuple[str, str, Forecast]]:
+    def fetch(
+        self, namespaces: Optional[Sequence[str]] = None
+    ) -> list[tuple[str, str, Forecast]]:
         """Return (namespace, batch_id, Forecast) rows, verified against their stored digests."""
         sql = "SELECT namespace, batch_id, digest, payload_json FROM forecasts"
         args: list[Any] = []
@@ -225,13 +245,21 @@ class PublicationStore:
         out: list[tuple[str, str, Forecast]] = []
         for namespace, batch_id, stored_digest, payload in rows:
             forecast = Forecast.model_validate(json.loads(payload))
-            if not forecast.verify_seal() or forecast.content_hash != stored_digest:
-                fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"published forecast {forecast.forecast_id} failed its seal",
-                     "A damaged published forecast is never returned.")
+            if (
+                not forecast.verify_seal()
+                or forecast.content_hash != stored_digest
+            ):
+                fail(
+                    ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                    f"published forecast {forecast.forecast_id} failed its seal",
+                    "A damaged published forecast is never returned.",
+                )
             out.append((namespace, batch_id, forecast))
         return out
 
-    def batches(self, namespaces: Optional[Sequence[str]] = None) -> list[dict[str, Any]]:
+    def batches(
+        self, namespaces: Optional[Sequence[str]] = None
+    ) -> list[dict[str, Any]]:
         sql = "SELECT payload_json FROM batches"
         args: list[Any] = []
         if namespaces is not None:
@@ -296,40 +324,81 @@ class PublicationService:
         published_at = require_aware(published_at, "published_at")
         self.gateway.authorize(ctx, "publication.publish", model.namespace)
         if not forecasts:
-            fail(ErrorCode.SCHEMA_MISMATCH, "an empty forecast batch cannot be published", "Publish at least one forecast.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "an empty forecast batch cannot be published",
+                "Publish at least one forecast.",
+            )
         if not certificate.verify_seal():
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, f"certificate {certificate.certificate_id} is unsealed or its seal fails",
-                 "Allocation refuses forecasts without a valid certificate (spec 14.3).")
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"certificate {certificate.certificate_id} is unsealed or its seal fails",
+                "Allocation refuses forecasts without a valid certificate (spec 14.3).",
+            )
         scope = certificate_scope(certificate)
         if scope == SCOPE_FIXTURE and self.store_scope == SCOPE_FORMATION:
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID,
-                 f"certificate {certificate.certificate_id} is fixture-scoped and cannot enter a formation store",
-                 "Fixture certificates never authorize a competition book (spec 27.4).")
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"certificate {certificate.certificate_id} is fixture-scoped and cannot enter a formation store",
+                "Fixture certificates never authorize a competition book (spec 27.4).",
+            )
         if scope != SCOPE_FORMATION and self.store_scope == SCOPE_FORMATION:
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID,
-                 f"certificate {certificate.certificate_id} has scope {scope!r}, not formation",
-                 "A formation store accepts only formation-scoped certificates.")
-        if certificate.model_id != model.model_id or certificate.model_hash != model.model_hash:
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, f"certificate {certificate.certificate_id} does not cover model {model.model_id}",
-                 "Certificate model id and hash must match the forecasting model.")
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"certificate {certificate.certificate_id} has scope {scope!r}, not formation",
+                "A formation store accepts only formation-scoped certificates.",
+            )
+        if (
+            certificate.model_id != model.model_id
+            or certificate.model_hash != model.model_hash
+        ):
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"certificate {certificate.certificate_id} does not cover model {model.model_id}",
+                "Certificate model id and hash must match the forecasting model.",
+            )
         if certificate.horizon_trading_days != integration_horizon_days:
-            fail(ErrorCode.SCHEMA_MISMATCH,
-                 f"certificate horizon {certificate.horizon_trading_days}d differs from the integration horizon {integration_horizon_days}d",
-                 "Forecasts with unresolved horizon conversion are excluded from allocation (spec 15.4).")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"certificate horizon {certificate.horizon_trading_days}d differs from the integration horizon {integration_horizon_days}d",
+                "Forecasts with unresolved horizon conversion are excluded from allocation (spec 15.4).",
+            )
         seen: set[str] = set()
         for f in forecasts:
             if f.forecast_id in seen:
-                fail(ErrorCode.SCHEMA_MISMATCH, f"duplicate forecast id {f.forecast_id} in the batch", "Forecast ids are unique.")
+                fail(
+                    ErrorCode.SCHEMA_MISMATCH,
+                    f"duplicate forecast id {f.forecast_id} in the batch",
+                    "Forecast ids are unique.",
+                )
             seen.add(f.forecast_id)
-            self._validate_forecast(f, certificate, model, published_at, artifact_exists, integration_horizon_days)
-            from ..research.certificates import validate_certificate, CertificatePolicy
-            validate_certificate(f, certificate, decision_at=f.earliest_formation_at,
-                source_snapshots=source_snapshots, universe=certificate.approved_universe, namespace=model.namespace,
-                policy=CertificatePolicy.production() if self.store_scope == SCOPE_FORMATION else CertificatePolicy.test())
+            self._validate_forecast(
+                f,
+                certificate,
+                model,
+                published_at,
+                artifact_exists,
+                integration_horizon_days,
+            )
+            validate_certificate(
+                f,
+                certificate,
+                decision_at=f.earliest_formation_at,
+                source_snapshots=source_snapshots,
+                universe=certificate.approved_universe,
+                namespace=model.namespace,
+                policy=CertificatePolicy.production()
+                if self.store_scope == SCOPE_FORMATION
+                else CertificatePolicy.test(),
+            )
         sealed = [f if f.content_hash else f.sealed() for f in forecasts]
         for f in sealed:
             if not f.verify_seal():
-                fail(ErrorCode.SCHEMA_MISMATCH, f"forecast {f.forecast_id} seal does not verify", "Forecasts are sealed before publication.")
+                fail(
+                    ErrorCode.SCHEMA_MISMATCH,
+                    f"forecast {f.forecast_id} seal does not verify",
+                    "Forecasts are sealed before publication.",
+                )
         info_cutoffs = {f.information_cutoff for f in sealed}
         newest = max(info_cutoffs)
         forecast_digest = digest(sorted(f.content_hash for f in sealed))
@@ -352,8 +421,11 @@ class PublicationService:
         if existing is not None:
             if existing == batch.content_hash:
                 return batch  # idempotent re-publication of the identical batch
-            fail(ErrorCode.SCHEMA_MISMATCH, f"batch {batch_id} already published with different content",
-                 "Published batches are immutable.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"batch {batch_id} already published with different content",
+                "Published batches are immutable.",
+            )
         self._register(model, certificate, batch)
         self.store.insert_batch(batch, sealed)
         return batch
@@ -368,53 +440,98 @@ class PublicationService:
         horizon: int,
     ) -> None:
         if f.model_id != model.model_id or f.strategy_id != model.candidate_id:
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, f"forecast {f.forecast_id} does not belong to model {model.model_id}",
-                 "A strategy publishes only forecasts of its own admitted model.")
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"forecast {f.forecast_id} does not belong to model {model.model_id}",
+                "A strategy publishes only forecasts of its own admitted model.",
+            )
         if f.admission_certificate_id != certificate.certificate_id:
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID,
-                 f"forecast {f.forecast_id} cites certificate {f.admission_certificate_id}, not {certificate.certificate_id}",
-                 "Every forecast must cite the certificate that authorizes it.")
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"forecast {f.forecast_id} cites certificate {f.admission_certificate_id}, not {certificate.certificate_id}",
+                "Every forecast must cite the certificate that authorizes it.",
+            )
         if certificate.target_id != f.target.target_id:
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID,
-                 f"forecast {f.forecast_id} target {f.target.target_id!r} is outside certificate target {certificate.target_id!r}",
-                 "Certificate target must match the published forecast.")
-        if f.return_forecast.horizon_trading_days != horizon or f.return_forecast.unit != RETURN_UNIT:
-            fail(ErrorCode.SCHEMA_MISMATCH,
-                 f"forecast {f.forecast_id} horizon/unit does not match the integration policy ({horizon}d {RETURN_UNIT})",
-                 "Units and horizon must match the registered integration policy.")
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"forecast {f.forecast_id} target {f.target.target_id!r} is outside certificate target {certificate.target_id!r}",
+                "Certificate target must match the published forecast.",
+            )
+        if (
+            f.return_forecast.horizon_trading_days != horizon
+            or f.return_forecast.unit != RETURN_UNIT
+        ):
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"forecast {f.forecast_id} horizon/unit does not match the integration policy ({horizon}d {RETURN_UNIT})",
+                "Units and horizon must match the registered integration policy.",
+            )
         if not certificate.is_valid_at(f.earliest_formation_at):
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID,
-                 f"certificate {certificate.certificate_id} is not yet effective at formation {f.earliest_formation_at.isoformat()}",
-                 "A forecast cannot be formed before its certificate's effective start.")
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"certificate {certificate.certificate_id} is not yet effective at formation {f.earliest_formation_at.isoformat()}",
+                "A forecast cannot be formed before its certificate's effective start.",
+            )
         if certificate.created_at > f.created_at:
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID,
-                 f"certificate {certificate.certificate_id} was issued {certificate.created_at.isoformat()}, after forecast {f.forecast_id}",
-                 "A certificate issued after the forecast cannot authorize it.")
-        if f.created_at < f.information_cutoff or f.earliest_formation_at < f.information_cutoff:
-            fail(ErrorCode.ASOF_VIOLATION, f"forecast {f.forecast_id} predates its own information cutoff",
-                 "Information cutoff precedes publication and formation.")
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"certificate {certificate.certificate_id} was issued {certificate.created_at.isoformat()}, after forecast {f.forecast_id}",
+                "A certificate issued after the forecast cannot authorize it.",
+            )
+        if (
+            f.created_at < f.information_cutoff
+            or f.earliest_formation_at < f.information_cutoff
+        ):
+            fail(
+                ErrorCode.ASOF_VIOLATION,
+                f"forecast {f.forecast_id} predates its own information cutoff",
+                "Information cutoff precedes publication and formation.",
+            )
         if f.created_at > published_at:
-            fail(ErrorCode.ASOF_VIOLATION,
-                 f"forecast {f.forecast_id} is dated {f.created_at.isoformat()}, after publication time {published_at.isoformat()}",
-                 "No future-dated evidence can be published.")
+            fail(
+                ErrorCode.ASOF_VIOLATION,
+                f"forecast {f.forecast_id} is dated {f.created_at.isoformat()}, after publication time {published_at.isoformat()}",
+                "No future-dated evidence can be published.",
+            )
         if f.is_expired(published_at):
-            fail(ErrorCode.FORECAST_EXPIRED,
-                 f"forecast {f.forecast_id} expired at {f.expires_at.isoformat()} before publication at {published_at.isoformat()}",
-                 "Stale forecasts are never published.")
+            fail(
+                ErrorCode.FORECAST_EXPIRED,
+                f"forecast {f.forecast_id} expired at {f.expires_at.isoformat()} before publication at {published_at.isoformat()}",
+                "Stale forecasts are never published.",
+            )
         if not f.evidence_artifact_ids:
-            fail(ErrorCode.SCHEMA_MISMATCH, f"forecast {f.forecast_id} has no evidence artifact", "Evidence artifacts are required.")
-        for artifact in (*f.evidence_artifact_ids, f.return_forecast.uncertainty_artifact_id):
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"forecast {f.forecast_id} has no evidence artifact",
+                "Evidence artifacts are required.",
+            )
+        for artifact in (
+            *f.evidence_artifact_ids,
+            f.return_forecast.uncertainty_artifact_id,
+        ):
             if not artifact_exists(artifact):
-                fail(ErrorCode.SCHEMA_MISMATCH,
-                     f"forecast {f.forecast_id} cites artifact {artifact!r} that does not exist",
-                     "Evidence and uncertainty artifacts must exist (spec 21.6).")
+                fail(
+                    ErrorCode.SCHEMA_MISMATCH,
+                    f"forecast {f.forecast_id} cites artifact {artifact!r} that does not exist",
+                    "Evidence and uncertainty artifacts must exist (spec 21.6).",
+                )
 
-    def _register(self, model: ModelVersionRecord, certificate: AdmissionCertificate, batch: ForecastBatch) -> None:
+    def _register(
+        self,
+        model: ModelVersionRecord,
+        certificate: AdmissionCertificate,
+        batch: ForecastBatch,
+    ) -> None:
         if self.registry is None:
             return
         if self.registry.get("model_versions", model.model_id) is None:
             self.registry.register("model_versions", model)
-        if self.registry.get("admission_certificates", certificate.certificate_id) is None:
+        if (
+            self.registry.get(
+                "admission_certificates", certificate.certificate_id
+            )
+            is None
+        ):
             self.registry.register("admission_certificates", certificate)
         if self.registry.get("forecast_publications", batch.batch_id) is None:
             self.registry.register("forecast_publications", batch)
@@ -428,12 +545,19 @@ class PublicationService:
 
     def export_forecasts(self, ctx: RoleContext) -> list[Forecast]:
         """All published forecasts the caller may see (strategy: own namespace only)."""
-        return [f for _ns, _batch, f in self.store.fetch(self._readable_namespaces(ctx))]
+        return [
+            f
+            for _ns, _batch, f in self.store.fetch(
+                self._readable_namespaces(ctx)
+            )
+        ]
 
     def list_batches(self, ctx: RoleContext) -> list[dict[str, Any]]:
         return self.store.batches(self._readable_namespaces(ctx))
 
-    def active_for_decision(self, ctx: RoleContext, decision_at: dt.datetime) -> ActiveForecasts:
+    def active_for_decision(
+        self, ctx: RoleContext, decision_at: dt.datetime
+    ) -> ActiveForecasts:
         """Forecasts a decision may use: published, formed, unexpired; newest per (security, strategy)."""
         decision_at = require_aware(decision_at, "decision_at")
         result = ActiveForecasts(decision_at=decision_at)
@@ -441,11 +565,17 @@ class PublicationService:
         def note(reason: str, f: Forecast) -> None:
             result.stale_counts[reason] = result.stale_counts.get(reason, 0) + 1
             if len(result.stale_examples) < 20:
-                result.stale_examples.append({"forecast_id": f.forecast_id, "reason": reason})
+                result.stale_examples.append(
+                    {"forecast_id": f.forecast_id, "reason": reason}
+                )
 
         best: dict[tuple[str, str], Forecast] = {}
         for _ns, _batch, f in self.store.fetch(self._readable_namespaces(ctx)):
-            if f.created_at > decision_at or f.information_cutoff > decision_at or f.earliest_formation_at > decision_at:
+            if (
+                f.created_at > decision_at
+                or f.information_cutoff > decision_at
+                or f.earliest_formation_at > decision_at
+            ):
                 note("not_yet_published_or_formed", f)
                 continue
             if f.is_expired(decision_at):
@@ -454,7 +584,11 @@ class PublicationService:
             key = (f.security_id, f.strategy_id)
             rank = (f.information_cutoff, f.created_at, f.forecast_id)
             current = best.get(key)
-            if current is None or rank > (current.information_cutoff, current.created_at, current.forecast_id):
+            if current is None or rank > (
+                current.information_cutoff,
+                current.created_at,
+                current.forecast_id,
+            ):
                 if current is not None:
                     note("superseded", current)
                 best[key] = f

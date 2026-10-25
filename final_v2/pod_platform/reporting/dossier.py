@@ -6,7 +6,7 @@ import csv
 import datetime as dt
 import io
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Sequence
 
 from ..contracts.base import require_aware
 from ..contracts.decisions import DecisionEvent
@@ -79,7 +79,10 @@ class DossierBuilder:
             dossier.decision_events.append(event)
             dossier.evidence_ids.extend(event.input_artifact_ids)
             dossier.evidence_ids.append(event.resulting_artifact_id)
-            if "forecast" in event.chosen_action or "forecast" in event.resulting_artifact_id:
+            if (
+                "forecast" in event.chosen_action
+                or "forecast" in event.resulting_artifact_id
+            ):
                 dossier.forecast_ids.append(event.resulting_artifact_id)
             if "review" in event.resulting_artifact_id:
                 dossier.risk_review_ids.append(event.resulting_artifact_id)
@@ -141,7 +144,9 @@ def holdings_csv(rows: Sequence[HoldingsRow]) -> str:
     return buffer.getvalue()
 
 
-def returns_csv(rows: Sequence[tuple[str, float]], label: str = "period") -> str:
+def returns_csv(
+    rows: Sequence[tuple[str, float]], label: str = "period"
+) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow([label, "net_return"])
@@ -151,7 +156,9 @@ def returns_csv(rows: Sequence[tuple[str, float]], label: str = "period") -> str
 
 
 def verify_deck_numbers(
-    reported: dict[str, float], artifacts: dict[str, float], tolerance: float = 1e-9
+    reported: dict[str, float],
+    artifacts: dict[str, float],
+    tolerance: float = 1e-9,
 ) -> None:
     for key, value in reported.items():
         if key not in artifacts:

@@ -8,14 +8,22 @@ import json
 from decimal import Decimal
 from typing import Any, ClassVar, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 SCHEMA_VERSION = "1.0"
 DIGEST_FIELD = "content_hash"
 
 
 def canonical_digest(payload: dict[str, Any]) -> str:
-    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    blob = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), default=str
+    )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
@@ -68,7 +76,9 @@ class DurableModel(BaseModel):
         return self.model_copy(update={DIGEST_FIELD: self.digest()})
 
     def verify_seal(self) -> bool:
-        return self.content_hash is not None and self.content_hash == self.digest()
+        return (
+            self.content_hash is not None and self.content_hash == self.digest()
+        )
 
 
 class StrictModel(BaseModel):

@@ -1,6 +1,11 @@
 """Reporting exports."""
 
-from .compliance import ActualHolding, ComplianceCheck, ComplianceEngine, ComplianceReport
+from .compliance import (
+    ActualHolding,
+    ComplianceCheck,
+    ComplianceEngine,
+    ComplianceReport,
+)
 from .dossier import (
     DossierBuilder,
     HoldingsRow,

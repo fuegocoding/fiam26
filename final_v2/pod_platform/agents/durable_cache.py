@@ -98,15 +98,25 @@ MIGRATION_STATUS = "legacy_unverified_attested_at_migration"
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
 
 
 def compute_call_hash(key: str, fields_hash: str, call_json: str) -> str:
-    return sha256_text(_canonical({"key": key, "fields_hash": fields_hash, "call_json": call_json}))
+    return sha256_text(
+        _canonical(
+            {"key": key, "fields_hash": fields_hash, "call_json": call_json}
+        )
+    )
 
 
 def compute_entry_hash(
-    key: str, fields_hash: str, created_at: str, namespace: str, call_hash: Optional[str]
+    key: str,
+    fields_hash: str,
+    created_at: str,
+    namespace: str,
+    call_hash: Optional[str],
 ) -> str:
     return sha256_text(
         _canonical(
@@ -159,36 +169,59 @@ class DurableExtractionCache:
     @staticmethod
     def _upgrade_columns(conn: sqlite3.Connection) -> None:
         """Schema-only upgrade of an old file: new nullable columns, no row is rewritten."""
-        present = {row[1] for row in conn.execute("PRAGMA table_info(extraction_cache)")}
+        present = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(extraction_cache)")
+        }
         for column in ("call_hash", "entry_hash"):
             if column not in present:
                 try:
-                    conn.execute(f"ALTER TABLE extraction_cache ADD COLUMN {column} TEXT")
-                except sqlite3.OperationalError as exc:  # another process won the race
+                    conn.execute(
+                        f"ALTER TABLE extraction_cache ADD COLUMN {column} TEXT"
+                    )
+                except (
+                    sqlite3.OperationalError
+                ) as exc:  # another process won the race
                     if "duplicate column" not in str(exc).lower():
                         raise
 
     # ------------------------------------------------------------- reads
     def _row(self, key: str) -> Optional[_Row]:
         with self._connect() as conn:
-            raw = conn.execute(f"SELECT {_COLUMNS} FROM extraction_cache WHERE key = ?", (key,)).fetchone()
+            raw = conn.execute(
+                f"SELECT {_COLUMNS} FROM extraction_cache WHERE key = ?", (key,)
+            ).fetchone()
         return _Row(*raw) if raw else None
 
     def _verify_row(self, row: _Row) -> None:
         short = row.key[:12]
         if sha256_text(row.fields_json) != row.fields_hash:
-            raise CacheCorruptionError(f"cache entry {short} failed its content hash")
+            raise CacheCorruptionError(
+                f"cache entry {short} failed its content hash"
+            )
         if row.legacy:
             return
         if row.call_json is None:
             if row.call_hash is not None:
-                raise CacheCorruptionError(f"cache entry {short} lost its call record")
-        elif row.call_hash != compute_call_hash(row.key, row.fields_hash, row.call_json):
-            raise CacheCorruptionError(f"cache entry {short} failed its call-provenance hash")
-        if row.entry_hash != compute_entry_hash(
-            row.key, row.fields_hash, row.created_at, row.namespace, row.call_hash
+                raise CacheCorruptionError(
+                    f"cache entry {short} lost its call record"
+                )
+        elif row.call_hash != compute_call_hash(
+            row.key, row.fields_hash, row.call_json
         ):
-            raise CacheCorruptionError(f"cache entry {short} failed its entry hash")
+            raise CacheCorruptionError(
+                f"cache entry {short} failed its call-provenance hash"
+            )
+        if row.entry_hash != compute_entry_hash(
+            row.key,
+            row.fields_hash,
+            row.created_at,
+            row.namespace,
+            row.call_hash,
+        ):
+            raise CacheCorruptionError(
+                f"cache entry {short} failed its entry hash"
+            )
 
     def get(self, key: str) -> Optional[ExtractionRecord]:
         row = self._row(key)
@@ -217,15 +250,21 @@ class DurableExtractionCache:
             return PROVENANCE_LEGACY_UNVERIFIED
         check = {k: migration[k] for k in migration if k != "migration_hash"}
         if _migration_hash(check) != migration["migration_hash"]:
-            raise CacheCorruptionError(f"provenance migration for {key[:12]} failed its hash")
+            raise CacheCorruptionError(
+                f"provenance migration for {key[:12]} failed its hash"
+            )
         if (
             migration["observed_call_sha256"] != sha256_text(row.call_json)
             or migration["observed_fields_hash"] != row.fields_hash
         ):
-            raise CacheCorruptionError(f"legacy cache entry {key[:12]} changed after its provenance migration")
+            raise CacheCorruptionError(
+                f"legacy cache entry {key[:12]} changed after its provenance migration"
+            )
         return PROVENANCE_LEGACY_MIGRATED
 
-    def get_call_record(self, key: str, *, allow_unverified: bool = False) -> Optional[CallRecord]:
+    def get_call_record(
+        self, key: str, *, allow_unverified: bool = False
+    ) -> Optional[CallRecord]:
         """The stored call provenance, hash-verified.
 
         A legacy row that was never migrated raises ``LegacyProvenanceError``
@@ -244,7 +283,9 @@ class DurableExtractionCache:
         try:
             return CallRecord.model_validate_json(row.call_json)
         except ValueError as exc:
-            raise CacheCorruptionError(f"cache entry {key[:12]} call record no longer validates: {exc}") from None
+            raise CacheCorruptionError(
+                f"cache entry {key[:12]} call record no longer validates: {exc}"
+            ) from None
 
     def _migration(self, key: str) -> Optional[dict[str, str]]:
         with self._connect() as conn:
@@ -256,7 +297,13 @@ class DurableExtractionCache:
         if raw is None:
             return None
         names = (
-            "key", "status", "observed_fields_hash", "observed_call_sha256", "migrated_at", "operator", "note",
+            "key",
+            "status",
+            "observed_fields_hash",
+            "observed_call_sha256",
+            "migrated_at",
+            "operator",
+            "note",
             "migration_hash",
         )
         return dict(zip(names, raw))
@@ -275,12 +322,27 @@ class DurableExtractionCache:
         fields_json = _canonical(record.fields)
         fields_hash = sha256_text(fields_json)
         call_json = call.model_dump_json() if call else None
-        call_hash = compute_call_hash(key, fields_hash, call_json) if call_json is not None else None
-        entry_hash = compute_entry_hash(key, fields_hash, created, namespace, call_hash)
+        call_hash = (
+            compute_call_hash(key, fields_hash, call_json)
+            if call_json is not None
+            else None
+        )
+        entry_hash = compute_entry_hash(
+            key, fields_hash, created, namespace, call_hash
+        )
         with self._connect() as conn:
             cur = conn.execute(
                 f"INSERT OR IGNORE INTO extraction_cache ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?)",
-                (key, fields_json, fields_hash, created, call_json, namespace, call_hash, entry_hash),
+                (
+                    key,
+                    fields_json,
+                    fields_hash,
+                    created,
+                    call_json,
+                    namespace,
+                    call_hash,
+                    entry_hash,
+                ),
             )
             return cur.rowcount == 1
 
@@ -309,7 +371,10 @@ class DurableExtractionCache:
                 ).fetchall()
                 for raw in rows:
                     row = _Row(*raw)
-                    if conn.execute("SELECT 1 FROM provenance_migrations WHERE key = ?", (row.key,)).fetchone():
+                    if conn.execute(
+                        "SELECT 1 FROM provenance_migrations WHERE key = ?",
+                        (row.key,),
+                    ).fetchone():
                         already += 1
                         continue
                     if sha256_text(row.fields_json) != row.fields_hash:
@@ -319,7 +384,9 @@ class DurableExtractionCache:
                         "key": row.key,
                         "status": MIGRATION_STATUS,
                         "observed_fields_hash": row.fields_hash,
-                        "observed_call_sha256": sha256_text(row.call_json or ""),
+                        "observed_call_sha256": sha256_text(
+                            row.call_json or ""
+                        ),
                         "migrated_at": stamp,
                         "operator": operator.strip(),
                         "note": note.strip(),
@@ -344,7 +411,12 @@ class DurableExtractionCache:
     def verify_all(self) -> dict[str, Any]:
         """Check every row; tamper is reported (not raised) so the whole file can be audited."""
         with self._connect() as conn:
-            keys = [r[0] for r in conn.execute("SELECT key FROM extraction_cache ORDER BY key")]
+            keys = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT key FROM extraction_cache ORDER BY key"
+                )
+            ]
         counts: dict[str, int] = {}
         errors: list[dict[str, str]] = []
         for key in keys:
@@ -358,7 +430,9 @@ class DurableExtractionCache:
 
     def __len__(self) -> int:
         with self._connect() as conn:
-            return conn.execute("SELECT COUNT(*) FROM extraction_cache").fetchone()[0]
+            return conn.execute(
+                "SELECT COUNT(*) FROM extraction_cache"
+            ).fetchone()[0]
 
 
 class _Closing:
@@ -378,14 +452,18 @@ class _Closing:
 class StructuredRun:
     value: BaseModel
     record: ExtractionRecord
-    call: Optional[CallRecord]  # provenance of the call that produced the response
+    call: Optional[
+        CallRecord
+    ]  # provenance of the call that produced the response
     from_cache: bool
     authorization: TemporalAuthorization
     cache_key: str
     provider: str
     model: str
     provider_is_mock: bool
-    call_provenance: str = PROVENANCE_VERIFIED  # see DurableExtractionCache.provenance_status
+    call_provenance: str = (
+        PROVENANCE_VERIFIED  # see DurableExtractionCache.provenance_status
+    )
 
 
 class CachedStructuredExtractor:
@@ -409,7 +487,9 @@ class CachedStructuredExtractor:
         self.budget = budget
         self.registry = registry
         self.clock = clock
-        self.prompt_hash = sha256_text(system_prompt + "\n" + _canonical(schema.model_json_schema()))
+        self.prompt_hash = sha256_text(
+            system_prompt + "\n" + _canonical(schema.model_json_schema())
+        )
 
     def key_for(
         self,
@@ -424,7 +504,9 @@ class CachedStructuredExtractor:
     ) -> str:
         checkpoint_revision = "unregistered"
         if checkpoint_id and self.registry is not None:
-            checkpoint_revision = self.registry.checkpoint(checkpoint_id).checkpoint_revision
+            checkpoint_revision = self.registry.checkpoint(
+                checkpoint_id
+            ).checkpoint_revision
         return cache_key(
             model_id=f"{self.provider.name}:{self.provider.model}",
             checkpoint_revision=checkpoint_revision,
@@ -475,12 +557,16 @@ class CachedStructuredExtractor:
             try:
                 value = self.schema.model_validate(hit.fields)
             except ValueError as exc:
-                raise CacheCorruptionError(f"cached entry {key[:12]} no longer validates: {exc}") from None
+                raise CacheCorruptionError(
+                    f"cached entry {key[:12]} no longer validates: {exc}"
+                ) from None
             if validator is not None:
                 validator(value)
             provenance = self.cache.provenance_status(key)
             call: Optional[CallRecord] = None
-            if provenance != PROVENANCE_LEGACY_UNVERIFIED:  # unattested provenance is not attributed
+            if (
+                provenance != PROVENANCE_LEGACY_UNVERIFIED
+            ):  # unattested provenance is not attributed
                 call = self.cache.get_call_record(key)
             return StructuredRun(
                 value=value,
@@ -494,10 +580,20 @@ class CachedStructuredExtractor:
                 provider_is_mock=bool(getattr(self.provider, "is_mock", False)),
                 call_provenance=provenance,
             )
-        request = LLMRequest(system=self.system_prompt, user=user_text, params=params, role=role,
-            response_schema=self.schema.model_json_schema())
+        request = LLMRequest(
+            system=self.system_prompt,
+            user=user_text,
+            params=params,
+            role=role,
+            response_schema=self.schema.model_json_schema(),
+        )
         result = call_structured(
-            self.provider, request, self.schema, budget=self.budget, clock=self.clock, validator=validator
+            self.provider,
+            request,
+            self.schema,
+            budget=self.budget,
+            clock=self.clock,
+            validator=validator,
         )
         record = ExtractionRecord(
             key=key,

@@ -50,7 +50,9 @@ CASH_KINDS = ("borrow", "funding", "other_fee", "dividend_credit", "other")
 
 
 def _fail(code: ErrorCode, summary: str, stop: str) -> None:
-    raise PodPlatformError(ToolResponse.failure(summary=summary, code=code, stop_condition=stop))
+    raise PodPlatformError(
+        ToolResponse.failure(summary=summary, code=code, stop_condition=stop)
+    )
 
 
 def _dec(value: Any) -> Decimal:
@@ -63,12 +65,18 @@ def _dec(value: Any) -> Decimal:
 class DailyReturn(StrictModel):
     security_id: str = Field(min_length=1)
     on: dt.date
-    total_return: Decimal  # decimal total return for the day (not percent, not bp)
+    total_return: (
+        Decimal  # decimal total return for the day (not percent, not bp)
+    )
 
     @model_validator(mode="after")
     def _check(self) -> "DailyReturn":
-        if not self.total_return.is_finite() or self.total_return <= Decimal("-1"):
-            raise ValueError("a daily total return must be finite and above -100%")
+        if not self.total_return.is_finite() or self.total_return < Decimal(
+            "-1"
+        ):
+            raise ValueError(
+                "a daily total return must be finite and at least -100%"
+            )
         return self
 
 
@@ -91,14 +99,22 @@ class DailyFill(StrictModel):
     on: dt.date
     quantity: Decimal
     price: Decimal
-    fee_usd: Decimal = ZERO  # explicit modeled cost (spread, impact, fees) in USD, >= 0
+    fee_usd: Decimal = (
+        ZERO  # explicit modeled cost (spread, impact, fees) in USD, >= 0
+    )
 
     @model_validator(mode="after")
     def _check(self) -> "DailyFill":
-        if not (self.quantity.is_finite() and self.price.is_finite() and self.fee_usd.is_finite()):
+        if not (
+            self.quantity.is_finite()
+            and self.price.is_finite()
+            and self.fee_usd.is_finite()
+        ):
             raise ValueError("fills must be finite")
         if self.quantity == ZERO or self.price <= ZERO or self.fee_usd < ZERO:
-            raise ValueError("fill quantity must be non-zero, price positive and fee non-negative")
+            raise ValueError(
+                "fill quantity must be non-zero, price positive and fee non-negative"
+            )
         return self
 
 
@@ -116,7 +132,9 @@ class DailyCashEntry(StrictModel):
         if not (self.debit_usd.is_finite() and self.credit_usd.is_finite()):
             raise ValueError("cash entries must be finite")
         if self.debit_usd < ZERO or self.credit_usd < ZERO:
-            raise ValueError("debit and credit amounts are non-negative; direction is the field name")
+            raise ValueError(
+                "debit and credit amounts are non-negative; direction is the field name"
+            )
         if self.debit_usd == ZERO and self.credit_usd == ZERO:
             raise ValueError("a cash entry needs a debit or a credit")
         return self
@@ -173,7 +191,9 @@ class DailyPolicy(StrictModel):
 @dataclass
 class DailyInputs:
     start_cash_usd: Decimal
-    initial_positions: Mapping[str, tuple[Decimal, Decimal]] = field(default_factory=dict)  # id -> (quantity, price)
+    initial_positions: Mapping[str, tuple[Decimal, Decimal]] = field(
+        default_factory=dict
+    )  # id -> (quantity, price)
     returns: Sequence[DailyReturn] = ()
     prices: Sequence[DailyPrice] = ()
     fills: Sequence[DailyFill] = ()
@@ -187,7 +207,9 @@ class DailyInputs:
 # --------------------------------------------------------------------- stats
 
 
-def ols_beta(excess_portfolio: Sequence[float], excess_market: Sequence[float]) -> dict[str, Optional[float]]:
+def ols_beta(
+    excess_portfolio: Sequence[float], excess_market: Sequence[float]
+) -> dict[str, Optional[float]]:
     """OLS of portfolio excess return on market excess return with classical standard errors."""
     n = len(excess_portfolio)
     if n != len(excess_market):
@@ -198,18 +220,31 @@ def ols_beta(excess_portfolio: Sequence[float], excess_market: Sequence[float]) 
     my = sum(excess_portfolio) / n
     sxx = sum((x - mx) ** 2 for x in excess_market)
     if sxx <= 0:
-        raise ValueError("market excess return has no dispersion; beta is undefined")
-    sxy = sum((x - mx) * (y - my) for x, y in zip(excess_market, excess_portfolio))
+        raise ValueError(
+            "market excess return has no dispersion; beta is undefined"
+        )
+    sxy = sum(
+        (x - mx) * (y - my) for x, y in zip(excess_market, excess_portfolio)
+    )
     beta = sxy / sxx
     alpha = my - beta * mx
-    residuals = [y - alpha - beta * x for x, y in zip(excess_market, excess_portfolio)]
+    residuals = [
+        y - alpha - beta * x for x, y in zip(excess_market, excess_portfolio)
+    ]
     sse = sum(r * r for r in residuals)
     sigma2 = sse / (n - 2)
     se_beta = math.sqrt(sigma2 / sxx)
     se_alpha = math.sqrt(sigma2 * (1.0 / n + mx * mx / sxx))
     syy = sum((y - my) ** 2 for y in excess_portfolio)
     r2 = 1.0 - sse / syy if syy > 0 else None
-    return {"beta": beta, "alpha": alpha, "se_beta": se_beta, "se_alpha": se_alpha, "r2": r2, "n": float(n)}
+    return {
+        "beta": beta,
+        "alpha": alpha,
+        "se_beta": se_beta,
+        "se_alpha": se_alpha,
+        "r2": r2,
+        "n": float(n),
+    }
 
 
 def daily_beta(
@@ -220,7 +255,9 @@ def daily_beta(
     periods_per_year: int = 252,
 ) -> dict[str, Optional[float]]:
     """Daily beta/alpha of portfolio versus market, both in excess of the daily risk-free rate."""
-    if not (len(portfolio_returns) == len(market_returns) == len(risk_free_daily)):
+    if not (
+        len(portfolio_returns) == len(market_returns) == len(risk_free_daily)
+    ):
         raise ValueError("series length mismatch")
     y = [p - r for p, r in zip(portfolio_returns, risk_free_daily)]
     x = [m - r for m, r in zip(market_returns, risk_free_daily)]
@@ -238,16 +275,30 @@ def rolling_beta(
     window: int,
 ) -> list[dict[str, Any]]:
     """Rolling daily beta over a trailing window of ``window`` observations (brief: 252)."""
-    if not (len(dates) == len(portfolio_returns) == len(market_returns) == len(risk_free_daily)):
+    if not (
+        len(dates)
+        == len(portfolio_returns)
+        == len(market_returns)
+        == len(risk_free_daily)
+    ):
         raise ValueError("series length mismatch")
     out: list[dict[str, Any]] = []
     for end in range(window, len(dates) + 1):
         sl = slice(end - window, end)
         try:
-            stats = daily_beta(portfolio_returns[sl], market_returns[sl], risk_free_daily[sl])
+            stats = daily_beta(
+                portfolio_returns[sl], market_returns[sl], risk_free_daily[sl]
+            )
         except ValueError:
             continue
-        out.append({"date": dates[end - 1].isoformat(), "beta": stats["beta"], "se_beta": stats["se_beta"], "window": window})
+        out.append(
+            {
+                "date": dates[end - 1].isoformat(),
+                "beta": stats["beta"],
+                "se_beta": stats["se_beta"],
+                "window": window,
+            }
+        )
     return out
 
 
@@ -269,8 +320,15 @@ def compound_periods(
             if start < d <= end:
                 growth *= 1.0 + r
                 days += 1
-        out.append({"period": label, "start": start.isoformat(), "end": end.isoformat(), "days": days,
-                    "compounded_return": growth - 1.0 if days else None})
+        out.append(
+            {
+                "period": label,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "days": days,
+                "compounded_return": growth - 1.0 if days else None,
+            }
+        )
     return out
 
 
@@ -286,14 +344,32 @@ def reconcile_to_periods(
     ``tolerance`` are reported as reconciled, otherwise as mismatches (not silently absorbed).
     """
     compounded = compound_periods(
-        [row["date_obj"] for row in daily.rows], [row["return"] for row in daily.rows], [(p, s, e) for p, s, e, _ in reported]
+        [row["date_obj"] for row in daily.rows],
+        [row["return"] for row in daily.rows],
+        [(p, s, e) for p, s, e, _ in reported],
     )
     rows = []
     for (label, _s, _e, value), c in zip(reported, compounded):
-        diff = None if c["compounded_return"] is None else c["compounded_return"] - value
-        rows.append({"period": label, "reported": value, "compounded_daily": c["compounded_return"], "days": c["days"],
-                     "difference": diff, "reconciled": diff is not None and abs(diff) <= tolerance})
-    return {"periods": rows, "all_reconciled": bool(rows) and all(r["reconciled"] for r in rows), "tolerance": tolerance}
+        diff = (
+            None
+            if c["compounded_return"] is None
+            else c["compounded_return"] - value
+        )
+        rows.append(
+            {
+                "period": label,
+                "reported": value,
+                "compounded_daily": c["compounded_return"],
+                "days": c["days"],
+                "difference": diff,
+                "reconciled": diff is not None and abs(diff) <= tolerance,
+            }
+        )
+    return {
+        "periods": rows,
+        "all_reconciled": bool(rows) and all(r["reconciled"] for r in rows),
+        "tolerance": tolerance,
+    }
 
 
 # -------------------------------------------------------------------- report
@@ -313,7 +389,9 @@ class DailyReport:
         return [r["return"] for r in self.rows]
 
     def as_dict(self) -> dict[str, Any]:
-        clean_rows = [{k: v for k, v in r.items() if k != "date_obj"} for r in self.rows]
+        clean_rows = [
+            {k: v for k, v in r.items() if k != "date_obj"} for r in self.rows
+        ]
         return {"summary": self.summary, "rows": clean_rows}
 
 
@@ -324,12 +402,17 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
     tol = Decimal(str(policy.tolerance))
     ignored: list[dict[str, str]] = []
 
-    def filter_dated(items: Sequence[Any], label: str, allow_ignore: bool = True) -> list[Any]:
+    def filter_dated(
+        items: Sequence[Any], label: str, allow_ignore: bool = True
+    ) -> list[Any]:
         kept = []
         for item in items:
             if item.on in day_set:
                 kept.append(item)
-            elif allow_ignore and policy.non_trading_observations == "ignore_recorded":
+            elif (
+                allow_ignore
+                and policy.non_trading_observations == "ignore_recorded"
+            ):
                 ignored.append({"kind": label, "on": item.on.isoformat()})
             else:
                 _fail(
@@ -351,23 +434,43 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
     for r in returns:
         key = (r.security_id, r.on)
         if key in ret_map:
-            _fail(ErrorCode.SCHEMA_MISMATCH, f"duplicate return for {key[0]} on {key[1]}", "One observation per security and day.")
+            _fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"duplicate return for {key[0]} on {key[1]}",
+                "One observation per security and day.",
+            )
         ret_map[key] = r.total_return
     px_map: dict[tuple[str, dt.date], Decimal] = {}
     for p in prices:
         key = (p.security_id, p.on)
         if key in px_map:
-            _fail(ErrorCode.SCHEMA_MISMATCH, f"duplicate price for {key[0]} on {key[1]}", "One observation per security and day.")
+            _fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"duplicate price for {key[0]} on {key[1]}",
+                "One observation per security and day.",
+            )
         px_map[key] = p.close
     rf_map: dict[dt.date, Decimal] = {}
     for rate in rates:
         if rate.on in rf_map:
-            _fail(ErrorCode.SCHEMA_MISMATCH, f"duplicate TB3MS observation on {rate.on}", "One rate per day.")
+            _fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"duplicate TB3MS observation on {rate.on}",
+                "One rate per day.",
+            )
         rf_map[rate.on] = Decimal(str(rate.tb3ms_annual_percent))
     if len({m.on for m in markets}) != len(markets):
-        _fail(ErrorCode.SCHEMA_MISMATCH, "duplicate market return date", "One market observation per day.")
+        _fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            "duplicate market return date",
+            "One market observation per day.",
+        )
     if len({(m.security_id, m.on) for m in suspense}) != len(suspense):
-        _fail(ErrorCode.SCHEMA_MISMATCH, "duplicate suspense evidence", "One suspense observation per security/day.")
+        _fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            "duplicate suspense evidence",
+            "One suspense observation per security/day.",
+        )
     mkt_map = {m.on: m.total_return for m in markets}
     fills_by_day: dict[dt.date, list[DailyFill]] = {}
     for f in fills:
@@ -378,10 +481,17 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
     suspense_by_key = {(s.security_id, s.on): s for s in suspense}
     missing_rates = [d.isoformat() for d in days if d not in rf_map]
     if missing_rates:
-        _fail(ErrorCode.SCHEMA_MISMATCH, f"no TB3MS observation for {len(missing_rates)} trading day(s), first {missing_rates[0]}",
-              "The risk-free rate is never zero-filled or carried across missing days.")
+        _fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            f"no TB3MS observation for {len(missing_rates)} trading day(s), first {missing_rates[0]}",
+            "The risk-free rate is never zero-filled or carried across missing days.",
+        )
     if inputs.start_cash_usd < ZERO:
-        _fail(ErrorCode.SCHEMA_MISMATCH, "starting cash cannot be negative", "Start from a non-negative cash balance.")
+        _fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            "starting cash cannot be negative",
+            "Start from a non-negative cash balance.",
+        )
 
     cash = _dec(inputs.start_cash_usd)
     quantity: dict[str, Decimal] = {}
@@ -390,19 +500,36 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
     for sid, (q, p) in inputs.initial_positions.items():
         q, p = _dec(q), _dec(p)
         if p <= ZERO:
-            _fail(ErrorCode.SCHEMA_MISMATCH, f"initial price for {sid} must be positive", "Initial positions need a positive mark.")
+            _fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"initial price for {sid} must be positive",
+                "Initial positions need a positive mark.",
+            )
         if q != ZERO:
             quantity[sid], mark[sid] = q, p
 
     def nav_state() -> Decimal:
-        return cash + sum((quantity[s] * mark[s] for s in quantity if quantity[s] != ZERO), ZERO)
+        return cash + sum(
+            (quantity[s] * mark[s] for s in quantity if quantity[s] != ZERO),
+            ZERO,
+        )
 
     nav_prev = nav_state()
     if nav_prev <= ZERO:
-        _fail(ErrorCode.SCHEMA_MISMATCH, "starting NAV must be positive", "A daily series needs positive starting NAV.")
+        _fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            "starting NAV must be positive",
+            "A daily series needs positive starting NAV.",
+        )
     start_nav = nav_prev
     rows: list[dict[str, Any]] = []
-    totals = {"trading": ZERO, "borrow": ZERO, "funding": ZERO, "other_fee": ZERO, "credits": ZERO}
+    totals = {
+        "trading": ZERO,
+        "borrow": ZERO,
+        "funding": ZERO,
+        "other_fee": ZERO,
+        "credits": ZERO,
+    }
     suspense_marks: list[dict[str, Any]] = []
     fill_costs_input = sum((f.fee_usd for f in fills), ZERO)
     max_residual = ZERO
@@ -416,10 +543,14 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
             key = (sid, day)
             if key in px_map and key in ret_map:
                 implied = previous * (ONE + ret_map[key])
-                if abs(implied - px_map[key]) > tol * max(ONE, abs(px_map[key])):
-                    _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
-                          f"price and return disagree for {sid} on {day}: implied {implied} vs close {px_map[key]}",
-                          "Conflicting dated observations are never reconciled by choosing one.")
+                if abs(implied - px_map[key]) > tol * max(
+                    ONE, abs(px_map[key])
+                ):
+                    _fail(
+                        ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                        f"price and return disagree for {sid} on {day}: implied {implied} vs close {px_map[key]}",
+                        "Conflicting dated observations are never reconciled by choosing one.",
+                    )
                 new_marks[sid] = px_map[key]
                 stale[sid] = 0
             elif key in px_map:
@@ -431,27 +562,47 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
             elif key in suspense_by_key:
                 stale[sid] = stale.get(sid, 0) + 1
                 if stale[sid] > policy.max_suspense_days:
-                    _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
-                          f"{sid} has been in suspense for {stale[sid]} trading days (limit {policy.max_suspense_days})",
-                          "Unresolved terminal outcomes need dated evidence; suspense is bounded.")
+                    _fail(
+                        ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                        f"{sid} has been in suspense for {stale[sid]} trading days (limit {policy.max_suspense_days})",
+                        "Unresolved terminal outcomes need dated evidence; suspense is bounded.",
+                    )
                 new_marks[sid] = previous
                 ev = suspense_by_key[key]
-                suspense_marks.append({"security_id": sid, "on": day.isoformat(), "evidence_id": ev.evidence_id, "reason": ev.reason,
-                                       "stale_days": stale[sid]})
+                suspense_marks.append(
+                    {
+                        "security_id": sid,
+                        "on": day.isoformat(),
+                        "evidence_id": ev.evidence_id,
+                        "reason": ev.reason,
+                        "stale_days": stale[sid],
+                    }
+                )
             else:
                 missing.append(sid)
         if missing:
-            shown = ", ".join(missing[:10]) + (" ..." if len(missing) > 10 else "")
-            _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
-                  f"no supplied outcome for {len(missing)} held name(s) on {day}: {shown}",
-                  "Absent held outcomes are never zero-filled or interpolated; supply them or dated suspense evidence.")
-        position_pnl = sum((quantity[s] * (new_marks[s] - mark[s]) for s in held_at_open), ZERO)
+            shown = ", ".join(missing[:10]) + (
+                " ..." if len(missing) > 10 else ""
+            )
+            _fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"no supplied outcome for {len(missing)} held name(s) on {day}: {shown}",
+                "Absent held outcomes are never zero-filled or interpolated; supply them or dated suspense evidence.",
+            )
+        position_pnl = sum(
+            (quantity[s] * (new_marks[s] - mark[s]) for s in held_at_open), ZERO
+        )
         for sid, price in new_marks.items():
             mark[sid] = price
         rf_daily = rf_map[day] / Decimal(25200)
         income = cash * rf_daily
         cash += income
-        debits = {"borrow": ZERO, "funding": ZERO, "other_fee": ZERO, "other": ZERO}
+        debits = {
+            "borrow": ZERO,
+            "funding": ZERO,
+            "other_fee": ZERO,
+            "other": ZERO,
+        }
         credits = ZERO
         for entry in entries_by_day.get(day, []):
             cash += entry.credit_usd - entry.debit_usd
@@ -483,15 +634,31 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
                 mark.pop(sid, None)
         nav_now = nav_state()
         other_debits = debits["other"] + debits["other_fee"]
-        expected = nav_prev + position_pnl + income + credits - debits["borrow"] - debits["funding"] - other_debits - trading_fee + slippage
+        expected = (
+            nav_prev
+            + position_pnl
+            + income
+            + credits
+            - debits["borrow"]
+            - debits["funding"]
+            - other_debits
+            - trading_fee
+            + slippage
+        )
         residual = nav_now - expected
         max_residual = max(max_residual, abs(residual))
         if abs(residual) > Decimal("1e-10") * max(ONE, abs(nav_now)):
-            _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
-                  f"NAV reconciliation failed on {day}: residual {residual}",
-                  "Daily accounting must conserve cash, positions, costs and income before any report.")
+            _fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"NAV reconciliation failed on {day}: residual {residual}",
+                "Daily accounting must conserve cash, positions, costs and income before any report.",
+            )
         if nav_now <= ZERO:
-            _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"NAV is not positive on {day}", "Accounting cannot continue on non-positive NAV.")
+            _fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"NAV is not positive on {day}",
+                "Accounting cannot continue on non-positive NAV.",
+            )
         gross = sum((abs(quantity[s] * mark[s]) for s in quantity), ZERO)
         net = sum((quantity[s] * mark[s] for s in quantity), ZERO)
         daily_return = float(nav_now / nav_prev - ONE)
@@ -518,30 +685,49 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
                 "gross_exposure": float(gross / nav_now),
                 "net_exposure": float(net / nav_now),
                 "names": len([s for s in quantity if quantity[s] != ZERO]),
-                "suspense_names": sorted(m["security_id"] for m in suspense_marks if m["on"] == day.isoformat()),
+                "suspense_names": sorted(
+                    m["security_id"]
+                    for m in suspense_marks
+                    if m["on"] == day.isoformat()
+                ),
                 "nav_residual": str(residual),
             }
         )
         nav_prev = nav_now
 
     if totals["trading"] != fill_costs_input:
-        _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, "recorded trading costs differ from the supplied fill fees",
-              "Costs must reconcile to the fee ledger (spec 26.7).")
+        _fail(
+            ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+            "recorded trading costs differ from the supplied fill fees",
+            "Costs must reconcile to the fee ledger (spec 26.7).",
+        )
 
-    benchmark_check: dict[str, Any] = {"supplied": inputs.reported_benchmark is not None}
+    benchmark_check: dict[str, Any] = {
+        "supplied": inputs.reported_benchmark is not None
+    }
     if inputs.reported_benchmark is not None:
         diffs = []
         for row in rows:
             reported = inputs.reported_benchmark.get(row["date_obj"])
             if reported is None:
-                _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"reported benchmark has no value for {row['date']}",
-                      "A supplied benchmark must cover every trading day.")
+                _fail(
+                    ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                    f"reported benchmark has no value for {row['date']}",
+                    "A supplied benchmark must cover every trading day.",
+                )
             diffs.append(abs(float(reported) - row["benchmark_daily"]))
-        benchmark_check.update({"max_abs_difference": max(diffs), "reconciled": max(diffs) <= policy.tolerance})
+        benchmark_check.update(
+            {
+                "max_abs_difference": max(diffs),
+                "reconciled": max(diffs) <= policy.tolerance,
+            }
+        )
         if not benchmark_check["reconciled"]:
-            _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
-                  f"reported benchmark differs from TB3MS/25200 + 0.04/252 by up to {max(diffs):.3e}",
-                  "The benchmark must reconcile before performance statistics are published.")
+            _fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"reported benchmark differs from TB3MS/25200 + 0.04/252 by up to {max(diffs):.3e}",
+                "The benchmark must reconcile before performance statistics are published.",
+            )
     else:
         benchmark_check["reconciled"] = None
 
@@ -552,46 +738,86 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
     compounded = 1.0
     for r in returns_list:
         compounded *= 1.0 + r
-    nav_check = abs(float(start_nav) * compounded - float(end_nav)) / float(start_nav)
+    nav_check = abs(float(start_nav) * compounded - float(end_nav)) / float(
+        start_nav
+    )
     if nav_check > float(policy.tolerance) * 10:
-        _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, "ending NAV disagrees with compounded daily returns",
-              "Ending NAV must agree with the cumulative return (spec 26.7).")
+        _fail(
+            ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+            "ending NAV disagrees with compounded daily returns",
+            "Ending NAV must agree with the cumulative return (spec 26.7).",
+        )
     n = len(rows)
     worst = min(rows, key=lambda r: r["return"])
     best = max(rows, key=lambda r: r["return"])
     nav_path = [float(start_nav)] + [float(r["nav"]) for r in rows]
     active = [p - b for p, b in zip(returns_list, bench_list)]
     stats: dict[str, Any] = {}
-    stats["annualized_arithmetic_return"] = annualized_arithmetic(returns_list, policy.periods_per_year)
+    stats["annualized_arithmetic_return"] = annualized_arithmetic(
+        returns_list, policy.periods_per_year
+    )
     if n >= 2:
-        stats["annualized_volatility"] = annualized_volatility(returns_list, policy.periods_per_year)
+        stats["annualized_volatility"] = annualized_volatility(
+            returns_list, policy.periods_per_year
+        )
         try:
-            stats["information_ratio_vs_benchmark"] = information_ratio(active, policy.periods_per_year)
+            stats["information_ratio_vs_benchmark"] = information_ratio(
+                active, policy.periods_per_year
+            )
         except ValueError:
             stats["information_ratio_vs_benchmark"] = None
         try:
-            stats["sharpe_ratio"] = sharpe_ratio([p - r for p, r in zip(returns_list, rf_list)], policy.periods_per_year)
+            stats["sharpe_ratio"] = sharpe_ratio(
+                [p - r for p, r in zip(returns_list, rf_list)],
+                policy.periods_per_year,
+            )
         except ValueError:
             stats["sharpe_ratio"] = None
-        stats["tracking_error"] = annualized_volatility(active, policy.periods_per_year)
-    beta_block: dict[str, Any] = {"status": "not_computed", "reason": "no market returns supplied"}
+        stats["tracking_error"] = annualized_volatility(
+            active, policy.periods_per_year
+        )
+    beta_block: dict[str, Any] = {
+        "status": "not_computed",
+        "reason": "no market returns supplied",
+    }
     rolling: list[dict[str, Any]] = []
     if mkt_map:
         absent = [r["date"] for r in rows if r["date_obj"] not in mkt_map]
         if absent:
-            _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"no market return for {len(absent)} trading day(s), first {absent[0]}",
-                  "Daily beta needs a market return on every trading day; none is interpolated.")
+            _fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"no market return for {len(absent)} trading day(s), first {absent[0]}",
+                "Daily beta needs a market return on every trading day; none is interpolated.",
+            )
         market_list = [mkt_map[r["date_obj"]] for r in rows]
         if n >= policy.beta_min_observations:
             try:
-                beta_block = {"status": "computed", **daily_beta(returns_list, market_list, rf_list, periods_per_year=policy.periods_per_year),
-                              "basis": "portfolio and market excess of TB3MS/25200 daily"}
+                beta_block = {
+                    "status": "computed",
+                    **daily_beta(
+                        returns_list,
+                        market_list,
+                        rf_list,
+                        periods_per_year=policy.periods_per_year,
+                    ),
+                    "basis": "portfolio and market excess of TB3MS/25200 daily",
+                }
             except ValueError as exc:
                 beta_block = {"status": "undefined", "reason": str(exc)}
             if n >= policy.rolling_window:
-                rolling = rolling_beta([r["date_obj"] for r in rows], returns_list, market_list, rf_list, policy.rolling_window)
+                rolling = rolling_beta(
+                    [r["date_obj"] for r in rows],
+                    returns_list,
+                    market_list,
+                    rf_list,
+                    policy.rolling_window,
+                )
         else:
-            beta_block = {"status": "insufficient_observations", "n": n, "required": policy.beta_min_observations}
+            beta_block = {
+                "status": "insufficient_observations",
+                "n": n,
+                "required": policy.beta_min_observations,
+            }
     summary = {
         "frequency": "daily",
         "basis": "supplied dated observations only; no interpolation; no inference from monthly data",
@@ -611,6 +837,11 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
         "statistics": stats,
         "max_abs_nav_residual": str(max_residual),
         "exact_nav": not suspense_marks,
+        "zero_marked_positions": [
+            {"security_id": sid, "quantity": str(quantity[sid]), "mark": "0"}
+            for sid in sorted(quantity)
+            if quantity[sid] != ZERO and mark[sid] == ZERO
+        ],
         "suspense_marks": suspense_marks,
         "ignored_non_trading_observations": ignored,
         "limitations": [
@@ -625,4 +856,8 @@ def reconcile_daily(inputs: DailyInputs, policy: DailyPolicy) -> DailyReport:
 def cagr_from_report(report: DailyReport, periods_per_year: int = 252) -> float:
     """CAGR on the explicit elapsed-trading-day convention (days / periods_per_year years)."""
     years = report.summary["days"] / periods_per_year
-    return cagr(float(report.summary["start_nav"]), float(report.summary["end_nav"]), years)
+    return cagr(
+        float(report.summary["start_nav"]),
+        float(report.summary["end_nav"]),
+        years,
+    )

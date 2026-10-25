@@ -1,6 +1,11 @@
 """Data-layer exports."""
 
-from .availability import AvailabilityRule, RuleKind, UsageMode, compute_available_at
+from .availability import (
+    AvailabilityRule,
+    RuleKind,
+    UsageMode,
+    compute_available_at,
+)
 from .bitemporal import BitemporalStore, Observation
 from .broker import DataBroker, EligibilityReport, TrustedContext
 from .catalogue import CatalogueManifest, summarize_entries

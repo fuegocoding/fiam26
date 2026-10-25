@@ -32,7 +32,15 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -43,7 +51,9 @@ from .registry import ModelRegistry, TemporalPolicy
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 DEFAULT_MAX_RESPONSE_BYTES = 2_000_000
 DEFAULT_MAX_STDERR_BYTES = 65_536
-MAX_REPORTED_TOKENS = 10**9  # a single call reporting more tokens than this is nonsensical
+MAX_REPORTED_TOKENS = (
+    10**9
+)  # a single call reporting more tokens than this is nonsensical
 
 
 def utc_now() -> dt.datetime:
@@ -65,7 +75,13 @@ def sha256_bytes(data: bytes) -> str:
 class ProviderError(Exception):
     """Provider-side failure. ``retryable`` is true only for transient causes."""
 
-    def __init__(self, message: str, *, retryable: bool = False, response_hash: Optional[str] = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        response_hash: Optional[str] = None,
+    ):
         super().__init__(message)
         self.retryable = retryable
         self.response_hash = response_hash
@@ -123,7 +139,11 @@ class GenerationParams(StrictModel):
 
     def identity(self) -> dict[str, Any]:
         """Parameters that can change output (timeout cannot)."""
-        return {"temperature": self.temperature, "max_tokens": self.max_tokens, "seed": self.seed}
+        return {
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "seed": self.seed,
+        }
 
 
 @dataclass(frozen=True)
@@ -144,9 +164,14 @@ class LLMRequest:
 
     @property
     def request_hash(self) -> str:
-        identity = {"s": self.system, "u": self.user, "p": self.params.identity(), "r": self.role}
+        identity = {
+            "s": self.system,
+            "u": self.user,
+            "p": self.params.identity(),
+            "r": self.role,
+        }
         if self.response_schema is not None:
-            identity['response_schema'] = self.response_schema
+            identity["response_schema"] = self.response_schema
         blob = json.dumps(
             identity,
             sort_keys=True,
@@ -166,8 +191,12 @@ class LLMResponse:
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     mock: bool = False
-    ignored_params: tuple[str, ...] = ()  # requested generation params the backend did not apply
-    total_tokens: Optional[int] = None  # provider-reported total (never derived); None when not reported
+    ignored_params: tuple[
+        str, ...
+    ] = ()  # requested generation params the backend did not apply
+    total_tokens: Optional[int] = (
+        None  # provider-reported total (never derived); None when not reported
+    )
 
     def __post_init__(self) -> None:
         require_aware(self.received_at, "received_at")
@@ -186,19 +215,31 @@ class LLMProvider(Protocol):
 # HTTP provider
 
 
-Transport = Callable[[str, Mapping[str, str], bytes, float, int], "tuple[int, bytes]"]
+Transport = Callable[
+    [str, Mapping[str, str], bytes, float, int], "tuple[int, bytes]"
+]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args: Any, **kwargs: Any) -> None:  # never forward credentials
+    def redirect_request(
+        self, *args: Any, **kwargs: Any
+    ) -> None:  # never forward credentials
         return None
 
 
 def urllib_transport(
-    url: str, headers: Mapping[str, str], body: bytes, timeout_s: float, max_bytes: int
+    url: str,
+    headers: Mapping[str, str],
+    body: bytes,
+    timeout_s: float,
+    max_bytes: int,
 ) -> "tuple[int, bytes]":
-    request = urllib.request.Request(url, data=body, headers=dict(headers), method="POST")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+    request = urllib.request.Request(
+        url, data=body, headers=dict(headers), method="POST"
+    )
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NoRedirect
+    )
     deadline = time.monotonic() + timeout_s
     try:
         try:
@@ -215,16 +256,23 @@ def urllib_transport(
                     break
                 total += len(chunk)
                 if total > max_bytes:
-                    raise ProviderError("response body exceeds the configured limit")
+                    raise ProviderError(
+                        "response body exceeds the configured limit"
+                    )
                 if time.monotonic() > deadline:
-                    raise ProviderError("provider response exceeded the total deadline", retryable=True)
+                    raise ProviderError(
+                        "provider response exceeded the total deadline",
+                        retryable=True,
+                    )
                 chunks.append(chunk)
         finally:
             response.close()
     except ProviderError:
         raise
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ProviderError(f"provider request failed: {type(exc).__name__}", retryable=True) from None
+        raise ProviderError(
+            f"provider request failed: {type(exc).__name__}", retryable=True
+        ) from None
     return status, b"".join(chunks)
 
 
@@ -251,13 +299,24 @@ class OpenAICompatibleProvider:
             raise ValueError("base_url must be an explicit http(s) URL")
         loopback = parsed.hostname in LOOPBACK_HOSTS
         if parsed.scheme == "http" and not loopback:
-            raise ValueError("plain http is only permitted for loopback endpoints")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError("base_url must not embed credentials, query or fragment")
+            raise ValueError(
+                "plain http is only permitted for loopback endpoints"
+            )
+        if (
+            parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "base_url must not embed credentials, query or fragment"
+            )
         if not model or not model.strip():
             raise ValueError("model must be explicit")
         if api_key_env is None and not loopback:
-            raise ValueError("a named API-key environment variable is required for non-loopback endpoints")
+            raise ValueError(
+                "a named API-key environment variable is required for non-loopback endpoints"
+            )
         if max_response_bytes < 1024:
             raise ValueError("max_response_bytes too small")
         self.base_url = base_url.rstrip("/")
@@ -274,7 +333,9 @@ class OpenAICompatibleProvider:
             return None
         key = self._environ.get(self.api_key_env, "")
         if not key.strip():
-            raise ProviderError(f"environment variable {self.api_key_env} is not set")
+            raise ProviderError(
+                f"environment variable {self.api_key_env} is not set"
+            )
         return key.strip()
 
     def complete(self, request: LLMRequest) -> LLMResponse:
@@ -294,7 +355,8 @@ class OpenAICompatibleProvider:
         if self.json_mode:
             payload["response_format"] = {"type": "json_object"}
         headers = {
-            "Content-Type": "application/json", "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
             "User-Agent": "fiam-pod-platform/0.1",
         }
         if key:
@@ -310,16 +372,25 @@ class OpenAICompatibleProvider:
             )
         except ProviderError:
             raise
-        except Exception as exc:  # transport messages may embed headers/URLs: type name only
-            raise ProviderError(f"provider transport failed: {type(exc).__name__}", retryable=True) from None
+        except (
+            Exception
+        ) as exc:  # transport messages may embed headers/URLs: type name only
+            raise ProviderError(
+                f"provider transport failed: {type(exc).__name__}",
+                retryable=True,
+            ) from None
         latency = time.monotonic() - started
-        if not isinstance(body, (bytes, bytearray)) or not isinstance(status, int):
+        if not isinstance(body, (bytes, bytearray)) or not isinstance(
+            status, int
+        ):
             raise ProviderError("provider transport returned an invalid result")
         if len(body) > self.max_response_bytes:
             raise ProviderError("response body exceeds the configured limit")
         response_hash = sha256_bytes(bytes(body))
         if status != 200:
-            snippet = redact_secrets(bytes(body[:400]).decode("utf-8", "replace"), key)[:200]
+            snippet = redact_secrets(
+                bytes(body[:400]).decode("utf-8", "replace"), key
+            )[:200]
             raise ProviderError(
                 f"provider returned HTTP {status}: {snippet}",
                 retryable=status in (408, 429) or status >= 500,
@@ -331,22 +402,32 @@ class OpenAICompatibleProvider:
             content = choice["message"]["content"]
             finish = choice.get("finish_reason")
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):
-            raise ProviderError("provider response is not a chat completion", response_hash=response_hash) from None
+            raise ProviderError(
+                "provider response is not a chat completion",
+                response_hash=response_hash,
+            ) from None
         if not isinstance(content, str) or not content.strip():
-            raise ProviderError("provider returned empty content", response_hash=response_hash)
+            raise ProviderError(
+                "provider returned empty content", response_hash=response_hash
+            )
         if finish != "stop":
             raise IncompleteOutputError(
-                f"completion did not finish cleanly (finish_reason={finish!r})", response_hash=response_hash
+                f"completion did not finish cleanly (finish_reason={finish!r})",
+                response_hash=response_hash,
             )
         try:
-            prompt_tokens, completion_tokens, total_tokens = parse_usage(doc.get("usage"))
+            prompt_tokens, completion_tokens, total_tokens = parse_usage(
+                doc.get("usage")
+            )
         except ProviderError as exc:
             raise ProviderError(str(exc), response_hash=response_hash) from None
         return LLMResponse(
             text=content,
             provider=self.name,
             model=self.model,
-            served_model=doc.get("model") if isinstance(doc.get("model"), str) else None,
+            served_model=doc.get("model")
+            if isinstance(doc.get("model"), str)
+            else None,
             response_hash=response_hash,
             received_at=self._clock(),
             latency_s=latency,
@@ -359,7 +440,9 @@ class OpenAICompatibleProvider:
 _SECRET_PATTERNS = (
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=\-]{6,}"),
     re.compile(r"\b(?:sk|pk|rk|key|tok)[-_][A-Za-z0-9_\-]{8,}"),
-    re.compile(r"(?i)(authorization|api[-_ ]?key|x-api-key)\"?\s*[:=]\s*\"?[^\s\",}]{4,}"),
+    re.compile(
+        r"(?i)(authorization|api[-_ ]?key|x-api-key)\"?\s*[:=]\s*\"?[^\s\",}]{4,}"
+    ),
 )
 
 
@@ -370,20 +453,28 @@ def redact_secrets(text: str, key: Optional[str] = None) -> str:
         text = text.replace(key, "[redacted]")
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub("[redacted]", text)
-    return "".join(ch if ch.isprintable() or ch in "\n\t" else "?" for ch in text)
+    return "".join(
+        ch if ch.isprintable() or ch in "\n\t" else "?" for ch in text
+    )
 
 
 def _usage_int(value: Any, name: str) -> Optional[int]:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ProviderError(f"provider reported invalid token usage ({name} is not an integer)")
+        raise ProviderError(
+            f"provider reported invalid token usage ({name} is not an integer)"
+        )
     if value < 0 or value > MAX_REPORTED_TOKENS:
-        raise ProviderError(f"provider reported nonsensical token usage ({name} out of range)")
+        raise ProviderError(
+            f"provider reported nonsensical token usage ({name} out of range)"
+        )
     return value
 
 
-def parse_usage(usage: Any) -> "tuple[Optional[int], Optional[int], Optional[int]]":
+def parse_usage(
+    usage: Any,
+) -> "tuple[Optional[int], Optional[int], Optional[int]]":
     """Validate a provider ``usage`` object -> (prompt, completion, total).
 
     Absent usage is *unknown* (all ``None``), never zero. Negative, boolean,
@@ -395,12 +486,21 @@ def parse_usage(usage: Any) -> "tuple[Optional[int], Optional[int], Optional[int
     if usage is None:
         return None, None, None
     if not isinstance(usage, dict):
-        raise ProviderError("provider reported invalid token usage (usage is not an object)")
+        raise ProviderError(
+            "provider reported invalid token usage (usage is not an object)"
+        )
     prompt = _usage_int(usage.get("prompt_tokens"), "prompt_tokens")
     completion = _usage_int(usage.get("completion_tokens"), "completion_tokens")
     total = _usage_int(usage.get("total_tokens"), "total_tokens")
-    if prompt is not None and completion is not None and total is not None and total < prompt + completion:
-        raise ProviderError("provider reported nonsensical token usage (total below prompt + completion)")
+    if (
+        prompt is not None
+        and completion is not None
+        and total is not None
+        and total < prompt + completion
+    ):
+        raise ProviderError(
+            "provider reported nonsensical token usage (total below prompt + completion)"
+        )
     if prompt is None or completion is None:
         return None, None, None
     return prompt, completion, total
@@ -417,7 +517,12 @@ CLAUDE_CODE_BASE_ARGS = (
     "--strict-mcp-config",
     "--no-session-persistence",
 )
-FORBIDDEN_CLAUDE_FLAGS = ("--dangerously-skip-permissions", "--permission-mode", "--allowedTools", "--allow-dangerously")
+FORBIDDEN_CLAUDE_FLAGS = (
+    "--dangerously-skip-permissions",
+    "--permission-mode",
+    "--allowedTools",
+    "--allow-dangerously",
+)
 # The CLI exposes no output-token limit, so ``max_tokens``/``temperature``/``seed`` are NOT applied.
 CLAUDE_IGNORED_PARAMS = ("max_tokens", "temperature", "seed")
 # Post-hoc overrun bound: no tokenizer emits more than ~8 bytes per token on average.
@@ -435,7 +540,10 @@ class OutputLimitExceeded(ProviderError):
     """A child process wrote more than its byte cap; it was killed."""
 
     def __init__(self, stream: str, captured: bytes):
-        super().__init__(f"claude {stream} exceeds the configured limit", response_hash=sha256_bytes(captured))
+        super().__init__(
+            f"claude {stream} exceeds the configured limit",
+            response_hash=sha256_bytes(captured),
+        )
         self.stream = stream
         self.captured = captured
 
@@ -500,7 +608,9 @@ def run_bounded_process(
     )
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True
-    proc = popen(list(cmd), **popen_kwargs)  # OSError (e.g. missing executable) propagates
+    proc = popen(
+        list(cmd), **popen_kwargs
+    )  # OSError (e.g. missing executable) propagates
     caps = {"stdout": max_stdout_bytes, "stderr": max_stderr_bytes}
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
     over: dict[str, bool] = {"stdout": False, "stderr": False}
@@ -527,12 +637,19 @@ def run_bounded_process(
         try:
             proc.stdin.write(input_bytes)
             proc.stdin.close()
-        except (OSError, ValueError):  # child exited or was killed before reading everything
+        except (
+            OSError,
+            ValueError,
+        ):  # child exited or was killed before reading everything
             pass
 
     threads = [
-        threading.Thread(target=pump, args=("stdout", proc.stdout), daemon=True),
-        threading.Thread(target=pump, args=("stderr", proc.stderr), daemon=True),
+        threading.Thread(
+            target=pump, args=("stdout", proc.stdout), daemon=True
+        ),
+        threading.Thread(
+            target=pump, args=("stderr", proc.stderr), daemon=True
+        ),
         threading.Thread(target=feed, daemon=True),
     ]
     for thread in threads:
@@ -551,7 +668,9 @@ def run_bounded_process(
                 _kill_process(proc)
                 break
             wake.wait(0.02)
-    except BaseException:  # e.g. KeyboardInterrupt: never leave the child running
+    except (
+        BaseException
+    ):  # e.g. KeyboardInterrupt: never leave the child running
         _kill_process(proc)
         raise
     finally:
@@ -566,7 +685,9 @@ def run_bounded_process(
             _join_within(threads, _CLEANUP_JOIN_S)
         # Cleanup is bounded (~2 * _CLEANUP_JOIN_S in total): a descendant that escaped the group and keeps an
         # inherited pipe open cannot hold us; its daemon thread is abandoned and the pipe is left unclosed.
-        if not any(thread.is_alive() for thread in threads):  # closing under a blocked reader would hang
+        if not any(
+            thread.is_alive() for thread in threads
+        ):  # closing under a blocked reader would hang
             for stream in (proc.stdin, proc.stdout, proc.stderr):
                 try:
                     stream.close()
@@ -578,7 +699,9 @@ def run_bounded_process(
             raise OutputLimitExceeded(name, data)
     if timed_out:
         raise subprocess.TimeoutExpired(list(cmd), timeout_s)
-    return BoundedProcessResult(stdout=stdout, stderr=stderr, returncode=proc.returncode)
+    return BoundedProcessResult(
+        stdout=stdout, stderr=stderr, returncode=proc.returncode
+    )
 
 
 class ClaudeCodeProvider:
@@ -623,7 +746,11 @@ class ClaudeCodeProvider:
             ("max_output_bytes", max_output_bytes),
             ("max_stderr_bytes", max_stderr_bytes),
         ):
-            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 1
+            ):
                 raise ValueError(f"{label} must be a positive integer")
         self.max_input_bytes = max_input_bytes
         self.model = model or "claude-code-default"
@@ -633,7 +760,9 @@ class ClaudeCodeProvider:
         self.max_output_bytes = max_output_bytes
         self.max_stderr_bytes = max_stderr_bytes
         # subprocess.run captures without a cap, so naming it explicitly selects the bounded path too
-        self._runner = None if runner is None or runner is subprocess.run else runner
+        self._runner = (
+            None if runner is None or runner is subprocess.run else runner
+        )
         self._popen = popen or subprocess.Popen
         self._clock = clock
 
@@ -655,13 +784,17 @@ class ClaudeCodeProvider:
         )
         prompt_bytes = prompt.encode("utf-8")
         if len(prompt_bytes) > self.max_input_bytes:
-            raise ProviderError("claude prompt exceeds the configured input limit")
+            raise ProviderError(
+                "claude prompt exceeds the configured input limit"
+            )
         timeout = min(self.timeout_s, request.params.timeout_s)
         token_bound = request.params.max_tokens * CLAUDE_MAX_BYTES_PER_TOKEN
         started = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="claude_research_") as cwd:
             try:
-                if self._runner is not None:  # injected subprocess.run-style double
+                if (
+                    self._runner is not None
+                ):  # injected subprocess.run-style double
                     proc = self._runner(
                         self.command(),
                         input=prompt_bytes,
@@ -677,31 +810,49 @@ class ClaudeCodeProvider:
                         input_bytes=prompt_bytes,
                         cwd=cwd,
                         timeout_s=timeout,
-                        max_stdout_bytes=min(self.max_output_bytes, token_bound),
+                        max_stdout_bytes=min(
+                            self.max_output_bytes, token_bound
+                        ),
                         max_stderr_bytes=self.max_stderr_bytes,
                         popen=self._popen,
                     )
             except subprocess.TimeoutExpired:
-                raise ProviderError("claude subprocess timed out", retryable=True) from None
+                raise ProviderError(
+                    "claude subprocess timed out", retryable=True
+                ) from None
             except OutputLimitExceeded as exc:
-                if exc.stream == "stdout" and token_bound < self.max_output_bytes:
+                if (
+                    exc.stream == "stdout"
+                    and token_bound < self.max_output_bytes
+                ):
                     raise IncompleteOutputError(
                         "claude output exceeds the requested max_tokens bound (the CLI does not enforce max_tokens)",
                         response_hash=exc.response_hash,
                     ) from None
                 raise
             except OSError as exc:
-                raise ProviderError(f"claude executable unavailable: {type(exc).__name__}") from None
+                raise ProviderError(
+                    f"claude executable unavailable: {type(exc).__name__}"
+                ) from None
         latency = time.monotonic() - started
-        stdout = proc.stdout if isinstance(proc.stdout, bytes) else str(proc.stdout or "").encode("utf-8")
+        stdout = (
+            proc.stdout
+            if isinstance(proc.stdout, bytes)
+            else str(proc.stdout or "").encode("utf-8")
+        )
         if len(stdout) > self.max_output_bytes:
             raise ProviderError("claude output exceeds the configured limit")
         response_hash = sha256_bytes(stdout)
         if proc.returncode != 0:
-            raise ProviderError(f"claude exited with status {proc.returncode}", response_hash=response_hash)
+            raise ProviderError(
+                f"claude exited with status {proc.returncode}",
+                response_hash=response_hash,
+            )
         text = stdout.decode("utf-8", "replace")
         if not text.strip():
-            raise ProviderError("claude returned empty output", response_hash=response_hash)
+            raise ProviderError(
+                "claude returned empty output", response_hash=response_hash
+            )
         if len(stdout) > request.params.max_tokens * CLAUDE_MAX_BYTES_PER_TOKEN:
             raise IncompleteOutputError(
                 "claude output exceeds the requested max_tokens bound (the CLI does not enforce max_tokens)",
@@ -781,7 +932,9 @@ class CallBudget:
     def reserve(self, est_tokens: int) -> int:
         with self._lock:
             if self.calls_used + 1 > self.max_calls:
-                raise BudgetExhausted(f"LLM call budget exhausted ({self.calls_used}/{self.max_calls})")
+                raise BudgetExhausted(
+                    f"LLM call budget exhausted ({self.calls_used}/{self.max_calls})"
+                )
             if self.tokens_used + est_tokens > self.max_tokens:
                 raise BudgetExhausted(
                     f"LLM token budget exhausted ({self.tokens_used}+{est_tokens}>{self.max_tokens})"
@@ -793,8 +946,14 @@ class CallBudget:
     def settle(self, reserved: int, actual: Optional[int]) -> None:
         if actual is None:
             return
-        if isinstance(actual, bool) or not isinstance(actual, int) or not 0 <= actual <= MAX_REPORTED_TOKENS:
-            raise ValueError("actual token usage must be an integer in [0, MAX_REPORTED_TOKENS]")
+        if (
+            isinstance(actual, bool)
+            or not isinstance(actual, int)
+            or not 0 <= actual <= MAX_REPORTED_TOKENS
+        ):
+            raise ValueError(
+                "actual token usage must be an integer in [0, MAX_REPORTED_TOKENS]"
+            )
         with self._lock:  # usage above the reservation is charged (overspend) and blocks later reserves
             self.tokens_used += actual - reserved
 
@@ -829,7 +988,9 @@ class CallRecord(StrictModel):
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     provider_is_mock: bool = False
-    ignored_params: list[str] = Field(default_factory=list)  # requested params the backend did not apply
+    ignored_params: list[str] = Field(
+        default_factory=list
+    )  # requested params the backend did not apply
     outcome: str = Field(pattern=r"^(valid|invalid)$")
 
     @field_validator("requested_at", "received_at")
@@ -870,14 +1031,20 @@ def parse_strict_json(text: str, max_chars: int = 500_000) -> dict[str, Any]:
         body = fenced.group(1).strip()
     if not body.startswith("{"):
         raise ValueError("output is not a single JSON object")
-    obj = json.loads(body, parse_constant=_reject_constant, object_pairs_hook=_no_duplicates)
+    obj = json.loads(
+        body, parse_constant=_reject_constant, object_pairs_hook=_no_duplicates
+    )
     if not isinstance(obj, dict):
         raise ValueError("output is not a JSON object")
     return obj
 
 
 def estimate_tokens(request: LLMRequest) -> int:
-    return request.params.max_tokens + (len(request.system) + len(request.user)) // 3 + 1
+    return (
+        request.params.max_tokens
+        + (len(request.system) + len(request.user)) // 3
+        + 1
+    )
 
 
 def call_structured(
@@ -901,14 +1068,23 @@ def call_structured(
         raise
     except PodPlatformError:
         raise
-    except Exception as exc:  # an unexpected provider crash must not leak as success
+    except (
+        Exception
+    ) as exc:  # an unexpected provider crash must not leak as success
         raise ProviderError(f"provider crashed: {type(exc).__name__}") from None
-    if not isinstance(response, LLMResponse) or not isinstance(response.text, str):
+    if not isinstance(response, LLMResponse) or not isinstance(
+        response.text, str
+    ):
         raise ProviderError("provider returned an invalid response object")
     actual = None  # unknown usage stays unknown: the reservation is kept, never "refunded" on a guess
-    if response.prompt_tokens is not None and response.completion_tokens is not None:
+    if (
+        response.prompt_tokens is not None
+        and response.completion_tokens is not None
+    ):
         actual = response.prompt_tokens + response.completion_tokens
-        if response.total_tokens is not None:  # never settle below what the provider says it billed
+        if (
+            response.total_tokens is not None
+        ):  # never settle below what the provider says it billed
             actual = max(actual, response.total_tokens)
     if budget:
         budget.settle(reserved, actual)
@@ -930,7 +1106,8 @@ def call_structured(
             latency_s=response.latency_s,
             prompt_tokens=response.prompt_tokens,
             completion_tokens=response.completion_tokens,
-            provider_is_mock=response.mock or getattr(provider, "is_mock", False),
+            provider_is_mock=response.mock
+            or getattr(provider, "is_mock", False),
             ignored_params=list(response.ignored_params),
             outcome=outcome,
         )
@@ -939,8 +1116,13 @@ def call_structured(
         value = schema.model_validate(parse_strict_json(response.text))
         if validator is not None:
             validator(value)
-    except ValueError as exc:  # includes JSONDecodeError and pydantic ValidationError
-        raise MalformedOutputError(f"invalid structured output: {str(exc)[:500]}", record=record("invalid")) from None
+    except (
+        ValueError
+    ) as exc:  # includes JSONDecodeError and pydantic ValidationError
+        raise MalformedOutputError(
+            f"invalid structured output: {str(exc)[:500]}",
+            record=record("invalid"),
+        ) from None
     return StructuredCall(value=value, record=record("valid"))
 
 
@@ -971,7 +1153,9 @@ class TemporalAuthorization:
             "label": self.label,
             "retrospective_only": self.retrospective_only,
             "checkpoint_id": self.checkpoint_id,
-            "model_released_at": self.model_released_at.isoformat() if self.model_released_at else None,
+            "model_released_at": self.model_released_at.isoformat()
+            if self.model_released_at
+            else None,
         }
 
 
@@ -1004,11 +1188,15 @@ def authorize_model_use(
     released: Optional[dt.datetime] = None
     if checkpoint_id is not None or mode == ResearchMode.HISTORICAL:
         if registry is None or not checkpoint_id:
-            raise temporal_error("historical research requires a registered checkpoint")
+            raise temporal_error(
+                "historical research requires a registered checkpoint"
+            )
         try:
             checkpoint = registry.checkpoint(checkpoint_id)
         except KeyError:
-            raise temporal_error(f"checkpoint {checkpoint_id} is not registered") from None
+            raise temporal_error(
+                f"checkpoint {checkpoint_id} is not registered"
+            ) from None
         if checkpoint.exact_model_id != provider.model:
             raise temporal_error(
                 f"provider model {provider.model!r} differs from checkpoint {checkpoint.exact_model_id!r}"
@@ -1024,9 +1212,19 @@ def authorize_model_use(
             if policy == TemporalPolicy.RELEASE_GATED
             else "historical_cutoff_qualified_backcast"
         )
-        return TemporalAuthorization(mode, asof, policy, label, False, checkpoint_id, released)
+        return TemporalAuthorization(
+            mode, asof, policy, label, False, checkpoint_id, released
+        )
     if asof < now_utc - contemporary_tolerance:
-        raise temporal_error("contemporary research must be stamped near the present; use historical mode")
+        raise temporal_error(
+            "contemporary research must be stamped near the present; use historical mode"
+        )
     return TemporalAuthorization(
-        mode, asof, policy, "contemporary_retrospective_only", True, checkpoint_id, released
+        mode,
+        asof,
+        policy,
+        "contemporary_retrospective_only",
+        True,
+        checkpoint_id,
+        released,
     )

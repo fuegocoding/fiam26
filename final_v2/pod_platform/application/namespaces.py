@@ -62,7 +62,14 @@ PERMISSIONS: dict[str, frozenset[str]] = {
         }
     ),
     ROLE_RESEARCH: frozenset(
-        {"runs.read", "research.read_all_jobs", "notes.append_role", "publication.read_all", "catalogue.search", "catalogue.describe"}
+        {
+            "runs.read",
+            "research.read_all_jobs",
+            "notes.append_role",
+            "publication.read_all",
+            "catalogue.search",
+            "catalogue.describe",
+        }
     ),
     ROLE_INTEGRITY: frozenset(
         {
@@ -78,10 +85,33 @@ PERMISSIONS: dict[str, frozenset[str]] = {
             "notes.append_role",
         }
     ),
-    ROLE_ALLOCATION: frozenset({"publication.read_all", "allocation.build", "runs.read", "notes.append_role"}),
-    ROLE_RISK: frozenset({"publication.read_all", "risk.review", "runs.read", "notes.append_role"}),
-    ROLE_EXECUTION: frozenset({"execution.plan", "accounting.post", "runs.read", "notes.append_role"}),
-    ROLE_REPORTING: frozenset({"publication.read_all", "reporting.build", "runs.read", "notes.append_role"}),
+    ROLE_ALLOCATION: frozenset(
+        {
+            "publication.read_all",
+            "allocation.build",
+            "runs.read",
+            "notes.append_role",
+        }
+    ),
+    ROLE_RISK: frozenset(
+        {
+            "publication.read_all",
+            "risk.review",
+            "runs.read",
+            "notes.append_role",
+        }
+    ),
+    ROLE_EXECUTION: frozenset(
+        {"execution.plan", "accounting.post", "runs.read", "notes.append_role"}
+    ),
+    ROLE_REPORTING: frozenset(
+        {
+            "publication.read_all",
+            "reporting.build",
+            "runs.read",
+            "notes.append_role",
+        }
+    ),
 }
 
 # actions where the target namespace must equal the caller's own namespace
@@ -116,10 +146,17 @@ class RoleContext:
             raise ValueError(f"unknown caller_role {self.caller_role!r}")
         if not _NAMESPACE.match(self.namespace or ""):
             raise ValueError(f"invalid namespace {self.namespace!r}")
-        if self.caller_role != ROLE_STRATEGY and self.namespace != self.caller_role:
-            raise ValueError("a non-strategy role runs in the namespace named after the role")
+        if (
+            self.caller_role != ROLE_STRATEGY
+            and self.namespace != self.caller_role
+        ):
+            raise ValueError(
+                "a non-strategy role runs in the namespace named after the role"
+            )
         require_aware(self.research_asof, "research_asof")
-        unknown = [p for p in self.allowed_partitions if p not in KNOWN_PARTITIONS]
+        unknown = [
+            p for p in self.allowed_partitions if p not in KNOWN_PARTITIONS
+        ]
         if unknown:
             raise ValueError(f"unknown partitions: {unknown}")
         if not self.run_id:
@@ -143,20 +180,40 @@ class RoleGateway:
     def __init__(self, permissions: Optional[dict[str, frozenset[str]]] = None):
         self._permissions = dict(permissions or PERMISSIONS)
 
-    def allowed(self, ctx: RoleContext, action: str, namespace: Optional[str] = None) -> bool:
+    def allowed(
+        self, ctx: RoleContext, action: str, namespace: Optional[str] = None
+    ) -> bool:
         actions = self._permissions.get(ctx.caller_role, frozenset())
         if action not in actions:
             return False
-        if action in OWN_NAMESPACE_ACTIONS and namespace is not None and namespace != ctx.namespace:
+        if (
+            action in OWN_NAMESPACE_ACTIONS
+            and namespace is not None
+            and namespace != ctx.namespace
+        ):
             return False
         return True
 
-    def authorize(self, ctx: RoleContext, action: str, namespace: Optional[str] = None) -> None:
+    def authorize(
+        self, ctx: RoleContext, action: str, namespace: Optional[str] = None
+    ) -> None:
         if not isinstance(ctx, RoleContext):
-            fail(ErrorCode.PARTITION_ACCESS_DENIED, "a trusted RoleContext is required", "Identity is injected by the host.")
-        known = set().union(*self._permissions.values()) if self._permissions else set()
+            fail(
+                ErrorCode.PARTITION_ACCESS_DENIED,
+                "a trusted RoleContext is required",
+                "Identity is injected by the host.",
+            )
+        known = (
+            set().union(*self._permissions.values())
+            if self._permissions
+            else set()
+        )
         if action not in known:
-            fail(ErrorCode.PARTITION_ACCESS_DENIED, f"unknown action {action!r}", "Unknown actions are denied.")
+            fail(
+                ErrorCode.PARTITION_ACCESS_DENIED,
+                f"unknown action {action!r}",
+                "Unknown actions are denied.",
+            )
         if not self.allowed(ctx, action, namespace):
             fail(
                 ErrorCode.PARTITION_ACCESS_DENIED,
@@ -176,33 +233,63 @@ class WorkspaceStore:
     content fails) and carry a payload hash that is re-verified on every read.
     """
 
-    def __init__(self, root: "str | Path", gateway: Optional[RoleGateway] = None):
+    def __init__(
+        self, root: "str | Path", gateway: Optional[RoleGateway] = None
+    ):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.gateway = gateway or RoleGateway()
 
     def _path(self, namespace: str, name: str) -> Path:
         if not _NAMESPACE.match(namespace or ""):
-            fail(ErrorCode.SCHEMA_MISMATCH, f"invalid namespace {namespace!r}", "Namespaces are plain lower-case tokens.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"invalid namespace {namespace!r}",
+                "Namespaces are plain lower-case tokens.",
+            )
         if not _FILE_NAME.match(name or ""):
-            fail(ErrorCode.SCHEMA_MISMATCH, f"invalid workspace file name {name!r}", "Names are plain *.json file names.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"invalid workspace file name {name!r}",
+                "Names are plain *.json file names.",
+            )
         return self.root / namespace / name
 
-    def write_json(self, ctx: RoleContext, namespace: str, name: str, obj: Any) -> dict[str, str]:
+    def write_json(
+        self, ctx: RoleContext, namespace: str, name: str, obj: Any
+    ) -> dict[str, str]:
         self.gateway.authorize(ctx, "workspace.write_own", namespace)
         target = self._path(namespace, name)
         payload_hash = digest(obj)
         if target.exists():
             stored = read_json(target)
             if stored.get("payload_sha256") == payload_hash:
-                return {"namespace": namespace, "name": name, "sha256": payload_hash, "path": str(target)}
+                return {
+                    "namespace": namespace,
+                    "name": name,
+                    "sha256": payload_hash,
+                    "path": str(target),
+                }
             fail(
                 ErrorCode.SCHEMA_MISMATCH,
                 f"workspace file {namespace}/{name} already exists with different content",
                 "Staged artifacts are immutable; write a new name for a new version.",
             )
-        atomic_write_json(target, {"namespace": namespace, "name": name, "payload": obj, "payload_sha256": payload_hash})
-        return {"namespace": namespace, "name": name, "sha256": payload_hash, "path": str(target)}
+        atomic_write_json(
+            target,
+            {
+                "namespace": namespace,
+                "name": name,
+                "payload": obj,
+                "payload_sha256": payload_hash,
+            },
+        )
+        return {
+            "namespace": namespace,
+            "name": name,
+            "sha256": payload_hash,
+            "path": str(target),
+        }
 
     def read_json(self, ctx: RoleContext, namespace: str, name: str) -> Any:
         if ctx.caller_role == ROLE_STRATEGY:
@@ -211,11 +298,20 @@ class WorkspaceStore:
             self.gateway.authorize(ctx, "workspace.read_any", namespace)
         target = self._path(namespace, name)
         if not target.is_file():
-            fail(ErrorCode.SCHEMA_MISMATCH, f"no workspace file {namespace}/{name}", "Nothing was staged under that name.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"no workspace file {namespace}/{name}",
+                "Nothing was staged under that name.",
+            )
         stored = read_json(target)
-        if stored.get("namespace") != namespace or digest(stored.get("payload")) != stored.get("payload_sha256"):
-            fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"workspace file {namespace}/{name} failed its hash",
-                 "A damaged private artifact is not trusted.")
+        if stored.get("namespace") != namespace or digest(
+            stored.get("payload")
+        ) != stored.get("payload_sha256"):
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"workspace file {namespace}/{name} failed its hash",
+                "A damaged private artifact is not trusted.",
+            )
         return stored["payload"]
 
     def exists(self, namespace: str, name: str) -> bool:
@@ -230,4 +326,8 @@ class WorkspaceStore:
         folder = self.root / namespace
         if not folder.is_dir():
             return []
-        return sorted(p.name for p in folder.iterdir() if p.is_file() and _FILE_NAME.match(p.name))
+        return sorted(
+            p.name
+            for p in folder.iterdir()
+            if p.is_file() and _FILE_NAME.match(p.name)
+        )

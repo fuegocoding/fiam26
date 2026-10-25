@@ -40,7 +40,10 @@ class AvailabilityRule(DurableModel):
     def _check(self) -> "AvailabilityRule":
         if self.earliest_start is not None:
             require_aware(self.earliest_start, "earliest_start")
-        if self.rule_kind == RuleKind.PERIOD_END_PLUS_LAG and self.lag_days == 0:
+        if (
+            self.rule_kind == RuleKind.PERIOD_END_PLUS_LAG
+            and self.lag_days == 0
+        ):
             raise ValueError("period_end_plus_lag requires a positive lag")
         return self
 
@@ -54,7 +57,9 @@ def compute_available_at(
 ) -> dt.datetime:
     if rule.rule_kind == RuleKind.SOURCE_PUBLICATION:
         if source_published_at is None:
-            raise ValueError("source_publication rule requires source_published_at")
+            raise ValueError(
+                "source_publication rule requires source_published_at"
+            )
         return require_aware(source_published_at, "source_published_at")
     if rule.rule_kind == RuleKind.PERIOD_END_PLUS_LAG:
         if period_end is None:
@@ -62,5 +67,7 @@ def compute_available_at(
         period_end = require_aware(period_end, "period_end")
         return period_end + dt.timedelta(days=rule.lag_days)
     if platform_delivered_at is None:
-        raise ValueError("platform_delivery rule requires platform_delivered_at")
+        raise ValueError(
+            "platform_delivery rule requires platform_delivered_at"
+        )
     return require_aware(platform_delivered_at, "platform_delivered_at")

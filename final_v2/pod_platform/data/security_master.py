@@ -2,6 +2,22 @@
 
 from __future__ import annotations
 
+import re
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+try:
+    import pyarrow.dataset as ds
+except ImportError:
+    ds = None
+try:
+    import pyarrow.parquet as pq
+except ImportError:
+    pq = None
+
+
 import datetime as dt
 import enum
 from typing import Optional
@@ -48,7 +64,10 @@ class IdentifierLink(DurableModel):
         require_aware(self.first_known_at, "first_known_at")
         if self.valid_to <= self.valid_from:
             raise ValueError("valid_to must lie after valid_from")
-        if self.resolution_state in (ResolutionState.EXACT_DATED, ResolutionState.REVIEWED_DATED):
+        if self.resolution_state in (
+            ResolutionState.EXACT_DATED,
+            ResolutionState.REVIEWED_DATED,
+        ):
             if not self.evidence_id:
                 raise ValueError("a dated resolution requires evidence")
         return self
@@ -82,7 +101,8 @@ class MappingProposal(StrictModel):
     @property
     def admissible_for_formation(self) -> bool:
         return (
-            self.review_status in (ResolutionState.EXACT_DATED, ResolutionState.REVIEWED_DATED)
+            self.review_status
+            in (ResolutionState.EXACT_DATED, ResolutionState.REVIEWED_DATED)
             and len(self.candidate_security_ids) == 1
         )
 
@@ -123,7 +143,8 @@ class SecurityMaster:
         usable = [
             link
             for link in links
-            if link.resolution_state in (ResolutionState.EXACT_DATED, ResolutionState.REVIEWED_DATED)
+            if link.resolution_state
+            in (ResolutionState.EXACT_DATED, ResolutionState.REVIEWED_DATED)
         ]
         if not links:
             raise PodPlatformError(
@@ -168,7 +189,8 @@ class SecurityMaster:
         at = require_aware(at, "at")
         return any(
             link.security_id == security_id
-            and link.resolution_state in (ResolutionState.EXACT_DATED, ResolutionState.REVIEWED_DATED)
+            and link.resolution_state
+            in (ResolutionState.EXACT_DATED, ResolutionState.REVIEWED_DATED)
             and link.valid_at(at)
             and link.known_by(at)
             for link in self._links.values()
@@ -192,8 +214,21 @@ LABEL_COLUMNS = [
 
 
 def _cover_symbol(text: str) -> Optional[str]:
-    import re
-    not_sym = {"LLC", "INC", "THE", "NYSE", "PAR", "USD", "N/A", "NONE", "ADS", "ADR", "CLASS", "A", "B"}
+    not_sym = {
+        "LLC",
+        "INC",
+        "THE",
+        "NYSE",
+        "PAR",
+        "USD",
+        "N/A",
+        "NONE",
+        "ADS",
+        "ADR",
+        "CLASS",
+        "A",
+        "B",
+    }
     tbl = re.search(r"Trading\s+Symbol", text[:6000], re.I)
     if not tbl:
         return None
@@ -209,13 +244,20 @@ def _cover_symbol(text: str) -> Optional[str]:
 
 def load_formation_fields(panel_path, filings_path=None) -> "pd.DataFrame":
     """Loads formation fields with point-in-time verified ticker and company_name labels."""
-    import pandas as pd
-    import pyarrow.dataset as ds
-    import pyarrow.parquet as pq
+    if pd is None or ds is None or pq is None:
+        raise ImportError("Formation-field loading requires pandas and pyarrow")
 
     cols = [
-        "permno", "permco", "eom", "prc", "me", "size_grp",
-        "dolvol_126d", "gics", "beta_60m", *LABEL_COLUMNS,
+        "permno",
+        "permco",
+        "eom",
+        "prc",
+        "me",
+        "size_grp",
+        "dolvol_126d",
+        "gics",
+        "beta_60m",
+        *LABEL_COLUMNS,
     ]
     panel = pq.read_table(panel_path, columns=cols).to_pandas()
     panel["eom_ts"] = pd.to_datetime(panel["eom"])
@@ -230,7 +272,12 @@ def load_formation_fields(panel_path, filings_path=None) -> "pd.DataFrame":
     panel.loc[future, "ticker_name_status"] = UNVERIFIED_LABEL
 
     if filings_path is not None:
-        p_sorted = panel[["permno", "eom_ts", *LABEL_COLUMNS]].rename(columns={"eom_ts": "eom"}).sort_values(["permno", "eom"]).reset_index(drop=True)
+        p_sorted = (
+            panel[["permno", "eom_ts", *LABEL_COLUMNS]]
+            .rename(columns={"eom_ts": "eom"})
+            .sort_values(["permno", "eom"])
+            .reset_index(drop=True)
+        )
         r_sorted = pd.to_datetime(p_sorted["ticker_name_reference_date"])
         verified = (
             p_sorted["ticker"].notna()
@@ -242,19 +289,31 @@ def load_formation_fields(panel_path, filings_path=None) -> "pd.DataFrame":
         known = p_sorted[["ticker", "company_name"]].where(verified)
         known["label_date"] = r_sorted.where(verified)
         known["permno"] = p_sorted["permno"]
-        known = known.groupby("permno")[["ticker", "company_name", "label_date"]].ffill()
+        known = known.groupby("permno")[
+            ["ticker", "company_name", "label_date"]
+        ].ffill()
         need = ~verified
         carried = p_sorted.loc[need, ["permno", "eom"]].join(known.loc[need])
         age = (carried["eom"] - carried["label_date"]).dt.days
-        carried = carried[carried["label_date"].notna() & (age <= MAX_LABEL_AGE_DAYS)]
+        carried = carried[
+            carried["label_date"].notna() & (age <= MAX_LABEL_AGE_DAYS)
+        ]
         if not carried.empty:
             since = carried["label_date"].min()
             filings = (
                 ds.dataset(filings_path)
                 .to_table(
                     filter=(ds.field("filing_date") >= since.date())
-                    & ds.field("permno").isin(carried["permno"].unique().tolist()),
-                    columns=["permno", "filing_date", "text", "company_name", "document_id"],
+                    & ds.field("permno").isin(
+                        carried["permno"].unique().tolist()
+                    ),
+                    columns=[
+                        "permno",
+                        "filing_date",
+                        "text",
+                        "company_name",
+                        "document_id",
+                    ],
                 )
                 .to_pandas()
             )
@@ -263,8 +322,12 @@ def load_formation_fields(panel_path, filings_path=None) -> "pd.DataFrame":
             filings["filing_date"] = pd.to_datetime(filings["filing_date"])
             filings = filings.rename(columns={"company_name": "sec_name"})
             out = pd.merge_asof(
-                carried.assign(eom=carried["eom"].astype("datetime64[ns]")).sort_values("eom"),
-                filings.assign(filing_date=filings["filing_date"].astype("datetime64[ns]")).sort_values("filing_date"),
+                carried.assign(
+                    eom=carried["eom"].astype("datetime64[ns]")
+                ).sort_values("eom"),
+                filings.assign(
+                    filing_date=filings["filing_date"].astype("datetime64[ns]")
+                ).sort_values("filing_date"),
                 left_on="eom",
                 right_on="filing_date",
                 by="permno",
@@ -277,15 +340,30 @@ def load_formation_fields(panel_path, filings_path=None) -> "pd.DataFrame":
             )
             label_day = out["label_date"].dt.strftime("%Y-%m-%d")
             doc = out["document_id"].astype(str)
-            out["company_name"] = out["company_name"].where(~cover, out["sec_name"])
+            out["company_name"] = out["company_name"].where(
+                ~cover, out["sec_name"]
+            )
             out["ticker_name_status"] = CARRIED_LABEL
             out.loc[cover, "ticker_name_status"] = COVER_LABEL
-            out["ticker_name_reference_date"] = out["label_date"].where(~cover, out["filing_date"])
+            out["ticker_name_reference_date"] = out["label_date"].where(
+                ~cover, out["filing_date"]
+            )
             out["ticker_name_source"] = "panel verified label of " + label_day
-            out.loc[cover, "ticker_name_source"] = "8-K cover trading symbol, document " + doc
-            found = out[["permno", "eom", *LABEL_COLUMNS]].rename(columns={"eom": "eom_ts"})
-            panel = panel.merge(found, on=["permno", "eom_ts"], how="left", suffixes=("", "_verified"))
-            fill = panel["ticker_verified"].notna() & panel["ticker_name_status"].eq(UNVERIFIED_LABEL)
+            out.loc[cover, "ticker_name_source"] = (
+                "8-K cover trading symbol, document " + doc
+            )
+            found = out[["permno", "eom", *LABEL_COLUMNS]].rename(
+                columns={"eom": "eom_ts"}
+            )
+            panel = panel.merge(
+                found,
+                on=["permno", "eom_ts"],
+                how="left",
+                suffixes=("", "_verified"),
+            )
+            fill = panel["ticker_verified"].notna() & panel[
+                "ticker_name_status"
+            ].eq(UNVERIFIED_LABEL)
             for col in LABEL_COLUMNS:
                 vals = panel[col].astype(object)
                 vals[fill] = panel.loc[fill, col + "_verified"]
@@ -294,4 +372,3 @@ def load_formation_fields(panel_path, filings_path=None) -> "pd.DataFrame":
                 panel[col] = vals
                 panel = panel.drop(columns=[col + "_verified"])
     return panel.drop(columns=["eom_ts"])
-

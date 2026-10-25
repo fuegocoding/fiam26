@@ -5,7 +5,9 @@ import pandas as pd
 GRAPH_WEIGHT = 0.05
 
 
-def company_forecasts(forecasts: pd.DataFrame, formation: pd.DataFrame) -> pd.DataFrame:
+def company_forecasts(
+    forecasts: pd.DataFrame, formation: pd.DataFrame
+) -> pd.DataFrame:
     """Next-month graph forecasts keyed by return month and company.
 
     Args:
@@ -15,7 +17,9 @@ def company_forecasts(forecasts: pd.DataFrame, formation: pd.DataFrame) -> pd.Da
     Returns:
         Frame with return_month, permco and graph_attention_eps.
     """
-    graph = forecasts[["permno", "eom", "target_month", "graph_attention_eps"]].copy()
+    graph = forecasts[
+        ["permno", "eom", "target_month", "graph_attention_eps"]
+    ].copy()
     graph["eom"] = pd.to_datetime(graph.eom).dt.to_period("M")
     graph["return_month"] = pd.to_datetime(graph.target_month).dt.to_period("M")
     graph = graph.loc[graph.return_month.eq(graph.eom + 1)].copy()

@@ -4,7 +4,13 @@ Use ``register_executors(registry)`` (optionally via ``run_pod_research.py --exe
 pod_platform.research.builtins``). Datasets come only from an operator manifest (``POD_DATASET_MANIFEST``).
 """
 
-from .catalog import RECIPES, RECIPES_BY_CHARTER, Recipe, VariantConfig, parse_variant_params
+from .catalog import (
+    RECIPES,
+    RECIPES_BY_CHARTER,
+    Recipe,
+    VariantConfig,
+    parse_variant_params,
+)
 from .errors import (
     BuiltinConfigError,
     DataIntegrityError,

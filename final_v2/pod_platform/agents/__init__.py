@@ -1,6 +1,11 @@
 """Agent-layer exports (bounded C1 scope)."""
 
-from .extractor import ExtractionRecord, ExtractorCache, SchemaExtractor, cache_key
+from .extractor import (
+    ExtractionRecord,
+    ExtractorCache,
+    SchemaExtractor,
+    cache_key,
+)
 from .registry import (
     AdoptionRecord,
     CutoffEvidence,

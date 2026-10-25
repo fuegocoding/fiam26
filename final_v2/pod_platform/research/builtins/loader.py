@@ -8,6 +8,12 @@ declared schema, identity, finiteness, month-end, bounds or feature-availability
 
 from __future__ import annotations
 
+try:
+    import pyarrow.parquet as pq
+except ImportError:
+    pq = None
+
+
 import csv
 import datetime as dt
 import hashlib
@@ -18,12 +24,20 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from ...contracts.base import require_aware
-from .errors import BuiltinConfigError, DataIntegrityError, DependencyUnavailable, EvidenceInsufficient, PartitionDenied
+from .errors import (
+    BuiltinConfigError,
+    DataIntegrityError,
+    DependencyUnavailable,
+    EvidenceInsufficient,
+    PartitionDenied,
+)
 from .manifest import DESIGN, ApprovedDataset, ColumnSpec
 from .timeutil import end_of_day, is_month_end, month_index
 
 MISSING_TOKENS = frozenset({"", "nan", "na", "n/a", "null", "none"})
-_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:[ T]00:00:00(?:\.0+)?(?:Z|\+00:00)?)?$")
+_DATE_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})(?:[ T]00:00:00(?:\.0+)?(?:Z|\+00:00)?)?$"
+)
 _HASH_CACHE: dict[tuple[str, int, int], str] = {}
 
 
@@ -67,7 +81,11 @@ def parse_date(value: Any, where: str) -> dt.date:
         match = _DATE_RE.match(value.strip())
         if match:
             try:
-                return dt.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+                return dt.date(
+                    int(match.group(1)),
+                    int(match.group(2)),
+                    int(match.group(3)),
+                )
             except ValueError:
                 pass
     raise DataIntegrityError(f"{where}: unparseable or missing date {value!r}")
@@ -84,11 +102,15 @@ def _normalise_security(value: Any, where: str) -> str:
     return text
 
 
-def _parse_float(value: Any, name: str, spec: ColumnSpec, where: str) -> Optional[float]:
+def _parse_float(
+    value: Any, name: str, spec: ColumnSpec, where: str
+) -> Optional[float]:
     if value is None:
         out: Optional[float] = None
     elif isinstance(value, bool):
-        raise DataIntegrityError(f"{where}: column {name} holds a boolean, not a number")
+        raise DataIntegrityError(
+            f"{where}: column {name} holds a boolean, not a number"
+        )
     elif isinstance(value, (int, float)):
         out = float(value)
     elif isinstance(value, str):
@@ -99,12 +121,16 @@ def _parse_float(value: Any, name: str, spec: ColumnSpec, where: str) -> Optiona
             try:
                 out = float(token)
             except ValueError:
-                raise DataIntegrityError(f"{where}: column {name} has non-numeric value {token[:30]!r}") from None
+                raise DataIntegrityError(
+                    f"{where}: column {name} has non-numeric value {token[:30]!r}"
+                ) from None
     else:
         try:
             out = float(value)
         except (TypeError, ValueError):
-            raise DataIntegrityError(f"{where}: column {name} has unsupported value type {type(value).__name__}") from None
+            raise DataIntegrityError(
+                f"{where}: column {name} has unsupported value type {type(value).__name__}"
+            ) from None
     if out is not None:
         if math.isnan(out):
             out = None
@@ -112,16 +138,24 @@ def _parse_float(value: Any, name: str, spec: ColumnSpec, where: str) -> Optiona
             raise DataIntegrityError(f"{where}: column {name} is not finite")
     if out is None:
         if not spec.allow_missing:
-            raise DataIntegrityError(f"{where}: column {name} is missing but declared allow_missing=false")
+            raise DataIntegrityError(
+                f"{where}: column {name} is missing but declared allow_missing=false"
+            )
         return None
     if spec.min_value is not None and out < spec.min_value:
-        raise DataIntegrityError(f"{where}: column {name}={out} below declared minimum {spec.min_value}")
+        raise DataIntegrityError(
+            f"{where}: column {name}={out} below declared minimum {spec.min_value}"
+        )
     if spec.max_value is not None and out > spec.max_value:
-        raise DataIntegrityError(f"{where}: column {name}={out} above declared maximum {spec.max_value}")
+        raise DataIntegrityError(
+            f"{where}: column {name}={out} above declared maximum {spec.max_value}"
+        )
     return out
 
 
-def _parse_text(value: Any, name: str, spec: ColumnSpec, where: str) -> Optional[str]:
+def _parse_text(
+    value: Any, name: str, spec: ColumnSpec, where: str
+) -> Optional[str]:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         out = None
     else:
@@ -129,11 +163,15 @@ def _parse_text(value: Any, name: str, spec: ColumnSpec, where: str) -> Optional
             value = int(value)
         out = str(value).strip() or None
     if out is None and not spec.allow_missing:
-        raise DataIntegrityError(f"{where}: column {name} is missing but declared allow_missing=false")
+        raise DataIntegrityError(
+            f"{where}: column {name} is missing but declared allow_missing=false"
+        )
     return out
 
 
-def _iter_csv(path: Path, names: list[str]) -> Iterator[tuple[int, dict[str, Any]]]:
+def _iter_csv(
+    path: Path, names: list[str]
+) -> Iterator[tuple[int, dict[str, Any]]]:
     with open(path, "r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle)
         try:
@@ -141,41 +179,61 @@ def _iter_csv(path: Path, names: list[str]) -> Iterator[tuple[int, dict[str, Any
         except StopIteration:
             raise DataIntegrityError("csv file is empty") from None
         if len(set(header)) != len(header):
-            raise DataIntegrityError("csv header contains duplicate column names")
+            raise DataIntegrityError(
+                "csv header contains duplicate column names"
+            )
         missing = [n for n in names if n not in header]
         if missing:
-            raise DataIntegrityError(f"required columns missing from file: {missing}")
+            raise DataIntegrityError(
+                f"required columns missing from file: {missing}"
+            )
         pos = {n: header.index(n) for n in names}
         for line_no, row in enumerate(reader, start=2):
             if not row:
                 continue
             if len(row) != len(header):
-                raise DataIntegrityError(f"row {line_no} has {len(row)} fields but the header has {len(header)}")
+                raise DataIntegrityError(
+                    f"row {line_no} has {len(row)} fields but the header has {len(header)}"
+                )
             yield line_no, {n: row[i] for n, i in pos.items()}
 
 
-def _time_filter(pa_type: Any, column: str, end: dt.date) -> Optional[list[tuple[str, str, Any]]]:
+def _time_filter(
+    pa_type: Any, column: str, end: dt.date
+) -> Optional[list[tuple[str, str, Any]]]:
     text = str(pa_type)
     if text.startswith("timestamp"):
         if "tz=" in text:
             return [(column, "<=", end_of_day(end))]
-        return [(column, "<=", dt.datetime.combine(end, dt.time(23, 59, 59, 999999)))]
+        return [
+            (
+                column,
+                "<=",
+                dt.datetime.combine(end, dt.time(23, 59, 59, 999999)),
+            )
+        ]
     if text.startswith("date"):
         return [(column, "<=", end)]
     if text in ("string", "large_string"):
-        return [(column, "<=", end.isoformat() + "~")]  # '~' sorts after any time suffix
+        return [
+            (column, "<=", end.isoformat() + "~")
+        ]  # '~' sorts after any time suffix
     return None
 
 
-def _read_parquet(path: Path, names: list[str], time_column: str, end: dt.date) -> dict[str, list]:
-    try:
-        import pyarrow.parquet as pq  # lazy: core tests and CSV datasets never need it
-    except ImportError as exc:
-        raise DependencyUnavailable("parquet datasets require pyarrow, which is not installed") from exc
+def _read_parquet(
+    path: Path, names: list[str], time_column: str, end: dt.date
+) -> dict[str, list]:
+    if pq is None:
+        raise DependencyUnavailable(
+            "parquet datasets require pyarrow, which is not installed"
+        )
     schema = pq.read_schema(str(path))
     missing = [n for n in names if n not in schema.names]
     if missing:
-        raise DataIntegrityError(f"required columns missing from file: {missing}")
+        raise DataIntegrityError(
+            f"required columns missing from file: {missing}"
+        )
     filters = _time_filter(schema.field(time_column).type, time_column, end)
     table = None
     if filters is not None:
@@ -188,7 +246,9 @@ def _read_parquet(path: Path, names: list[str], time_column: str, end: dt.date) 
     return table.to_pydict()
 
 
-def _iter_parquet(path: Path, names: list[str], time_column: str, end: dt.date) -> Iterator[tuple[int, dict[str, Any]]]:
+def _iter_parquet(
+    path: Path, names: list[str], time_column: str, end: dt.date
+) -> Iterator[tuple[int, dict[str, Any]]]:
     cols = _read_parquet(path, names, time_column, end)
     count = len(cols[names[0]])
     for i in range(count):
@@ -204,7 +264,9 @@ def load_panel(
 ) -> Panel:
     """Materialize the requested declared columns for the design window of an approved dataset."""
     if partition != DESIGN:
-        raise PartitionDenied(f"PARTITION_ACCESS_DENIED: built-in executors may only read the design partition, not {partition!r}")
+        raise PartitionDenied(
+            f"PARTITION_ACCESS_DENIED: built-in executors may only read the design partition, not {partition!r}"
+        )
     research_asof = require_aware(research_asof, "research_asof")
     spec = dataset.spec
     start, end = dataset.design_window
@@ -214,14 +276,18 @@ def load_panel(
         )
     undeclared = sorted(c for c in columns if c not in spec.columns)
     if undeclared:
-        raise BuiltinConfigError(f"columns not declared by the operator manifest (no silent substitution): {undeclared}")
+        raise BuiltinConfigError(
+            f"columns not declared by the operator manifest (no silent substitution): {undeclared}"
+        )
     wanted = sorted(set(columns))
     if spec.availability.column and spec.availability.column not in wanted:
         wanted.append(spec.availability.column)
     names = [spec.security_column, spec.time_column] + wanted
     sha = file_sha256(dataset.path)
     if spec.sha256 is not None and spec.sha256 != sha:
-        raise BuiltinConfigError("dataset file hash does not match the sha256 declared in the operator manifest")
+        raise BuiltinConfigError(
+            "dataset file hash does not match the sha256 declared in the operator manifest"
+        )
 
     iterator = (
         _iter_csv(dataset.path, names)
@@ -233,7 +299,9 @@ def load_panel(
         if spec.columns[name].dtype == "float":
             panel.num[name] = []
         else:
-            panel.text[name] = []  # str columns, and date columns kept only as ISO text when requested
+            panel.text[
+                name
+            ] = []  # str columns, and date columns kept only as ISO text when requested
     seen: dict[tuple[str, int], int] = {}
     rows_read = before = after = excluded = 0
     for line_no, rec in iterator:
@@ -247,12 +315,16 @@ def load_panel(
             before += 1
             continue
         if not is_month_end(day):
-            raise DataIntegrityError(f"{where}: {spec.time_column}={day.isoformat()} is not a month-end (frequency is monthly)")
+            raise DataIntegrityError(
+                f"{where}: {spec.time_column}={day.isoformat()} is not a month-end (frequency is monthly)"
+            )
         security = _normalise_security(rec[spec.security_column], where)
         idx = month_index(day)
         key = (security, idx)
         if key in seen:
-            raise DataIntegrityError(f"duplicate identity {security} @ {day.isoformat()} at rows {seen[key]} and {line_no}")
+            raise DataIntegrityError(
+                f"duplicate identity {security} @ {day.isoformat()} at rows {seen[key]} and {line_no}"
+            )
         seen[key] = line_no
         parsed_num: dict[str, Optional[float]] = {}
         parsed_text: dict[str, Optional[str]] = {}
@@ -262,12 +334,19 @@ def load_panel(
                 parsed_num[name] = _parse_float(rec[name], name, cspec, where)
             elif cspec.dtype == "date":
                 raw = rec[name]
-                if raw is None or (isinstance(raw, str) and raw.strip().lower() in MISSING_TOKENS):
+                if raw is None or (
+                    isinstance(raw, str)
+                    and raw.strip().lower() in MISSING_TOKENS
+                ):
                     if not cspec.allow_missing:
-                        raise DataIntegrityError(f"{where}: column {name} is missing but declared allow_missing=false")
+                        raise DataIntegrityError(
+                            f"{where}: column {name} is missing but declared allow_missing=false"
+                        )
                     parsed_text[name] = None
                 else:
-                    parsed_text[name] = parse_date(raw, f"{where}: {name}").isoformat()
+                    parsed_text[name] = parse_date(
+                        raw, f"{where}: {name}"
+                    ).isoformat()
             else:
                 parsed_text[name] = _parse_text(rec[name], name, cspec, where)
         if spec.availability.column:
@@ -289,9 +368,15 @@ def load_panel(
         for name, value in parsed_text.items():
             panel.text[name].append(value)
         if len(panel.security) > spec.evaluation.max_rows:
-            raise DataIntegrityError(f"more than max_rows={spec.evaluation.max_rows} rows inside the design window")
-    if panel.date and max(panel.date) > end:  # defence in depth: must be unreachable
-        raise PartitionDenied("PARTITION_ACCESS_DENIED: a row beyond the design window reached the panel")
+            raise DataIntegrityError(
+                f"more than max_rows={spec.evaluation.max_rows} rows inside the design window"
+            )
+    if (
+        panel.date and max(panel.date) > end
+    ):  # defence in depth: must be unreachable
+        raise PartitionDenied(
+            "PARTITION_ACCESS_DENIED: a row beyond the design window reached the panel"
+        )
     for row, (security, idx) in enumerate(zip(panel.security, panel.month)):
         panel.rows_by_month.setdefault(idx, []).append(row)
         panel.row_index[(security, idx)] = row

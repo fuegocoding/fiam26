@@ -21,3 +21,18 @@ include = ["pod_platform*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 80
+exclude = ["artifacts", ".pod_state"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "PLC0415"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLC0415"]
+"scripts/carbonarc/test_*.py" = ["PLC0415"]

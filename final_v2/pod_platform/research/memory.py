@@ -14,13 +14,18 @@ from __future__ import annotations
 import datetime as dt
 import json
 import math
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..contracts.base import canonical_digest, require_aware
-from .jobs import NAMESPACE_RE, IdempotencyConflict, QueueError, open_sqlite, utc_now
+from .jobs import (
+    NAMESPACE_RE,
+    IdempotencyConflict,
+    QueueError,
+    open_sqlite,
+    utc_now,
+)
 
 KINDS = ("draft_proposal", "failure_note", "evaluated_result", "note")
 EVALUATED_REQUIRED = ("registration_id", "executor_id", "metrics")
@@ -77,12 +82,21 @@ class PodMemory:
         self._clock = clock
         with open_sqlite(self.path) as conn:
             conn.executescript(_SCHEMA)
-            row = conn.execute("SELECT v FROM meta WHERE k = 'namespace'").fetchone()
+            row = conn.execute(
+                "SELECT v FROM meta WHERE k = 'namespace'"
+            ).fetchone()
             if row is None:
-                conn.execute("INSERT OR IGNORE INTO meta VALUES ('namespace', ?)", (namespace,))
-                row = conn.execute("SELECT v FROM meta WHERE k = 'namespace'").fetchone()
+                conn.execute(
+                    "INSERT OR IGNORE INTO meta VALUES ('namespace', ?)",
+                    (namespace,),
+                )
+                row = conn.execute(
+                    "SELECT v FROM meta WHERE k = 'namespace'"
+                ).fetchone()
             if row[0] != namespace:
-                raise QueueError(f"memory file is bound to namespace {row[0]!r}, not {namespace!r}")
+                raise QueueError(
+                    f"memory file is bound to namespace {row[0]!r}, not {namespace!r}"
+                )
 
     @staticmethod
     def _row(namespace: str, row: tuple) -> MemoryEntry:
@@ -98,7 +112,9 @@ class PodMemory:
             idempotency_key=row[4],
             content=content,
             content_hash=row[6],
-            created_at=dt.datetime.strptime(row[7], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=dt.timezone.utc),
+            created_at=dt.datetime.strptime(
+                row[7], "%Y-%m-%dT%H:%M:%S.%fZ"
+            ).replace(tzinfo=dt.timezone.utc),
         )
 
     _COLS = "seq, entry_id, kind, evaluated, idempotency_key, content_json, content_hash, created_at"
@@ -113,58 +129,100 @@ class PodMemory:
         if kind not in KINDS:
             raise QueueError(f"unknown memory kind {kind!r}")
         if kind == "evaluated_result":
-            missing = [name for name in EVALUATED_REQUIRED if not content.get(name)]
+            missing = [
+                name for name in EVALUATED_REQUIRED if not content.get(name)
+            ]
             if missing:
-                raise QueueError(f"evaluated_result requires registered-executor fields: {missing}")
+                raise QueueError(
+                    f"evaluated_result requires registered-executor fields: {missing}"
+                )
             metrics = content["metrics"]
             if not isinstance(metrics, dict) or any(
-                isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or not math.isfinite(v)
                 for v in metrics.values()
             ):
-                raise QueueError("evaluated_result metrics must be finite numbers")
+                raise QueueError(
+                    "evaluated_result metrics must be finite numbers"
+                )
             if content.get("admission", "not_admitted") != "not_admitted":
-                raise QueueError("memory cannot record an admission; admission needs a promotion certificate")
+                raise QueueError(
+                    "memory cannot record an admission; admission needs a promotion certificate"
+                )
             draft = self.get(str(content.get("draft_entry_id") or ""))
             if draft is None or draft.kind != "draft_proposal":
-                raise QueueError("evaluated_result must derive from a stored draft_proposal in this namespace")
+                raise QueueError(
+                    "evaluated_result must derive from a stored draft_proposal in this namespace"
+                )
         try:
-            blob = json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            blob = json.dumps(
+                content, sort_keys=True, separators=(",", ":"), allow_nan=False
+            )
         except (TypeError, ValueError) as exc:
-            raise QueueError(f"memory content is not finite JSON: {exc}") from None
+            raise QueueError(
+                f"memory content is not finite JSON: {exc}"
+            ) from None
         # hash the JSON round trip so the digest re-verifies identically on every read
-        content_hash = canonical_digest({"kind": kind, "content": json.loads(blob)})
+        content_hash = canonical_digest(
+            {"kind": kind, "content": json.loads(blob)}
+        )
         key = idempotency_key or content_hash
-        entry_id = "mem_" + canonical_digest({"ns": self.namespace, "key": key})[:20]
-        now = require_aware(self._clock(), "clock").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        entry_id = (
+            "mem_" + canonical_digest({"ns": self.namespace, "key": key})[:20]
+        )
+        now = require_aware(self._clock(), "clock").strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
         with open_sqlite(self.path, immediate=True) as conn:
             row = conn.execute(
-                f"SELECT {self._COLS} FROM entries WHERE idempotency_key = ?", (key,)
+                f"SELECT {self._COLS} FROM entries WHERE idempotency_key = ?",
+                (key,),
             ).fetchone()
             if row is not None:
                 if row[6] != content_hash:
-                    raise IdempotencyConflict(f"memory key {key!r} already holds different content")
+                    raise IdempotencyConflict(
+                        f"memory key {key!r} already holds different content"
+                    )
                 return self._row(self.namespace, row)
             conn.execute(
                 "INSERT INTO entries (entry_id, kind, evaluated, idempotency_key, content_json, content_hash, created_at)"
                 " VALUES (?,?,?,?,?,?,?)",
-                (entry_id, kind, 1 if kind == "evaluated_result" else 0, key, blob, content_hash, now),
+                (
+                    entry_id,
+                    kind,
+                    1 if kind == "evaluated_result" else 0,
+                    key,
+                    blob,
+                    content_hash,
+                    now,
+                ),
             )
-            row = conn.execute(f"SELECT {self._COLS} FROM entries WHERE entry_id = ?", (entry_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT {self._COLS} FROM entries WHERE entry_id = ?",
+                (entry_id,),
+            ).fetchone()
         return self._row(self.namespace, row)
 
     def get_by_key(self, idempotency_key: str) -> Optional[MemoryEntry]:
         with open_sqlite(self.path) as conn:
             row = conn.execute(
-                f"SELECT {self._COLS} FROM entries WHERE idempotency_key = ?", (idempotency_key,)
+                f"SELECT {self._COLS} FROM entries WHERE idempotency_key = ?",
+                (idempotency_key,),
             ).fetchone()
         return self._row(self.namespace, row) if row else None
 
     def get(self, entry_id: str) -> Optional[MemoryEntry]:
         with open_sqlite(self.path) as conn:
-            row = conn.execute(f"SELECT {self._COLS} FROM entries WHERE entry_id = ?", (entry_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT {self._COLS} FROM entries WHERE entry_id = ?",
+                (entry_id,),
+            ).fetchone()
         return self._row(self.namespace, row) if row else None
 
-    def list(self, kind: Optional[str] = None, limit: int = 200) -> list[MemoryEntry]:
+    def list(
+        self, kind: Optional[str] = None, limit: int = 200
+    ) -> list[MemoryEntry]:
         sql = f"SELECT {self._COLS} FROM entries"
         args: list[Any] = []
         if kind is not None:
@@ -185,13 +243,24 @@ class PodMemory:
         with open_sqlite(self.path) as conn:
             return conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
 
-    def prior_work_summaries(self, limit: int = 5, max_chars: int = 240) -> list[dict[str, Any]]:
+    def prior_work_summaries(
+        self, limit: int = 5, max_chars: int = 240
+    ) -> list[dict[str, Any]]:
         """Short, labelled digests for prompts. Drafts are marked unevaluated."""
         out: list[dict[str, Any]] = []
         for entry in reversed(self.list(limit=1000)):
-            if entry.kind not in ("draft_proposal", "evaluated_result", "failure_note"):
+            if entry.kind not in (
+                "draft_proposal",
+                "evaluated_result",
+                "failure_note",
+            ):
                 continue
-            text = entry.content.get("title") or entry.content.get("summary") or entry.content.get("error") or ""
+            text = (
+                entry.content.get("title")
+                or entry.content.get("summary")
+                or entry.content.get("error")
+                or ""
+            )
             out.append(
                 {
                     "entry_id": entry.entry_id,

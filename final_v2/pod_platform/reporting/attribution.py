@@ -19,7 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
 
 from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
@@ -28,7 +28,9 @@ STANDARD_FACTOR_NOTE = "Internal diagnostic factors; not standard external (e.g.
 
 
 def _fail(code: ErrorCode, summary: str, stop: str) -> None:
-    raise PodPlatformError(ToolResponse.failure(summary=summary, code=code, stop_condition=stop))
+    raise PodPlatformError(
+        ToolResponse.failure(summary=summary, code=code, stop_condition=stop)
+    )
 
 
 def _finite(value: Any) -> float:
@@ -44,8 +46,12 @@ def _finite(value: Any) -> float:
 @dataclass(frozen=True)
 class HoldingsPeriod:
     label: str
-    weights: Mapping[str, float]  # signed weights of NAV carried into the period
-    returns: Mapping[str, float]  # security returns over the period, same basis as the factors
+    weights: Mapping[
+        str, float
+    ]  # signed weights of NAV carried into the period
+    returns: Mapping[
+        str, float
+    ]  # security returns over the period, same basis as the factors
 
 
 def holdings_factor_attribution(
@@ -54,7 +60,9 @@ def holdings_factor_attribution(
     factor_returns: Mapping[str, Mapping[str, float]],
     *,
     factor_set_label: str,
-    period_exposures: Optional[Mapping[str, Mapping[str, Mapping[str, float]]]] = None,
+    period_exposures: Optional[
+        Mapping[str, Mapping[str, Mapping[str, float]]]
+    ] = None,
 ) -> dict[str, Any]:
     """Per period: total = sum_f factor contribution + idiosyncratic, exactly.
 
@@ -65,7 +73,9 @@ def holdings_factor_attribution(
     if not periods:
         raise ValueError("at least one period is required")
     if not factor_set_label:
-        raise ValueError("a factor set label is required so the factors are never mistaken for a standard set")
+        raise ValueError(
+            "a factor set label is required so the factors are never mistaken for a standard set"
+        )
     rows: list[dict[str, Any]] = []
     factor_names: Optional[list[str]] = None
     totals = {"total": 0.0, "idiosyncratic": 0.0}
@@ -73,12 +83,20 @@ def holdings_factor_attribution(
     for period in periods:
         returns_f = factor_returns.get(period.label)
         if returns_f is None:
-            _fail(ErrorCode.SCHEMA_MISMATCH, f"no factor returns for period {period.label}", "Attribution needs factor returns for every period.")
+            _fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"no factor returns for period {period.label}",
+                "Attribution needs factor returns for every period.",
+            )
         names = sorted(returns_f)
         if factor_names is None:
             factor_names = names
         elif names != factor_names:
-            _fail(ErrorCode.SCHEMA_MISMATCH, f"factor set changed in period {period.label}", "Use one factor set across periods.")
+            _fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"factor set changed in period {period.label}",
+                "Use one factor set across periods.",
+            )
         table = (period_exposures or {}).get(period.label, exposures)
         contributions = {f: 0.0 for f in names}
         total = 0.0
@@ -88,12 +106,18 @@ def holdings_factor_attribution(
             if w == 0.0:
                 continue
             if sid not in period.returns:
-                _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"no return for held {sid} in {period.label}",
-                      "Held names are never zero-filled.")
+                _fail(
+                    ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                    f"no return for held {sid} in {period.label}",
+                    "Held names are never zero-filled.",
+                )
             loadings = table.get(sid)
             if loadings is None or any(f not in loadings for f in names):
-                _fail(ErrorCode.SCHEMA_MISMATCH, f"no complete exposure vector for held {sid} in {period.label}",
-                      "Missing exposures are never silently assigned.")
+                _fail(
+                    ErrorCode.SCHEMA_MISMATCH,
+                    f"no complete exposure vector for held {sid} in {period.label}",
+                    "Missing exposures are never silently assigned.",
+                )
             r = _finite(period.returns[sid])
             explained = 0.0
             for f in names:
@@ -104,10 +128,20 @@ def holdings_factor_attribution(
             idio += w * r - explained
         factor_sum = sum(contributions.values())
         if abs(total - factor_sum - idio) > 1e-12 * max(1.0, abs(total)):
-            _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"attribution identity failed in {period.label}",
-                  "Factor plus idiosyncratic must reconcile to the period contribution.")
-        rows.append({"period": period.label, "total": total, "factor_total": factor_sum, "idiosyncratic": idio,
-                     "factor_contributions": contributions})
+            _fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"attribution identity failed in {period.label}",
+                "Factor plus idiosyncratic must reconcile to the period contribution.",
+            )
+        rows.append(
+            {
+                "period": period.label,
+                "total": total,
+                "factor_total": factor_sum,
+                "idiosyncratic": idio,
+                "factor_contributions": contributions,
+            }
+        )
         totals["total"] += total
         totals["idiosyncratic"] += idio
         for f, v in contributions.items():
@@ -119,9 +153,13 @@ def holdings_factor_attribution(
         "standard_factor_definitions": False,
         "note": STANDARD_FACTOR_NOTE,
         "periods": rows,
-        "aggregate": {"sum_of_period_contributions": totals["total"], "factor": factor_sum_all, "idiosyncratic": totals["idiosyncratic"],
-                      "factor_by_name": dict(sorted(factor_totals.items())),
-                      "convention": "sum of period contributions (weights x returns); no compounding"},
+        "aggregate": {
+            "sum_of_period_contributions": totals["total"],
+            "factor": factor_sum_all,
+            "idiosyncratic": totals["idiosyncratic"],
+            "factor_by_name": dict(sorted(factor_totals.items())),
+            "convention": "sum of period contributions (weights x returns); no compounding",
+        },
     }
 
 
@@ -134,7 +172,9 @@ def _solve(matrix: list[list[float]], rhs: list[float]) -> list[float]:
     for col in range(n):
         pivot = max(range(col, n), key=lambda r: abs(a[r][col]))
         if abs(a[pivot][col]) < 1e-12:
-            raise ValueError("factor series are collinear or constant; regression is undefined")
+            raise ValueError(
+                "factor series are collinear or constant; regression is undefined"
+            )
         a[col], a[pivot] = a[pivot], a[col]
         for r in range(col + 1, n):
             factor = a[r][col] / a[col][col]
@@ -142,7 +182,9 @@ def _solve(matrix: list[list[float]], rhs: list[float]) -> list[float]:
                 a[r][c] -= factor * a[col][c]
     x = [0.0] * n
     for i in range(n - 1, -1, -1):
-        x[i] = (a[i][n] - sum(a[i][j] * x[j] for j in range(i + 1, n))) / a[i][i]
+        x[i] = (a[i][n] - sum(a[i][j] * x[j] for j in range(i + 1, n))) / a[i][
+            i
+        ]
     return x
 
 
@@ -177,7 +219,10 @@ def regression_factor_attribution(
     y = [_finite(v) for v in portfolio_excess]
     x = [[1.0] + [_finite(factors[f][t]) for f in names] for t in range(n)]
     p = k + 1
-    xtx = [[sum(x[t][i] * x[t][j] for t in range(n)) for j in range(p)] for i in range(p)]
+    xtx = [
+        [sum(x[t][i] * x[t][j] for t in range(n)) for j in range(p)]
+        for i in range(p)
+    ]
     xty = [sum(x[t][i] * y[t] for t in range(n)) for i in range(p)]
     coef = _solve(xtx, xty)
     fitted = [sum(coef[i] * x[t][i] for i in range(p)) for t in range(n)]
@@ -194,9 +239,23 @@ def regression_factor_attribution(
     rows = []
     for t in range(n):
         factor_part = sum(betas[f] * _finite(factors[f][t]) for f in names)
-        rows.append({"period": labels[t], "total": y[t], "factor": factor_part, "alpha": alpha, "idiosyncratic_residual": resid[t]})
-        if abs(y[t] - factor_part - alpha - resid[t]) > 1e-12 * max(1.0, abs(y[t])):
-            _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"regression identity failed at {labels[t]}", "Components must reconcile.")
+        rows.append(
+            {
+                "period": labels[t],
+                "total": y[t],
+                "factor": factor_part,
+                "alpha": alpha,
+                "idiosyncratic_residual": resid[t],
+            }
+        )
+        if abs(y[t] - factor_part - alpha - resid[t]) > 1e-12 * max(
+            1.0, abs(y[t])
+        ):
+            _fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"regression identity failed at {labels[t]}",
+                "Components must reconcile.",
+            )
     return {
         "method": "regression_factor_vs_idiosyncratic",
         "factor_set_label": factor_set_label,
@@ -213,7 +272,9 @@ def regression_factor_attribution(
             "total": sum(r["total"] for r in rows),
             "factor": sum(r["factor"] for r in rows),
             "alpha": alpha * n,
-            "idiosyncratic_residual": sum(r["idiosyncratic_residual"] for r in rows),
+            "idiosyncratic_residual": sum(
+                r["idiosyncratic_residual"] for r in rows
+            ),
         },
         "uncertainty": "classical OLS standard errors; not dependence-adjusted",
     }
@@ -242,7 +303,9 @@ def _equal_within_side(weights: Mapping[str, float]) -> dict[str, float]:
     return out
 
 
-def selection_vs_sizing(periods: Sequence[SizingPeriod], *, seed: int = 0, n_draws: int = 200) -> dict[str, Any]:
+def selection_vs_sizing(
+    periods: Sequence[SizingPeriod], *, seed: int = 0, n_draws: int = 200
+) -> dict[str, Any]:
     """Selection = equal weight within each side (side gross preserved); sizing = actual - selection.
 
     The split is exact by construction (selection + sizing = actual) and its *order* (selection
@@ -257,15 +320,29 @@ def selection_vs_sizing(periods: Sequence[SizingPeriod], *, seed: int = 0, n_dra
     rows: list[dict[str, Any]] = []
     sums = {"actual": 0.0, "selection": 0.0, "sizing": 0.0, "control_mean": 0.0}
     for period in periods:
-        weights = {s: _finite(w) for s, w in period.weights.items() if _finite(w) != 0.0}
+        weights = {
+            s: _finite(w)
+            for s, w in period.weights.items()
+            if _finite(w) != 0.0
+        }
         if not weights:
-            _fail(ErrorCode.SCHEMA_MISMATCH, f"period {period.label} has no positions", "Nothing to attribute.")
+            _fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"period {period.label} has no positions",
+                "Nothing to attribute.",
+            )
         for s in weights:
             if s not in period.returns:
-                _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"no return for held {s} in {period.label}", "Held names are never zero-filled.")
+                _fail(
+                    ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                    f"no return for held {s} in {period.label}",
+                    "Held names are never zero-filled.",
+                )
         actual = sum(w * _finite(period.returns[s]) for s, w in weights.items())
         equal = _equal_within_side(weights)
-        selection = sum(w * _finite(period.returns[s]) for s, w in equal.items())
+        selection = sum(
+            w * _finite(period.returns[s]) for s, w in equal.items()
+        )
         sizing = actual - selection
         rng = random.Random(f"{seed}:{period.label}")
         longs = sorted(s for s, w in weights.items() if w > 0)
@@ -276,20 +353,25 @@ def selection_vs_sizing(periods: Sequence[SizingPeriod], *, seed: int = 0, n_dra
             for side, names in ((1.0, longs), (-1.0, shorts)):
                 sizes = [abs(weights[s]) for s in names]
                 rng.shuffle(sizes)
-                total += sum(side * size * _finite(period.returns[s]) for s, size in zip(names, sizes))
+                total += sum(
+                    side * size * _finite(period.returns[s])
+                    for s, size in zip(names, sizes)
+                )
             draws.append(total)
         control_mean = sum(draws) / len(draws)
         at_or_below = sum(1 for d in draws if d <= actual) / len(draws)
-        rows.append({
-            "period": period.label,
-            "actual": actual,
-            "selection": selection,
-            "sizing": sizing,
-            "random_sizing_control_mean": control_mean,
-            "sizing_vs_random_control": actual - control_mean,
-            "actual_percentile_in_control": at_or_below,
-            "names": len(weights),
-        })
+        rows.append(
+            {
+                "period": period.label,
+                "actual": actual,
+                "selection": selection,
+                "sizing": sizing,
+                "random_sizing_control_mean": control_mean,
+                "sizing_vs_random_control": actual - control_mean,
+                "actual_percentile_in_control": at_or_below,
+                "names": len(weights),
+            }
+        )
         sums["actual"] += actual
         sums["selection"] += selection
         sums["sizing"] += sizing
@@ -299,10 +381,17 @@ def selection_vs_sizing(periods: Sequence[SizingPeriod], *, seed: int = 0, n_dra
         "baseline": "equal weight within each side, side gross preserved, same names",
         "order_convention": "selection first, sizing = actual - selection; interaction is inside sizing",
         "causal_claim": False,
-        "control": {"kind": "seeded permutation of absolute sizes within side", "seed": seed, "draws": n_draws},
+        "control": {
+            "kind": "seeded permutation of absolute sizes within side",
+            "seed": seed,
+            "draws": n_draws,
+        },
         "periods": rows,
-        "aggregate": {**{k: v for k, v in sums.items()}, "sizing_vs_random_control": sums["actual"] - sums["control_mean"],
-                      "convention": "sum of period contributions (weights x returns); no compounding"},
+        "aggregate": {
+            **{k: v for k, v in sums.items()},
+            "sizing_vs_random_control": sums["actual"] - sums["control_mean"],
+            "convention": "sum of period contributions (weights x returns); no compounding",
+        },
     }
 
 
@@ -332,18 +421,27 @@ def _side_stats(values: Sequence[float]) -> dict[str, Any]:
         "hit_rate": len(wins) / n if n else None,
         "average_win": avg_win,
         "average_loss": avg_loss,
-        "win_loss_ratio": (avg_win / avg_loss) if (avg_win is not None and avg_loss) else None,
+        "win_loss_ratio": (avg_win / avg_loss)
+        if (avg_win is not None and avg_loss)
+        else None,
         "expectancy": sum(values) / n if n else None,
         "total": sum(values),
     }
 
 
-def hit_rate_win_loss(contributions: Sequence[PositionContribution], *, unit: str) -> dict[str, Any]:
+def hit_rate_win_loss(
+    contributions: Sequence[PositionContribution], *, unit: str
+) -> dict[str, Any]:
     """Hit rate (share of position-periods with positive P&L) and win/loss magnitudes, all and by side."""
     if not contributions:
         raise ValueError("no position contributions were supplied")
     values = [_finite(c.pnl) for c in contributions]
-    out: dict[str, Any] = {"method": "hit_rate_win_loss", "unit": unit, "all": _side_stats(values), "by_side": {}}
+    out: dict[str, Any] = {
+        "method": "hit_rate_win_loss",
+        "unit": unit,
+        "all": _side_stats(values),
+        "by_side": {},
+    }
     for side in ("long", "short"):
         subset = [_finite(c.pnl) for c in contributions if c.side == side]
         if subset:
@@ -351,7 +449,9 @@ def hit_rate_win_loss(contributions: Sequence[PositionContribution], *, unit: st
     unknown = sorted({c.side for c in contributions} - {"long", "short"})
     if unknown:
         raise ValueError(f"unknown sides: {unknown}")
-    out["note"] = "Position-periods are not independent bets; hit rate is descriptive, not a significance claim."
+    out["note"] = (
+        "Position-periods are not independent bets; hit rate is descriptive, not a significance claim."
+    )
     return out
 
 
@@ -362,7 +462,9 @@ def hit_rate_win_loss(contributions: Sequence[PositionContribution], *, unit: st
 class DecayCohort:
     label: str
     entry_date: dt.date  # close of the executable entry; first earned return is the next trading day
-    signals: Mapping[str, float]  # signed forecast per security (sign sets the position direction)
+    signals: Mapping[
+        str, float
+    ]  # signed forecast per security (sign sets the position direction)
 
 
 def _rank(values: Sequence[float]) -> list[float]:
@@ -388,7 +490,9 @@ def _spearman(x: Sequence[float], y: Sequence[float]) -> Optional[float]:
     syy = sum((b - my) ** 2 for b in ry)
     if sxx == 0 or syy == 0:
         return None
-    return sum((a - mx) * (b - my) for a, b in zip(rx, ry)) / math.sqrt(sxx * syy)
+    return sum((a - mx) * (b - my) for a, b in zip(rx, ry)) / math.sqrt(
+        sxx * syy
+    )
 
 
 def alpha_decay_curve(
@@ -414,48 +518,75 @@ def alpha_decay_curve(
     if any(b <= a for a, b in zip(days, days[1:])):
         raise ValueError("trading_days must be strictly increasing")
     if not windows or any(a < 1 or b < a for a, b in windows):
-        raise ValueError("windows are (start_offset, end_offset) with 1 <= start <= end")
+        raise ValueError(
+            "windows are (start_offset, end_offset) with 1 <= start <= end"
+        )
     widest = max(b for _a, b in windows)
     index = {d: i for i, d in enumerate(days)}
     prerequisites = [
         "explicit trading calendar",
         f"each cohort entry date on the calendar with at least {widest} later trading days",
-        f"a supplied daily return for every name on each of those days (no interpolation)",
+        "a supplied daily return for every name on each of those days (no interpolation)",
         f"at least {min_names} names per cohort and {min_cohorts} cohorts",
     ]
-    used: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     prepared: list[tuple[DecayCohort, dict[str, int], list[str]]] = []
     for cohort in cohorts:
         if cohort.entry_date not in index:
-            excluded.append({"cohort": cohort.label, "reason": "entry date is not a trading day on the calendar"})
+            excluded.append(
+                {
+                    "cohort": cohort.label,
+                    "reason": "entry date is not a trading day on the calendar",
+                }
+            )
             continue
         i0 = index[cohort.entry_date]
         if i0 + widest >= len(days):
-            excluded.append({"cohort": cohort.label, "reason": f"fewer than {widest} trading days after entry"})
+            excluded.append(
+                {
+                    "cohort": cohort.label,
+                    "reason": f"fewer than {widest} trading days after entry",
+                }
+            )
             continue
         names = []
         dropped = 0
         for sid, signal in sorted(cohort.signals.items()):
             if _finite(signal) == 0.0:
                 continue
-            complete = all((sid, days[i0 + o]) in daily_returns for o in range(1, widest + 1))
+            complete = all(
+                (sid, days[i0 + o]) in daily_returns
+                for o in range(1, widest + 1)
+            )
             if complete:
                 names.append(sid)
             elif drop_incomplete_names:
                 dropped += 1
             else:
-                _fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
-                      f"missing daily return for {sid} after entry {cohort.entry_date} (cohort {cohort.label})",
-                      "Alpha decay never interpolates; supply the returns or opt in to dropping incomplete names.")
+                _fail(
+                    ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                    f"missing daily return for {sid} after entry {cohort.entry_date} (cohort {cohort.label})",
+                    "Alpha decay never interpolates; supply the returns or opt in to dropping incomplete names.",
+                )
         if len(names) < min_names:
-            excluded.append({"cohort": cohort.label, "reason": f"only {len(names)} complete names (< {min_names}); {dropped} dropped"})
+            excluded.append(
+                {
+                    "cohort": cohort.label,
+                    "reason": f"only {len(names)} complete names (< {min_names}); {dropped} dropped",
+                }
+            )
             continue
         prepared.append((cohort, {"i0": i0, "dropped": dropped}, names))
     if len(prepared) < min_cohorts:
-        return {"status": "INSUFFICIENT", "method": "alpha_decay_curve", "prerequisites": prerequisites,
-                "cohorts_used": len(prepared), "cohorts_required": min_cohorts, "excluded": excluded,
-                "note": "No curve is produced without the prerequisites; nothing is inferred."}
+        return {
+            "status": "INSUFFICIENT",
+            "method": "alpha_decay_curve",
+            "prerequisites": prerequisites,
+            "cohorts_used": len(prepared),
+            "cohorts_required": min_cohorts,
+            "excluded": excluded,
+            "note": "No curve is produced without the prerequisites; nothing is inferred.",
+        }
 
     def window_return(sid: str, i0: int, start: int, end: int) -> float:
         growth = 1.0
@@ -488,26 +619,52 @@ def alpha_decay_curve(
                 per_cohort_ic.append(ic)
             names_total += len(names)
             d0, d1 = days[i0 + start], days[i0 + end]
-            first_date = d0 if first_date is None or d0 < first_date else first_date
+            first_date = (
+                d0 if first_date is None or d0 < first_date else first_date
+            )
             last_date = d1 if last_date is None or d1 > last_date else last_date
         mean = sum(per_cohort) / len(per_cohort)
-        sd = math.sqrt(sum((v - mean) ** 2 for v in per_cohort) / (len(per_cohort) - 1)) if len(per_cohort) > 1 else None
-        curve.append({
-            "start_offset": start, "end_offset": end,
-            "first_date": first_date.isoformat() if first_date else None,
-            "last_date": last_date.isoformat() if last_date else None,
-            "mean_signed_payoff": mean,
-            "se_across_cohorts": (sd / math.sqrt(len(per_cohort))) if sd is not None else None,
-            "mean_rank_ic": (sum(per_cohort_ic) / len(per_cohort_ic)) if per_cohort_ic else None,
-            "n_cohorts": len(per_cohort), "n_name_observations": names_total,
-        })
+        sd = (
+            math.sqrt(
+                sum((v - mean) ** 2 for v in per_cohort) / (len(per_cohort) - 1)
+            )
+            if len(per_cohort) > 1
+            else None
+        )
+        curve.append(
+            {
+                "start_offset": start,
+                "end_offset": end,
+                "first_date": first_date.isoformat() if first_date else None,
+                "last_date": last_date.isoformat() if last_date else None,
+                "mean_signed_payoff": mean,
+                "se_across_cohorts": (sd / math.sqrt(len(per_cohort)))
+                if sd is not None
+                else None,
+                "mean_rank_ic": (sum(per_cohort_ic) / len(per_cohort_ic))
+                if per_cohort_ic
+                else None,
+                "n_cohorts": len(per_cohort),
+                "n_name_observations": names_total,
+            }
+        )
     for _s, end in sorted({(1, e) for _a, e in windows}):
         per_cohort = []
         for cohort, meta, names in prepared:
             i0 = meta["i0"]
-            vals = [(1.0 if cohort.signals[sid] > 0 else -1.0) * window_return(sid, i0, 1, end) for sid in names]
+            vals = [
+                (1.0 if cohort.signals[sid] > 0 else -1.0)
+                * window_return(sid, i0, 1, end)
+                for sid in names
+            ]
             per_cohort.append(sum(vals) / len(vals))
-        cumulative.append({"through_offset": end, "mean_signed_payoff": sum(per_cohort) / len(per_cohort), "n_cohorts": len(per_cohort)})
+        cumulative.append(
+            {
+                "through_offset": end,
+                "mean_signed_payoff": sum(per_cohort) / len(per_cohort),
+                "n_cohorts": len(per_cohort),
+            }
+        )
     return {
         "status": "COMPUTED",
         "method": "alpha_decay_curve",
@@ -515,36 +672,75 @@ def alpha_decay_curve(
         "prerequisites": prerequisites,
         "windows": curve,
         "cumulative": cumulative,
-        "cohorts_used": [{"cohort": c.label, "entry_date": c.entry_date.isoformat(), "names": len(n), "dropped_incomplete": m["dropped"]}
-                         for c, m, n in prepared],
+        "cohorts_used": [
+            {
+                "cohort": c.label,
+                "entry_date": c.entry_date.isoformat(),
+                "names": len(n),
+                "dropped_incomplete": m["dropped"],
+            }
+            for c, m, n in prepared
+        ],
         "excluded": excluded,
         "caveat": "Adjacent cohorts overlap in time, so the effective sample is below the number of cohorts; standard errors are descriptive.",
     }
 
 
-def earnings_vs_ex_earnings(contributions: Sequence[PositionContribution],
-                           earnings_dates: Mapping[str, Sequence[dt.date]],
-                           trading_days: Sequence[dt.date], *, window=(-1,1)) -> dict[str, Any]:
+def earnings_vs_ex_earnings(
+    contributions: Sequence[PositionContribution],
+    earnings_dates: Mapping[str, Sequence[dt.date]],
+    trading_days: Sequence[dt.date],
+    *,
+    window=(-1, 1),
+) -> dict[str, Any]:
     """Exact additive contribution split around an explicitly supplied event calendar.
 
     Each contribution's period is an ISO daily date. Explicit empty event lists
     mean no scheduled events; absent calendars fail closed. Overlapping event
     windows count a contribution once. This is descriptive, not causal.
     """
-    days=list(trading_days)
-    if any(b<=a for a,b in zip(days,days[1:])) or not days:raise ValueError('calendar must strictly increase')
-    if window[0]>window[1]:raise ValueError('invalid event window')
-    index={d:i for i,d in enumerate(days)};events={}
-    for sid,dates in earnings_dates.items():
-        if any(d not in index for d in dates):raise ValueError('earnings date is outside explicit trading calendar')
-        events[sid]={offset for d in dates for offset in range(max(0,index[d]+window[0]),min(len(days),index[d]+window[1]+1))}
-    near=[];away=[]
+    days = list(trading_days)
+    if any(b <= a for a, b in zip(days, days[1:])) or not days:
+        raise ValueError("calendar must strictly increase")
+    if window[0] > window[1]:
+        raise ValueError("invalid event window")
+    index = {d: i for i, d in enumerate(days)}
+    events = {}
+    for sid, dates in earnings_dates.items():
+        if any(d not in index for d in dates):
+            raise ValueError(
+                "earnings date is outside explicit trading calendar"
+            )
+        events[sid] = {
+            offset
+            for d in dates
+            for offset in range(
+                max(0, index[d] + window[0]),
+                min(len(days), index[d] + window[1] + 1),
+            )
+        }
+    near = []
+    away = []
     for c in contributions:
-        day=dt.date.fromisoformat(c.period)
-        if day not in index:raise ValueError('contribution date is outside explicit trading calendar')
-        if c.security_id not in events:raise ValueError(f'no earnings calendar supplied for {c.security_id}')
-        (near if index[day] in events[c.security_id] else away).append(_finite(c.pnl))
-    return {'method':'dated_earnings_vs_ex_earnings','window_trading_days':list(window),
-        'earnings_contribution':sum(near),'ex_earnings_contribution':sum(away),'total':sum(near)+sum(away),
-        'earnings_observations':len(near),'ex_earnings_observations':len(away),
-        'convention':'sum of supplied daily position contributions; overlapping windows counted once; no causal claim'}
+        day = dt.date.fromisoformat(c.period)
+        if day not in index:
+            raise ValueError(
+                "contribution date is outside explicit trading calendar"
+            )
+        if c.security_id not in events:
+            raise ValueError(
+                f"no earnings calendar supplied for {c.security_id}"
+            )
+        (near if index[day] in events[c.security_id] else away).append(
+            _finite(c.pnl)
+        )
+    return {
+        "method": "dated_earnings_vs_ex_earnings",
+        "window_trading_days": list(window),
+        "earnings_contribution": sum(near),
+        "ex_earnings_contribution": sum(away),
+        "total": sum(near) + sum(away),
+        "earnings_observations": len(near),
+        "ex_earnings_observations": len(away),
+        "convention": "sum of supplied daily position contributions; overlapping windows counted once; no causal claim",
+    }

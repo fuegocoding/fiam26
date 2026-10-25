@@ -36,7 +36,9 @@ class TargetPrediction(StrictModel):
         finite_decimal(self.prediction, "prediction")
         finite_decimal(self.reference_prediction, "reference_prediction")
         if self.unit not in KNOWN_TARGET_UNITS:
-            raise ValueError(f"unit {self.unit!r} is not a declared target unit")
+            raise ValueError(
+                f"unit {self.unit!r} is not a declared target unit"
+            )
         require_aware(self.expected_resolution_at, "expected_resolution_at")
         return self
 

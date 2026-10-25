@@ -4,14 +4,18 @@ import numpy as np
 import pandas as pd
 
 
-def dated_eps_events(surprises: pd.DataFrame, links: pd.DataFrame) -> pd.DataFrame:
+def dated_eps_events(
+    surprises: pd.DataFrame, links: pd.DataFrame
+) -> pd.DataFrame:
     """Maps each announcement to the CRSP link valid on its report date."""
     events = surprises.loc[
         np.isfinite(surprises.suescore),
         ["TICKER", "fpe", "anndats", "suescore"],
     ].copy()
     mapped = events.merge(links, on="TICKER", how="inner")
-    mapped = mapped[(mapped.sdate <= mapped.anndats) & (mapped.anndats <= mapped.edate)]
+    mapped = mapped[
+        (mapped.sdate <= mapped.anndats) & (mapped.anndats <= mapped.edate)
+    ]
     mapped = mapped.sort_values(
         ["TICKER", "fpe", "SCORE", "sdate"],
         ascending=[True, True, True, False],
@@ -43,5 +47,6 @@ def attach_next_eps(
     )
     result["days_to_eps"] = (result.anndats - result.eom).dt.days
     return result[
-        result.days_to_eps.between(1, max_days) & np.isfinite(result.next_suescore)
+        result.days_to_eps.between(1, max_days)
+        & np.isfinite(result.next_suescore)
     ].copy()

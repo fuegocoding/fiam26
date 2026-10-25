@@ -14,7 +14,13 @@ from typing import Optional, Sequence
 from pydantic import Field, model_validator
 
 from ..contracts.base import StrictModel, require_aware
-from ..contracts.portfolio import LimitCheck, RiskDecision, RiskReview, StressResult, TargetBook
+from ..contracts.portfolio import (
+    LimitCheck,
+    RiskDecision,
+    RiskReview,
+    StressResult,
+    TargetBook,
+)
 
 
 class RiskLimit(StrictModel):
@@ -70,7 +76,9 @@ class RiskEngine:
         for limit in self._policy.limits:
             exposure = by_name.get(limit.name)
             if exposure is None:
-                raise ValueError(f"missing measured exposure for limit {limit.name!r}")
+                raise ValueError(
+                    f"missing measured exposure for limit {limit.name!r}"
+                )
             checks.append(
                 LimitCheck(
                     name=limit.name,
@@ -92,10 +100,16 @@ class RiskEngine:
         ]
         if failures_hard:
             decision = RiskDecision.BLOCK
-            remedies = [f"remedy {check.name}: {check.threshold}" for check in failures_hard]
+            remedies = [
+                f"remedy {check.name}: {check.threshold}"
+                for check in failures_hard
+            ]
         elif failures_soft:
             decision = RiskDecision.PASS_WITH_REMEDY
-            remedies = [f"remedy soft limit {check.name}: {check.threshold}" for check in failures_soft]
+            remedies = [
+                f"remedy soft limit {check.name}: {check.threshold}"
+                for check in failures_soft
+            ]
         else:
             decision = RiskDecision.PASS
             remedies = []
@@ -107,10 +121,13 @@ class RiskEngine:
             reviewed_kind=reviewed_kind,
             policy_version=self._policy.policy_version,
             effective_at=effective_at,
-            expires_at=effective_at + dt.timedelta(minutes=self._policy.review_ttl_minutes),
+            expires_at=effective_at
+            + dt.timedelta(minutes=self._policy.review_ttl_minutes),
             measured_exposures={e.name: str(e.value) for e in exposures},
             exposure_uncertainty={
-                e.name: str(e.uncertainty) for e in exposures if e.uncertainty is not None
+                e.name: str(e.uncertainty)
+                for e in exposures
+                if e.uncertainty is not None
             },
             limit_checks=checks,
             stress_results=list(stress_results),

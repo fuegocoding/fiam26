@@ -24,9 +24,13 @@ class CatalogueManifest:
     def import_card_bytes(self, raw: bytes) -> SourceCard:
         payload = json.loads(raw.decode("utf-8"))
         card = SourceCard.model_validate(payload)
-        return self.import_card(card, raw_digest=hashlib.sha256(raw).hexdigest())
+        return self.import_card(
+            card, raw_digest=hashlib.sha256(raw).hexdigest()
+        )
 
-    def import_card(self, card: SourceCard, *, raw_digest: str | None = None) -> SourceCard:
+    def import_card(
+        self, card: SourceCard, *, raw_digest: str | None = None
+    ) -> SourceCard:
         if card.source_id in self._cards:
             raise ValueError(f"duplicate source_id {card.source_id}")
         self._cards[card.source_id] = card
@@ -65,7 +69,9 @@ class CatalogueManifest:
             "topic_counts": self.topic_counts(),
             "content_hashes": self.content_hashes(),
             "formation_eligible": sorted(
-                card.source_id for card in self._cards.values() if card.formation_eligible
+                card.source_id
+                for card in self._cards.values()
+                if card.formation_eligible
             ),
         }
 

@@ -34,18 +34,57 @@ Guarantees
 * No LLM is called anywhere in this package.
 """
 
-from .models import (AccessStatus, AuthError, Claim, ClaimError, NotFound, OfflineError,
-                     PaperCard, PaperValidationError, PapersError, ProviderError, RateLimitError,
-                     ReplicationLabel, ResponseTooLarge, TemporalError, UrlNotAllowed,
-                     canonical_paper_id)
+from .models import (
+    AccessStatus,
+    AuthError,
+    Claim,
+    ClaimError,
+    NotFound,
+    OfflineError,
+    PaperCard,
+    PapersError,
+    PaperValidationError,
+    ProviderError,
+    RateLimitError,
+    ReplicationLabel,
+    ResponseTooLarge,
+    TemporalError,
+    UrlNotAllowed,
+    canonical_paper_id,
+)
 from .service import PaperService, SearchResult
 from .store import PaperStore
-from .transport import ALLOWED_HOSTS, Transport, TransportResponse, UrllibTransport, validate_url
+from .transport import (
+    ALLOWED_HOSTS,
+    Transport,
+    TransportResponse,
+    UrllibTransport,
+    validate_url,
+)
 
 __all__ = [
-    "AccessStatus", "AuthError", "Claim", "ClaimError", "NotFound", "OfflineError", "PaperCard",
-    "PaperService", "PaperStore", "PaperValidationError", "PapersError", "ProviderError",
-    "RateLimitError", "ReplicationLabel", "ResponseTooLarge", "SearchResult", "TemporalError",
-    "Transport", "TransportResponse", "UrlNotAllowed", "UrllibTransport", "ALLOWED_HOSTS",
-    "canonical_paper_id", "validate_url",
+    "AccessStatus",
+    "AuthError",
+    "Claim",
+    "ClaimError",
+    "NotFound",
+    "OfflineError",
+    "PaperCard",
+    "PaperService",
+    "PaperStore",
+    "PaperValidationError",
+    "PapersError",
+    "ProviderError",
+    "RateLimitError",
+    "ReplicationLabel",
+    "ResponseTooLarge",
+    "SearchResult",
+    "TemporalError",
+    "Transport",
+    "TransportResponse",
+    "UrlNotAllowed",
+    "UrllibTransport",
+    "ALLOWED_HOSTS",
+    "canonical_paper_id",
+    "validate_url",
 ]

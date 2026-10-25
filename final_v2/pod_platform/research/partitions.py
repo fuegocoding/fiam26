@@ -79,7 +79,9 @@ class LabelWindow:
             raise ValueError("a label cannot resolve before its observation")
 
 
-def matured_labels(labels: list[LabelWindow], training_cutoff: dt.datetime) -> list[LabelWindow]:
+def matured_labels(
+    labels: list[LabelWindow], training_cutoff: dt.datetime
+) -> list[LabelWindow]:
     cutoff = require_aware(training_cutoff, "training_cutoff")
     return [label for label in labels if label.resolves_at <= cutoff]
 
@@ -94,7 +96,10 @@ def purge_between(
     kept: list[LabelWindow] = []
     purged: list[LabelWindow] = []
     for label in labels:
-        overlaps = label.observation_at <= protected_end and label.resolves_at >= protected_start
+        overlaps = (
+            label.observation_at <= protected_end
+            and label.resolves_at >= protected_start
+        )
         (purged if overlaps else kept).append(label)
     return kept, purged
 
@@ -109,10 +114,22 @@ def embargo_after(
     )
     embargo_end = require_aware(embargo_end, "embargo_end")
     if embargo_end < last_training_observation:
-        raise ValueError("embargo_end cannot precede the last training observation")
-    kept = [label for label in labels if label.observation_at <= last_training_observation]
-    embargoed = [label for label in labels if label.observation_at > last_training_observation]
-    embargoed = [label for label in embargoed if label.observation_at <= embargo_end]
+        raise ValueError(
+            "embargo_end cannot precede the last training observation"
+        )
+    kept = [
+        label
+        for label in labels
+        if label.observation_at <= last_training_observation
+    ]
+    embargoed = [
+        label
+        for label in labels
+        if label.observation_at > last_training_observation
+    ]
+    embargoed = [
+        label for label in embargoed if label.observation_at <= embargo_end
+    ]
     rest = [label for label in labels if label.observation_at > embargo_end]
     return kept + rest, embargoed
 

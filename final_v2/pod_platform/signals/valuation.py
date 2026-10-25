@@ -3,6 +3,8 @@
 import json
 import multiprocessing
 import pathlib
+import pickle
+import tempfile
 import time
 import warnings
 
@@ -270,8 +272,6 @@ _SHARED: dict = {}
 
 
 def _dump_shared(payload: dict) -> pathlib.Path:
-    import pickle
-    import tempfile
 
     handle, name = tempfile.mkstemp(suffix=".pkl")
     with open(handle, "wb") as fh:
@@ -280,7 +280,6 @@ def _dump_shared(payload: dict) -> pathlib.Path:
 
 
 def _worker_init(shared_path: str) -> None:
-    import pickle
 
     with open(shared_path, "rb") as fh:
         _SHARED.update(pickle.load(fh))
@@ -291,7 +290,9 @@ def directory(work_dir: pathlib.Path) -> pathlib.Path:
     return work_dir / "gap_micro_best"
 
 
-def build(panel_path: pathlib.Path, work_dir: pathlib.Path, device: str = "cpu") -> pathlib.Path:
+def build(
+    panel_path: pathlib.Path, work_dir: pathlib.Path, device: str = "cpu"
+) -> pathlib.Path:
     """Fits every valuation model and picks the best one per test year.
 
     Cross-sectional models (M0-M5, M7) cross-fit each month by firm. Pooled
@@ -323,10 +324,12 @@ def _analyst_forward(grid: pd.DataFrame, cache: pathlib.Path) -> pd.DataFrame:
         return pd.read_parquet(cache)
     state = ibes.build_expectation_state(grid)
     state["eom"] = state.eom.astype("datetime64[ns]")
-    rows = state[["permno", "eom", "TICKER", "STATPERS", "FPEDATS", "PRICE"]].rename(
-        columns={"FPEDATS": "target_fpe"}
-    )
-    consensus = ibes.load_consensus()[["TICKER", "STATPERS", "FPEDATS", "MEANEST"]]
+    rows = state[
+        ["permno", "eom", "TICKER", "STATPERS", "FPEDATS", "PRICE"]
+    ].rename(columns={"FPEDATS": "target_fpe"})
+    consensus = ibes.load_consensus()[
+        ["TICKER", "STATPERS", "FPEDATS", "MEANEST"]
+    ]
     forward = rows.merge(consensus, on=["TICKER", "STATPERS"], how="inner")
     forward = forward[forward.FPEDATS >= forward.target_fpe].sort_values(
         ["permno", "eom", "FPEDATS"]
@@ -340,7 +343,9 @@ def _analyst_forward(grid: pd.DataFrame, cache: pathlib.Path) -> pd.DataFrame:
     surprises["trail_eps"] = grouped.actual.transform(
         lambda s: s.rolling(4, min_periods=4).sum()
     )
-    consecutive = (surprises.fpe - grouped.fpe.shift(3)).dt.days.between(260, 300)
+    consecutive = (surprises.fpe - grouped.fpe.shift(3)).dt.days.between(
+        260, 300
+    )
     surprises.loc[~consecutive, "trail_eps"] = np.nan
     trailing = pd.merge_asof(
         rows[["permno", "eom", "TICKER"]].sort_values("eom"),
@@ -361,7 +366,9 @@ def _analyst_forward(grid: pd.DataFrame, cache: pathlib.Path) -> pd.DataFrame:
             how="left",
         )
     )
-    out["analyst_growth"] = (out.fwd_eps / out.trail_eps - 1.0).where(out.trail_eps > 0)
+    out["analyst_growth"] = (out.fwd_eps / out.trail_eps - 1.0).where(
+        out.trail_eps > 0
+    )
     out = out.drop_duplicates(["permno", "eom"])[
         ["permno", "eom", "PRICE", "fwd_eps", "analyst_growth"]
     ]
@@ -369,7 +376,9 @@ def _analyst_forward(grid: pd.DataFrame, cache: pathlib.Path) -> pd.DataFrame:
     return out
 
 
-def _winsorize_by_month(values: np.ndarray, month_codes: np.ndarray) -> np.ndarray:
+def _winsorize_by_month(
+    values: np.ndarray, month_codes: np.ndarray
+) -> np.ndarray:
     out = values.copy()
     for code in np.unique(month_codes):
         rows = month_codes == code
@@ -379,7 +388,9 @@ def _winsorize_by_month(values: np.ndarray, month_codes: np.ndarray) -> np.ndarr
     return out
 
 
-def _build_panel(panel_path: pathlib.Path, output: pathlib.Path) -> pd.DataFrame:
+def _build_panel(
+    panel_path: pathlib.Path, output: pathlib.Path
+) -> pd.DataFrame:
     """Asset-scaled accounting and analyst features with the target y."""
     columns = [
         "permno",
@@ -394,7 +405,9 @@ def _build_panel(panel_path: pathlib.Path, output: pathlib.Path) -> pd.DataFrame
         *LEVELS.values(),
         *RATIOS,
     ]
-    raw = pq.read_table(panel_path, columns=list(dict.fromkeys(columns))).to_pandas()
+    raw = pq.read_table(
+        panel_path, columns=list(dict.fromkeys(columns))
+    ).to_pandas()
     raw["eom"] = ibes.month_end(raw.eom).astype("datetime64[ns]")
     raw = raw.drop_duplicates(["permno", "eom"])
     raw = raw[(raw.at_me > 0) & (raw.me_company > 0)].reset_index(drop=True)
@@ -450,11 +463,15 @@ def _build_panel(panel_path: pathlib.Path, output: pathlib.Path) -> pd.DataFrame
     panel["fold"] = (firm_hash.to_numpy() % N_FOLDS).astype(int)
     codes = panel.eom.dt.year.to_numpy() * 12 + panel.eom.dt.month.to_numpy()
     continuous = [column for column in FEATURES if column not in FLAGS]
-    panel[continuous] = _winsorize_by_month(panel[continuous].to_numpy(float), codes)
+    panel[continuous] = _winsorize_by_month(
+        panel[continuous].to_numpy(float), codes
+    )
     return panel
 
 
-def _standardize(train: np.ndarray, test: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _standardize(
+    train: np.ndarray, test: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     median = np.nanmedian(train, axis=0)
     median = np.where(np.isfinite(median), median, 0.0)
     train = np.where(np.isnan(train), median, train)
@@ -490,7 +507,9 @@ def _group_median(
     """Median by the finest industry level with enough training firms."""
     out = np.full(len(test_keys[0]), np.nan)
     for keys_train, keys_test in zip(train_keys, test_keys, strict=True):
-        stats = pd.Series(train_values).groupby(keys_train).agg(["median", "size"])
+        stats = (
+            pd.Series(train_values).groupby(keys_train).agg(["median", "size"])
+        )
         stats = stats[(stats["size"] >= minimum) & (stats.index != "")]
         mapped = pd.Series(keys_test).map(stats["median"])
         out = np.where(np.isnan(out), mapped.to_numpy(dtype=float), out)
@@ -498,7 +517,9 @@ def _group_median(
 
 
 def _sparse_columns(values: np.ndarray) -> list:
-    return [j for j in range(values.shape[1]) if np.isnan(values[:, j]).mean() > 0.1]
+    return [
+        j for j in range(values.shape[1]) if np.isnan(values[:, j]).mean() > 0.1
+    ]
 
 
 def _with_flags(values: np.ndarray, sparse: list) -> np.ndarray:
@@ -508,7 +529,9 @@ def _with_flags(values: np.ndarray, sparse: list) -> np.ndarray:
 
 
 def _dummies(labels: np.ndarray) -> np.ndarray:
-    return pd.get_dummies(pd.Series(labels, dtype="string")).to_numpy(dtype=float)
+    return pd.get_dummies(pd.Series(labels, dtype="string")).to_numpy(
+        dtype=float
+    )
 
 
 def _trees(
@@ -581,7 +604,9 @@ def _fit_month(month: pd.Timestamp) -> pd.DataFrame:
         preds["M0"][te] = np.nanmean(np.vstack(implied), axis=0)
         preds["M2"][te] = _ridge(linear_x[tr], y_fit[tr], linear_x[te])
         beta, *_ = np.linalg.lstsq(design[tr], market_equity[tr], rcond=None)
-        preds["M3"][te] = np.log(np.maximum(design[te] @ beta / assets[te], 1e-3))
+        preds["M3"][te] = np.log(
+            np.maximum(design[te] @ beta / assets[te], 1e-3)
+        )
         preds["M4"][te] = _trees(XS_TREES, x[tr], y_fit[tr], x[te])
         preds["M5"][te] = _trees(XS_TREES, coded_x[tr], y_fit[tr], coded_x[te])
         theory = preds["M2"].copy()
@@ -608,12 +633,20 @@ def _cross_sectional(panel: pd.DataFrame) -> pd.DataFrame:
     months = sorted(_SHARED["months"])
     frames, started = [], time.time()
     shared_path = _dump_shared(
-        {"panel": _SHARED["panel"], "months": _SHARED["months"], "device": _SHARED.get("device", "cpu")}
+        {
+            "panel": _SHARED["panel"],
+            "months": _SHARED["months"],
+            "device": _SHARED.get("device", "cpu"),
+        }
     )
     ctx = multiprocessing.get_context("spawn")
-    with ctx.Pool(XS_WORKERS, initializer=_worker_init, initargs=(str(shared_path),)) as workers:
+    with ctx.Pool(
+        XS_WORKERS, initializer=_worker_init, initargs=(str(shared_path),)
+    ) as workers:
         results = workers.imap(_fit_month, months)
-        for number, (month, out) in enumerate(zip(months, results, strict=True)):
+        for number, (month, out) in enumerate(
+            zip(months, results, strict=True)
+        ):
             frames.append(out)
             if number % 12 == 0:
                 print(
@@ -650,7 +683,9 @@ def _fit_moe(x: np.ndarray, g: np.ndarray, y: np.ndarray) -> dict:
     for _ in range(MOE_ITERATIONS):
         for k in range(MOE_EXPERTS):
             weighted = xb * resp[:, k : k + 1]
-            weights[:, k] = np.linalg.solve(weighted.T @ xb + penalty, weighted.T @ y)
+            weights[:, k] = np.linalg.solve(
+                weighted.T @ xb + penalty, weighted.T @ y
+            )
             residual = y - xb @ weights[:, k]
             variance[k] = max(
                 float((resp[:, k] * residual**2).sum() / resp[:, k].sum()),
@@ -662,7 +697,9 @@ def _fit_moe(x: np.ndarray, g: np.ndarray, y: np.ndarray) -> dict:
             m = 0.9 * m + 0.1 * grad
             v = 0.999 * v + 0.001 * grad**2
             gate -= (
-                0.05 * (m / (1 - 0.9**step)) / (np.sqrt(v / (1 - 0.999**step)) + 1e-8)
+                0.05
+                * (m / (1 - 0.9**step))
+                / (np.sqrt(v / (1 - 0.999**step)) + 1e-8)
             )
         log_prior = np.log(_softmax(gb @ gate) + 1e-12)
         log_density = (
@@ -708,7 +745,9 @@ def _fit_fold(year: int) -> tuple[int, pd.DataFrame, dict]:
     x_train = train[FEATURES].to_numpy(float)
     x_target = target[FEATURES].to_numpy(float)
     try:
-        m6 = _trees({**POOLED_TREES, "device": _SHARED["device"]}, x_train, y, x_target)
+        m6 = _trees(
+            {**POOLED_TREES, "device": _SHARED["device"]}, x_train, y, x_target
+        )
     except xgb.core.XGBoostError:
         m6 = _trees({**POOLED_TREES, "nthread": 6}, x_train, y, x_target)
     rows = np.random.default_rng(year).choice(
@@ -753,7 +792,9 @@ def _pooled(panel: pd.DataFrame, xs: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         }
     )
     ctx = multiprocessing.get_context("spawn")
-    with ctx.Pool(POOLED_WORKERS, initializer=_worker_init, initargs=(str(shared_path),)) as workers:
+    with ctx.Pool(
+        POOLED_WORKERS, initializer=_worker_init, initargs=(str(shared_path),)
+    ) as workers:
         for year, out, diagnostic in workers.imap_unordered(
             _fit_fold, TEST_YEARS
         ):

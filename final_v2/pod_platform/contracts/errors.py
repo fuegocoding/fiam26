@@ -42,7 +42,9 @@ class TypedError(StrictModel):
                 f"only genuinely transient errors receive bounded retries; {self.code.value} cannot be retryable"
             )
         if self.retryable and not self.stop_condition:
-            raise ValueError("a retryable error must declare its stop condition")
+            raise ValueError(
+                "a retryable error must declare its stop condition"
+            )
         return self
 
 
@@ -81,7 +83,9 @@ class ToolResponse(StrictModel):
             provenance=provenance or {},
             limitations=limitations or [],
             next_actions=next_actions or [],
-            error=TypedError(code=code, retryable=retryable, stop_condition=stop_condition),
+            error=TypedError(
+                code=code, retryable=retryable, stop_condition=stop_condition
+            ),
         )
 
 

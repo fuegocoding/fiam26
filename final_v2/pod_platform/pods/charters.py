@@ -23,14 +23,22 @@ POD_SPECS: dict[Charter, PodSpec] = {
         charter=Charter.FUNDAMENTALS_EXPECTATIONS,
         namespace="pod_fundamentals",
         mission="Forecast business fundamentals and analyst-expectation revisions before they are priced.",
-        mechanism_families=("earnings_surprise", "estimate_revision", "profitability_quality"),
+        mechanism_families=(
+            "earnings_surprise",
+            "estimate_revision",
+            "profitability_quality",
+        ),
     ),
     Charter.CORPORATE_EVENTS: PodSpec(
         pod_id="events",
         charter=Charter.CORPORATE_EVENTS,
         namespace="pod_events",
         mission="Study corporate events and capital-allocation decisions and their delayed price response.",
-        mechanism_families=("net_issuance", "buyback_dividend", "investment_and_acquisition"),
+        mechanism_families=(
+            "net_issuance",
+            "buyback_dividend",
+            "investment_and_acquisition",
+        ),
     ),
     Charter.VALUATION_RELATIVE_VALUE: PodSpec(
         pod_id="valuation",
@@ -44,7 +52,11 @@ POD_SPECS: dict[Charter, PodSpec] = {
         charter=Charter.MARKET_DYNAMICS,
         namespace="pod_dynamics",
         mission="Model market dynamics and information diffusion: momentum, flows, short interest, liquidity.",
-        mechanism_families=("momentum", "information_diffusion", "short_interest_liquidity"),
+        mechanism_families=(
+            "momentum",
+            "information_diffusion",
+            "short_interest_liquidity",
+        ),
     ),
 }
 
@@ -61,4 +73,6 @@ def pod_spec(key: Union[Charter, str]) -> PodSpec:
     try:
         return _BY_KEY[str(key)]
     except KeyError:
-        raise KeyError(f"unknown pod {key!r}; known: {sorted(s.pod_id for s in POD_SPECS.values())}") from None
+        raise KeyError(
+            f"unknown pod {key!r}; known: {sorted(s.pod_id for s in POD_SPECS.values())}"
+        ) from None

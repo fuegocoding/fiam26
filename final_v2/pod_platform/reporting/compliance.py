@@ -47,7 +47,9 @@ class ComplianceReport:
 
     @property
     def official_pass(self) -> bool:
-        return all(c.status != "fail" for c in self.checks if c.scope == "official")
+        return all(
+            c.status != "fail" for c in self.checks if c.scope == "official"
+        )
 
     def as_dict(self) -> dict:
         return {
@@ -81,7 +83,9 @@ class ComplianceEngine:
         net = sum((h.weight for h in holdings), ZERO)
         max_name = max((abs(h.weight) for h in holdings), default=ZERO)
         shorts = [h for h in holdings if h.weight < ZERO]
-        min_short_cap = min((h.formation_market_cap_usd for h in shorts), default=None)
+        min_short_cap = min(
+            (h.formation_market_cap_usd for h in shorts), default=None
+        )
 
         report.checks.append(
             ComplianceCheck(
@@ -89,7 +93,9 @@ class ComplianceEngine:
                 threshold=f"{self._official.min_positions}..{self._official.max_positions}",
                 value=str(len(holdings)),
                 status="pass"
-                if self._official.min_positions <= len(holdings) <= self._official.max_positions
+                if self._official.min_positions
+                <= len(holdings)
+                <= self._official.max_positions
                 else "fail",
                 scope="official",
             )
@@ -99,7 +105,9 @@ class ComplianceEngine:
                 name="gross",
                 threshold=f"<= {self._official.max_gross}",
                 value=str(gross),
-                status="pass" if gross <= Decimal(str(self._official.max_gross)) else "fail",
+                status="pass"
+                if gross <= Decimal(str(self._official.max_gross))
+                else "fail",
                 scope="official",
             )
         )
@@ -109,7 +117,9 @@ class ComplianceEngine:
                 threshold=f"[{self._official.min_net}, {self._official.max_net}]",
                 value=str(net),
                 status="pass"
-                if Decimal(str(self._official.min_net)) <= net <= Decimal(str(self._official.max_net))
+                if Decimal(str(self._official.min_net))
+                <= net
+                <= Decimal(str(self._official.max_net))
                 else "fail",
                 scope="official",
             )
@@ -132,7 +142,9 @@ class ComplianceEngine:
             ComplianceCheck(
                 name="short_eligibility",
                 threshold=f">= {self._official.min_short_market_cap_usd}",
-                value=str(min_short_cap) if min_short_cap is not None else "no shorts",
+                value=str(min_short_cap)
+                if min_short_cap is not None
+                else "no shorts",
                 status="pass" if short_ok else "fail",
                 scope="official",
             )
@@ -154,7 +166,11 @@ class ComplianceEngine:
     def enforce(self, holdings: Sequence[ActualHolding]) -> ComplianceReport:
         report = self.check(holdings)
         if not report.official_pass:
-            failing = [c.name for c in report.checks if c.status == "fail" and c.scope == "official"]
+            failing = [
+                c.name
+                for c in report.checks
+                if c.status == "fail" and c.scope == "official"
+            ]
             raise PodPlatformError(
                 ToolResponse.failure(
                     summary=f"actual holdings breach official limits: {', '.join(failing)}",

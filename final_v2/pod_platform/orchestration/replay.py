@@ -23,13 +23,15 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import hashlib
+import importlib.metadata
 import io
 import json
 import math
 import os
 import sys
 import tempfile
-from dataclasses import dataclass, field, fields as dc_fields, is_dataclass, replace
+from dataclasses import dataclass, field, is_dataclass, replace
+from dataclasses import fields as dc_fields
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
@@ -38,7 +40,12 @@ from pydantic import BaseModel, Field, model_validator
 
 from ..accounting.ledger import AccountingLedger, BorrowSchedule
 from ..accounting.returns import benchmark_monthly
-from ..allocation.construction import Candidate, ConstructionEngine, InternalPolicy, OfficialLimits
+from ..allocation.construction import (
+    Candidate,
+    ConstructionEngine,
+    InternalPolicy,
+    OfficialLimits,
+)
 from ..allocation.coordination import (
     CIO,
     CIOCoordinator,
@@ -74,8 +81,17 @@ from ..execution.planner import (
     FillEngine,
     LiquiditySnapshot,
 )
-from ..reporting.compliance import ActualHolding, ComplianceEngine, ComplianceReport
-from ..reporting.dossier import DossierBuilder, HoldingsRow, holdings_csv, returns_csv
+from ..reporting.compliance import (
+    ActualHolding,
+    ComplianceEngine,
+    ComplianceReport,
+)
+from ..reporting.dossier import (
+    DossierBuilder,
+    HoldingsRow,
+    holdings_csv,
+    returns_csv,
+)
 from ..reporting.tables import RequiredTable
 from ..research.certificates import (
     CertificateCheck,
@@ -105,12 +121,16 @@ MONTHLY_LIMITATIONS = (
 
 
 def fail(code: ErrorCode, summary: str, stop: str) -> None:
-    raise PodPlatformError(ToolResponse.failure(summary=summary, code=code, stop_condition=stop))
+    raise PodPlatformError(
+        ToolResponse.failure(summary=summary, code=code, stop_condition=stop)
+    )
 
 
 def utc_close(day: dt.date) -> dt.datetime:
     """Timezone-aware (UTC) market-close reference for a calendar date."""
-    return dt.datetime(day.year, day.month, day.day, 21, 0, tzinfo=dt.timezone.utc)
+    return dt.datetime(
+        day.year, day.month, day.day, 21, 0, tzinfo=dt.timezone.utc
+    )
 
 
 def sha256_hex(payload: bytes) -> str:
@@ -177,18 +197,26 @@ class SourceGateResult:
         }
 
 
-def source_cards_from_records(records: Iterable[Mapping[str, Any]]) -> dict[str, SourceCard]:
+def source_cards_from_records(
+    records: Iterable[Mapping[str, Any]],
+) -> dict[str, SourceCard]:
     cards: dict[str, SourceCard] = {}
     for record in records:
         card = SourceCard.model_validate(record)
         if card.source_id in cards:
-            fail(ErrorCode.SCHEMA_MISMATCH, f"duplicate source card {card.source_id}", "One card per source id.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"duplicate source card {card.source_id}",
+                "One card per source id.",
+            )
         cards[card.source_id] = card
     return cards
 
 
 def load_source_cards(path: Path) -> dict[str, SourceCard]:
-    return source_cards_from_records(json.loads(Path(path).read_text(encoding="utf-8")))
+    return source_cards_from_records(
+        json.loads(Path(path).read_text(encoding="utf-8"))
+    )
 
 
 def _card_eligible(use: SourceUse) -> bool:
@@ -212,9 +240,14 @@ class SourceEligibilityGate:
         self.research_only = research_only
 
     def resolve(
-        self, uses: Iterable[tuple[str, str, str]], cards: Mapping[str, SourceCard]
+        self,
+        uses: Iterable[tuple[str, str, str]],
+        cards: Mapping[str, SourceCard],
     ) -> list[SourceUse]:
-        return [SourceUse(name, source_id, role, cards.get(source_id)) for name, source_id, role in uses]
+        return [
+            SourceUse(name, source_id, role, cards.get(source_id))
+            for name, source_id, role in uses
+        ]
 
     def evaluate(self, uses: Sequence[SourceUse]) -> SourceGateResult:
         result = SourceGateResult(research_only=self.research_only)
@@ -225,8 +258,12 @@ class SourceEligibilityGate:
                     "consumer": use.name,
                     "source_id": use.source_id,
                     "role": use.role,
-                    "card_snapshot_id": use.card.snapshot_id if use.card else None,
-                    "card_status": use.card.status.value if use.card else "NO_CARD",
+                    "card_snapshot_id": use.card.snapshot_id
+                    if use.card
+                    else None,
+                    "card_status": use.card.status.value
+                    if use.card
+                    else "NO_CARD",
                     "formation_eligible": eligible,
                 }
             )
@@ -244,7 +281,11 @@ class SourceEligibilityGate:
 def file_fingerprint(path: Path, *, hash_content: bool = True) -> dict:
     path = Path(path)
     if not path.is_file():
-        fail(ErrorCode.SCHEMA_MISMATCH, f"lineage file missing: {path}", "Core source lineage must reference existing files.")
+        fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            f"lineage file missing: {path}",
+            "Core source lineage must reference existing files.",
+        )
     stat = path.stat()
     digest = None
     if hash_content:
@@ -256,7 +297,9 @@ def file_fingerprint(path: Path, *, hash_content: bool = True) -> dict:
     return {
         "path": str(path),
         "size_bytes": stat.st_size,
-        "mtime_utc": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc).isoformat(),
+        "mtime_utc": dt.datetime.fromtimestamp(
+            stat.st_mtime, dt.timezone.utc
+        ).isoformat(),
         "sha256": digest,
     }
 
@@ -265,12 +308,24 @@ def file_fingerprint(path: Path, *, hash_content: bool = True) -> dict:
 class CoreSourceLineage:
     entries: dict[str, dict] = field(default_factory=dict)
 
-    def add(self, source_id: str, path: Path, *, role: str, hash_content: bool = True) -> None:
-        self.entries[source_id] = {"role": role, **file_fingerprint(path, hash_content=hash_content)}
+    def add(
+        self,
+        source_id: str,
+        path: Path,
+        *,
+        role: str,
+        hash_content: bool = True,
+    ) -> None:
+        self.entries[source_id] = {
+            "role": role,
+            **file_fingerprint(path, hash_content=hash_content),
+        }
 
     @property
     def fully_hashed(self) -> bool:
-        return bool(self.entries) and all(e.get("sha256") for e in self.entries.values())
+        return bool(self.entries) and all(
+            e.get("sha256") for e in self.entries.values()
+        )
 
     def as_dict(self) -> dict:
         return {k: self.entries[k] for k in sorted(self.entries)}
@@ -352,12 +407,18 @@ def resolve_outcomes(
     return resolved
 
 
-def validate_contiguous_periods(periods: Sequence[tuple[dt.date, dt.date]]) -> None:
+def validate_contiguous_periods(
+    periods: Sequence[tuple[dt.date, dt.date]],
+) -> None:
     """Each period is (formation_date, period_end); consecutive periods must abut."""
     previous_end: Optional[dt.date] = None
     for formation, end in periods:
         if end <= formation:
-            fail(ErrorCode.ASOF_VIOLATION, f"period {formation}->{end} is not forward in time", "Periods must move forward.")
+            fail(
+                ErrorCode.ASOF_VIOLATION,
+                f"period {formation}->{end} is not forward in time",
+                "Periods must move forward.",
+            )
         if previous_end is not None and formation != previous_end:
             fail(
                 ErrorCode.ASOF_VIOLATION,
@@ -475,13 +536,25 @@ class MonthlyAccountingReplay:
             return {}
         nav = self.ledger.nav()
         if nav <= ZERO:
-            fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, "NAV is not positive", "Accounting cannot continue on non-positive NAV.")
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                "NAV is not positive",
+                "Accounting cannot continue on non-positive NAV.",
+            )
         return {p.security_id: p.market_value() / nav for p in positions}
 
     def _tolerance(self, nav: Decimal) -> Decimal:
         return max(Decimal("1e-6"), abs(nav) * Decimal("1e-15"))
 
-    def _execute_signed(self, sid: str, qty: Decimal, price: Decimal, fee: Decimal, at: dt.datetime, tag: str) -> None:
+    def _execute_signed(
+        self,
+        sid: str,
+        qty: Decimal,
+        price: Decimal,
+        fee: Decimal,
+        at: dt.datetime,
+        tag: str,
+    ) -> None:
         position = self.ledger.position(sid)
         current = position.quantity
         parts: list[tuple[OrderSide, Decimal]] = []
@@ -504,15 +577,31 @@ class MonthlyAccountingReplay:
         total = sum((q for _, q in parts), ZERO)
         assigned = ZERO
         for index, (side, part_qty) in enumerate(parts):
-            part_fee = fee - assigned if index == len(parts) - 1 else fee * part_qty / total
+            part_fee = (
+                fee - assigned
+                if index == len(parts) - 1
+                else fee * part_qty / total
+            )
             assigned += part_fee
-            self.ledger.execute(f"{tag}_{sid}_{index}", sid, side, part_qty, price, part_fee, at)
+            self.ledger.execute(
+                f"{tag}_{sid}_{index}", sid, side, part_qty, price, part_fee, at
+            )
         self.ledger.mark(sid, price, at)
 
-    def apply_fills(self, fills: Sequence[FillInstruction], *, at: dt.datetime, tag: str = "fill") -> TradeResult:
+    def apply_fills(
+        self,
+        fills: Sequence[FillInstruction],
+        *,
+        at: dt.datetime,
+        tag: str = "fill",
+    ) -> TradeResult:
         at = require_aware(at, "at")
         if self._open is not None:
-            fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, "previous period was not advanced", "Each trade must be followed by period accounting.")
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                "previous period was not advanced",
+                "Each trade must be followed by period accounting.",
+            )
         nav_open = self.ledger.nav()
         pre_weights = self.actual_weights()
         traded = ZERO
@@ -521,9 +610,17 @@ class MonthlyAccountingReplay:
         for fill in fills:
             position = self.ledger.positions.get(fill.security_id)
             held = position is not None and position.quantity != ZERO
-            price = position.last_mark if held else (fill.entry_price or self.entry_price)
+            price = (
+                position.last_mark
+                if held
+                else (fill.entry_price or self.entry_price)
+            )
             if price is None or price <= ZERO:
-                fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"no positive price for {fill.security_id}", "Fills need a positive reference price.")
+                fail(
+                    ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                    f"no positive price for {fill.security_id}",
+                    "Fills need a positive reference price.",
+                )
             if fill.close_out:
                 if not held:
                     continue
@@ -532,7 +629,14 @@ class MonthlyAccountingReplay:
                 qty = fill.signed_dollars / price
             if qty == ZERO:
                 continue
-            self._execute_signed(fill.security_id, qty, price, fill.fee, at, f"{tag}{fill.order_id}")
+            self._execute_signed(
+                fill.security_id,
+                qty,
+                price,
+                fill.fee,
+                at,
+                f"{tag}{fill.order_id}",
+            )
             traded += abs(qty) * price
             fees_total += fill.fee
             trades.append(
@@ -546,7 +650,9 @@ class MonthlyAccountingReplay:
                 }
             )
         nav_post = self.ledger.nav()
-        self._open = _OpenPeriod(nav_open=nav_open, nav_post=nav_post, fees=fees_total)
+        self._open = _OpenPeriod(
+            nav_open=nav_open, nav_post=nav_post, fees=fees_total
+        )
         turnover = float(traded / (2 * nav_open)) if nav_open > ZERO else 0.0
         return TradeResult(
             nav_open=nav_open,
@@ -604,10 +710,19 @@ class MonthlyAccountingReplay:
     ) -> PeriodResult:
         period_end_at = require_aware(period_end_at, "period_end_at")
         if self._open is None:
-            fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, "no trade precedes this period", "Trade before advancing.")
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                "no trade precedes this period",
+                "Trade before advancing.",
+            )
         opened = self._open
         ledger = self.ledger
-        held = [(p.security_id, p.quantity, p.last_mark) for p in sorted(ledger.marked_positions(), key=lambda p: p.security_id)]
+        held = [
+            (p.security_id, p.quantity, p.last_mark)
+            for p in sorted(
+                ledger.marked_positions(), key=lambda p: p.security_id
+            )
+        ]
         missing = [sid for sid, _, _ in held if sid not in resolved.returns]
         if missing:
             fail(
@@ -631,14 +746,23 @@ class MonthlyAccountingReplay:
                 )
             marks[sid] = raw if raw > ZERO else PRICE_FLOOR
         weights_during = self.actual_weights()
-        gross_exposure = float(sum((abs(w) for w in weights_during.values()), ZERO))
+        gross_exposure = float(
+            sum((abs(w) for w in weights_during.values()), ZERO)
+        )
         net_exposure = float(sum(weights_during.values(), ZERO))
         nav_post = ledger.nav()
 
         income_before = ledger.cash_income
-        ledger.accrue_cash(rf * self.periods_per_year, self.periods_per_year, period_end_at)
+        ledger.accrue_cash(
+            rf * self.periods_per_year, self.periods_per_year, period_end_at
+        )
         income = ledger.cash_income - income_before
-        borrow = ledger.accrue_borrow(self.schedule, dict(market_caps or {}), self.trading_days, period_end_at)
+        borrow = ledger.accrue_borrow(
+            self.schedule,
+            dict(market_caps or {}),
+            self.trading_days,
+            period_end_at,
+        )
 
         pnl = ZERO
         active = ZERO
@@ -651,14 +775,24 @@ class MonthlyAccountingReplay:
             ledger.mark(sid, p1, period_end_at)
             if sid in resolved.liquidated:
                 side = OrderSide.SELL if qty > ZERO else OrderSide.COVER
-                ledger.execute(f"liquidate_{sid}_{period_end_at.date().isoformat()}", sid, side, abs(qty), p1, ZERO, period_end_at)
+                ledger.execute(
+                    f"liquidate_{sid}_{period_end_at.date().isoformat()}",
+                    sid,
+                    side,
+                    abs(qty),
+                    p1,
+                    ZERO,
+                    period_end_at,
+                )
                 liquidated.append(sid)
         self._cum_pnl += pnl
         nav_end = ledger.nav()
 
         tol = self._tolerance(nav_end)
         expected_period = nav_post + income + pnl - borrow
-        recomputed = ledger.cash + sum((p.market_value() for p in ledger.marked_positions()), ZERO)
+        recomputed = ledger.cash + sum(
+            (p.market_value() for p in ledger.marked_positions()), ZERO
+        )
         expected_cum = (
             ledger.starting_cash
             + self._cum_pnl
@@ -729,11 +863,21 @@ class PeriodComplianceLog:
         for sid, weight in sorted(post.items()):
             cap = market_caps.get(sid)
             if cap is None:
-                fail(ErrorCode.SCHEMA_MISMATCH, f"no market-cap evidence for held {sid} ({period}/{stage})", "Compliance needs a cap for every held name.")
+                fail(
+                    ErrorCode.SCHEMA_MISMATCH,
+                    f"no market-cap evidence for held {sid} ({period}/{stage})",
+                    "Compliance needs a cap for every held name.",
+                )
             formation_cap = (formation_caps or {}).get(sid, cap)
-            holdings.append(ActualHolding(sid, weight, _dec(cap), _dec(formation_cap)))
+            holdings.append(
+                ActualHolding(sid, weight, _dec(cap), _dec(formation_cap))
+            )
         report = self._engine.check(holdings)
-        failing = [c.name for c in report.checks if c.status == "fail" and c.scope == "official"]
+        failing = [
+            c.name
+            for c in report.checks
+            if c.status == "fail" and c.scope == "official"
+        ]
         self.records.append(
             {
                 "period": period,
@@ -744,7 +888,9 @@ class PeriodComplianceLog:
                 "post_summary": _weight_summary(post),
                 "official_pass": report.official_pass,
                 "failing_official": failing,
-                "internal_warnings": [c.name for c in report.checks if c.status == "warn"],
+                "internal_warnings": [
+                    c.name for c in report.checks if c.status == "warn"
+                ],
                 "report": report.as_dict(),
             }
         )
@@ -758,11 +904,17 @@ class PeriodComplianceLog:
 
     @property
     def all_official_pass(self) -> bool:
-        return bool(self.records) and all(r["official_pass"] for r in self.records)
+        return bool(self.records) and all(
+            r["official_pass"] for r in self.records
+        )
 
     def internal_warnings(self) -> list[dict]:
         return [
-            {"period": r["period"], "stage": r["stage"], "warnings": r["internal_warnings"]}
+            {
+                "period": r["period"],
+                "stage": r["stage"],
+                "warnings": r["internal_warnings"],
+            }
             for r in self.records
             if r["internal_warnings"]
         ]
@@ -816,18 +968,49 @@ def account_period(
     raises, so a failed run still carries its evidence.
     """
     drifted = replay.actual_weights()
-    compliance.record(period, "formation_target", drifted, construction_weights, market_caps)
-    compliance.record(period, "post_risk", construction_weights, post_risk_weights, market_caps)
-    trade = replay.rebalance_to_targets(
-        post_risk_weights, at=formation_at, cost_bp_per_side=_dec(cost_bp_per_side)
+    compliance.record(
+        period, "formation_target", drifted, construction_weights, market_caps
     )
-    compliance.record(period, "post_trade_actual", trade.pre_weights, trade.post_weights, market_caps)
+    compliance.record(
+        period,
+        "post_risk",
+        construction_weights,
+        post_risk_weights,
+        market_caps,
+    )
+    trade = replay.rebalance_to_targets(
+        post_risk_weights,
+        at=formation_at,
+        cost_bp_per_side=_dec(cost_bp_per_side),
+    )
+    compliance.record(
+        period,
+        "post_trade_actual",
+        trade.pre_weights,
+        trade.post_weights,
+        market_caps,
+    )
     resolved = resolve_outcomes(
-        replay.held(), outcomes, liquidations, formation_at=formation_at, period_end_at=end_at
+        replay.held(),
+        outcomes,
+        liquidations,
+        formation_at=formation_at,
+        period_end_at=end_at,
     )
     caps = {k: _dec(v) for k, v in market_caps.items()}
-    result = replay.advance(period_end_at=end_at, rf_monthly=rf_monthly, resolved=resolved, market_caps=caps)
-    compliance.record(period, "period_end_drifted", trade.post_weights, result.drifted_weights, market_caps)
+    result = replay.advance(
+        period_end_at=end_at,
+        rf_monthly=rf_monthly,
+        resolved=resolved,
+        market_caps=caps,
+    )
+    compliance.record(
+        period,
+        "period_end_drifted",
+        trade.post_weights,
+        result.drifted_weights,
+        market_caps,
+    )
     return AccountedPeriod(trade, result, resolved)
 
 
@@ -852,14 +1035,27 @@ LEGACY_FAMILY_SOURCES: dict[str, tuple[str, ...]] = {
 LEGACY_NONCORE_FAMILIES = ("demand", "traded", "gate_e7_demand")
 
 
-def legacy_source_uses(families: Iterable[str], cards: Mapping[str, SourceCard]) -> list[SourceUse]:
+def legacy_source_uses(
+    families: Iterable[str], cards: Mapping[str, SourceCard]
+) -> list[SourceUse]:
     uses: list[SourceUse] = []
     for family in families:
         if family not in LEGACY_FAMILY_SOURCES:
-            fail(ErrorCode.SOURCE_NOT_FORMATION_ELIGIBLE, f"family {family!r} has no declared source lineage", "Every family declares the sources it consumes.")
+            fail(
+                ErrorCode.SOURCE_NOT_FORMATION_ELIGIBLE,
+                f"family {family!r} has no declared source lineage",
+                "Every family declares the sources it consumes.",
+            )
         for source_id in LEGACY_FAMILY_SOURCES[family]:
-            role = "external" if family in LEGACY_NONCORE_FAMILIES or source_id not in ("core_chars_panel", "core_factor_list") else "core"
-            uses.append(SourceUse(family, source_id, role, cards.get(source_id)))
+            role = (
+                "external"
+                if family in LEGACY_NONCORE_FAMILIES
+                or source_id not in ("core_chars_panel", "core_factor_list")
+                else "core"
+            )
+            uses.append(
+                SourceUse(family, source_id, role, cards.get(source_id))
+            )
     return uses
 
 
@@ -870,7 +1066,11 @@ def prepare_output_dir(path: Path, *, overwrite: bool = False) -> Path:
     path = Path(path)
     if path.exists():
         if not path.is_dir():
-            fail(ErrorCode.SCHEMA_MISMATCH, f"output path is not a directory: {path}", "Choose a fresh output directory.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"output path is not a directory: {path}",
+                "Choose a fresh output directory.",
+            )
         if any(path.iterdir()) and not overwrite:
             fail(
                 ErrorCode.SCHEMA_MISMATCH,
@@ -891,7 +1091,11 @@ class ArtifactWriter:
 
     def write_bytes(self, name: str, payload: bytes) -> str:
         if not name or "/" in name or "\\" in name or name.startswith("."):
-            fail(ErrorCode.SCHEMA_MISMATCH, f"invalid artifact name {name!r}", "Artifact names are plain file names.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"invalid artifact name {name!r}",
+                "Artifact names are plain file names.",
+            )
         target = self.out_dir / name
         if self.overwrite:
             fd, tmp = tempfile.mkstemp(dir=self.out_dir, prefix=".tmp_")
@@ -952,11 +1156,20 @@ def assess_freeze(
     if gate.research_only:
         reasons.append("research-only run cannot claim freeze or admission")
     if not gate.formation_inputs_approved:
-        reasons.append(f"formation inputs not approved: {', '.join(sorted(gate.blocked)) or 'no sources declared'}")
+        reasons.append(
+            f"formation inputs not approved: {', '.join(sorted(gate.blocked)) or 'no sources declared'}"
+        )
     if manifest is None:
-        reasons.append("run manifest incomplete: required lineage/versions were not declared")
-    if deployed_forecast_count <= 0 or certificate_count < deployed_forecast_count:
-        reasons.append(f"certificates {certificate_count} do not cover {deployed_forecast_count} deployed forecasts")
+        reasons.append(
+            "run manifest incomplete: required lineage/versions were not declared"
+        )
+    if (
+        deployed_forecast_count <= 0
+        or certificate_count < deployed_forecast_count
+    ):
+        reasons.append(
+            f"certificates {certificate_count} do not cover {deployed_forecast_count} deployed forecasts"
+        )
     if not accounting_reconciled:
         reasons.append("accounting did not reconcile")
     if not compliance.all_official_pass:
@@ -997,8 +1210,7 @@ def environment_lock_hash() -> str:
     parts = [f"python={sys.version.split()[0]}"]
     for name in ("numpy", "pandas", "pydantic"):
         try:
-            module = __import__(name)
-            parts.append(f"{name}={getattr(module, '__version__', 'unknown')}")
+            parts.append(f"{name}={importlib.metadata.version(name)}")
         except Exception:  # pragma: no cover - optional modules
             parts.append(f"{name}=absent")
     return sha256_hex("|".join(parts).encode("utf-8"))
@@ -1049,7 +1261,11 @@ def load_fixture(directory: Path) -> FixtureData:
     def required(name: str) -> Path:
         path = directory / name
         if not path.is_file():
-            fail(ErrorCode.SCHEMA_MISMATCH, f"fixture file missing: {name}", "Controlled replay needs explicit fixtures.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"fixture file missing: {name}",
+                "Controlled replay needs explicit fixtures.",
+            )
         return path
 
     file_hashes: dict[str, str] = {}
@@ -1063,12 +1279,17 @@ def load_fixture(directory: Path) -> FixtureData:
         return data
 
     config = json.loads(read("config.json").decode("utf-8"))
-    cards = source_cards_from_records(json.loads(read("source_cards.json").decode("utf-8")))
+    cards = source_cards_from_records(
+        json.loads(read("source_cards.json").decode("utf-8"))
+    )
     certificates: dict[str, AdmissionCertificate] = {}
     for record in json.loads(read("certificates.json").decode("utf-8")):
         certificate = AdmissionCertificate.model_validate(record)
         certificates[certificate.certificate_id] = certificate
-    forecasts = [Forecast.model_validate(r) for r in json.loads(read("forecasts.json").decode("utf-8"))]
+    forecasts = [
+        Forecast.model_validate(r)
+        for r in json.loads(read("forecasts.json").decode("utf-8"))
+    ]
     market: dict[dt.date, dict[str, MarketRow]] = {}
     outcomes: dict[dt.date, dict[str, Optional[float]]] = {}
     read("market.csv")
@@ -1076,7 +1297,11 @@ def load_fixture(directory: Path) -> FixtureData:
         day = dt.date.fromisoformat(row["formation_date"])
         sid = row["security_id"]
         if sid in market.setdefault(day, {}):
-            fail(ErrorCode.SCHEMA_MISMATCH, f"duplicate market row {day}/{sid}", "One row per security and date.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"duplicate market row {day}/{sid}",
+                "One row per security and date.",
+            )
         market[day][sid] = MarketRow(
             security_id=sid,
             ticker=row["ticker"],
@@ -1093,14 +1318,26 @@ def load_fixture(directory: Path) -> FixtureData:
             size_tier=row["size_tier"],
         )
         outcome = row.get("outcome_excess_return", "")
-        outcomes.setdefault(day, {})[sid] = _finite(outcome) if str(outcome).strip() else None
+        outcomes.setdefault(day, {})[sid] = (
+            _finite(outcome) if str(outcome).strip() else None
+        )
     periods: list[tuple[dt.date, dt.date, float]] = []
     read("periods.csv")
     for row in _read_csv(directory / "periods.csv"):
         tb3ms = _finite(row.get("tb3ms_annual_percent"))
         if tb3ms is None:
-            fail(ErrorCode.SCHEMA_MISMATCH, f"missing TB3MS for {row.get('formation_date')}", "The risk-free input is never zero-filled.")
-        periods.append((dt.date.fromisoformat(row["formation_date"]), dt.date.fromisoformat(row["period_end"]), tb3ms))
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"missing TB3MS for {row.get('formation_date')}",
+                "The risk-free input is never zero-filled.",
+            )
+        periods.append(
+            (
+                dt.date.fromisoformat(row["formation_date"]),
+                dt.date.fromisoformat(row["period_end"]),
+                tb3ms,
+            )
+        )
     liquidations: dict[dt.date, dict[str, LiquidationEvidence]] = {}
     raw_liq = read("liquidations.json", optional=True)
     if raw_liq:
@@ -1111,7 +1348,18 @@ def load_fixture(directory: Path) -> FixtureData:
             liquidations.setdefault(day, {})[evidence.security_id] = evidence
     raw_lineage = read("lineage.json", optional=True)
     lineage = json.loads(raw_lineage.decode("utf-8")) if raw_lineage else {}
-    return FixtureData(config, cards, certificates, forecasts, market, outcomes, periods, liquidations, lineage, file_hashes)
+    return FixtureData(
+        config,
+        cards,
+        certificates,
+        forecasts,
+        market,
+        outcomes,
+        periods,
+        liquidations,
+        lineage,
+        file_hashes,
+    )
 
 
 LINEAGE_REQUIRED = (
@@ -1155,11 +1403,17 @@ def _plain(obj: Any) -> Any:
 
 
 def digest_of(obj: Any) -> str:
-    return sha256_hex(json.dumps(_plain(obj), sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    return sha256_hex(
+        json.dumps(_plain(obj), sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
 
 
 def risk_rows_digest(rows: Sequence[ReturnRow]) -> str:
-    return digest_of([[r.observed_at, dict(sorted(r.returns.items()))] for r in rows])
+    return digest_of(
+        [[r.observed_at, dict(sorted(r.returns.items()))] for r in rows]
+    )
 
 
 @dataclass(frozen=True)
@@ -1169,21 +1423,43 @@ class AsOfRiskHistory:
     rows: tuple[ReturnRow, ...]
 
     @classmethod
-    def from_records(cls, records: Iterable[Mapping[str, Any]]) -> "AsOfRiskHistory":
+    def from_records(
+        cls, records: Iterable[Mapping[str, Any]]
+    ) -> "AsOfRiskHistory":
         rows = []
         for record in records:
             try:
-                at = require_aware(dt.datetime.fromisoformat(str(record["observed_at"])), "observed_at")
-                rows.append(ReturnRow(at, {str(k): float(v) for k, v in dict(record["returns"]).items()}))
+                at = require_aware(
+                    dt.datetime.fromisoformat(str(record["observed_at"])),
+                    "observed_at",
+                )
+                rows.append(
+                    ReturnRow(
+                        at,
+                        {
+                            str(k): float(v)
+                            for k, v in dict(record["returns"]).items()
+                        },
+                    )
+                )
             except (KeyError, TypeError, ValueError) as error:
-                fail(ErrorCode.SCHEMA_MISMATCH, f"malformed risk input row: {type(error).__name__}: {error}", "Risk inputs need an aware observed_at and numeric returns.")
+                fail(
+                    ErrorCode.SCHEMA_MISMATCH,
+                    f"malformed risk input row: {type(error).__name__}: {error}",
+                    "Risk inputs need an aware observed_at and numeric returns.",
+                )
         return cls(tuple(rows))
 
     def digest(self) -> str:
         return risk_rows_digest(self.rows)
 
     def as_of(self, decision_at: dt.datetime) -> tuple[ReturnRow, ...]:
-        return tuple(sorted((r for r in self.rows if r.observed_at <= decision_at), key=lambda r: r.observed_at))
+        return tuple(
+            sorted(
+                (r for r in self.rows if r.observed_at <= decision_at),
+                key=lambda r: r.observed_at,
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -1208,10 +1484,14 @@ class CoordinationContext:
     run_id: str
     period: str
     decision_at: dt.datetime
-    forecasts: tuple[Forecast, ...]  # active AND certificate-verified for this decision
+    forecasts: tuple[
+        Forecast, ...
+    ]  # active AND certificate-verified for this decision
     certificates: Mapping[str, AdmissionCertificate]
     rows: Mapping[str, MarketRow]
-    held_weights: Mapping[str, Decimal]  # actual drifted pre-trade weights from the ledger
+    held_weights: Mapping[
+        str, Decimal
+    ]  # actual drifted pre-trade weights from the ledger
     pending_orders: tuple[PendingOrder, ...]
     neutral_uncertainty: float
     cost_model_version: str
@@ -1227,22 +1507,46 @@ class CoordinationHook:
     history: AsOfRiskHistory
     hedge_allowances: tuple[HedgeAllowance, ...] = ()
     hedge_requests: tuple[HedgeRequestSpec, ...] = ()
-    declarations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)  # strategy -> label/event/measurement/exposure ids
-    input_factory: Optional[Callable[[CoordinationContext, "CoordinationHook"], CoordinationInputs]] = None
+    declarations: Mapping[str, Mapping[str, Any]] = field(
+        default_factory=dict
+    )  # strategy -> label/event/measurement/exposure ids
+    input_factory: Optional[
+        Callable[[CoordinationContext, "CoordinationHook"], CoordinationInputs]
+    ] = None
 
     def digest(self) -> str:
-        return digest_of({
-            "policy": self.policy, "covariance_policy": self.covariance_policy, "history": self.history.digest(),
-            "hedge_allowances": self.hedge_allowances, "hedge_requests": self.hedge_requests,
-            "declarations": self.declarations, "custom_factory": getattr(self.input_factory, "__qualname__", None),
-        })
+        return digest_of(
+            {
+                "policy": self.policy,
+                "covariance_policy": self.covariance_policy,
+                "history": self.history.digest(),
+                "hedge_allowances": self.hedge_allowances,
+                "hedge_requests": self.hedge_requests,
+                "declarations": self.declarations,
+                "custom_factory": getattr(
+                    self.input_factory, "__qualname__", None
+                ),
+            }
+        )
 
 
-def coordination_hook_from_records(policy: Mapping[str, Any], risk_rows: Iterable[Mapping[str, Any]]) -> CoordinationHook:
+def coordination_hook_from_records(
+    policy: Mapping[str, Any], risk_rows: Iterable[Mapping[str, Any]]
+) -> CoordinationHook:
     """Build a hook from operator JSON (policy file + dated risk rows). Unknown policy keys are rejected."""
-    known = {"coordination_policy", "covariance_policy", "hedge_allowances", "hedge_requests", "declarations"}
+    known = {
+        "coordination_policy",
+        "covariance_policy",
+        "hedge_allowances",
+        "hedge_requests",
+        "declarations",
+    }
     if set(policy) - known:
-        fail(ErrorCode.SCHEMA_MISMATCH, f"unknown coordination policy keys: {sorted(set(policy) - known)}", "Policy files are fixed and explicit.")
+        fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            f"unknown coordination policy keys: {sorted(set(policy) - known)}",
+            "Policy files are fixed and explicit.",
+        )
     return CoordinationHook(
         CoordinationPolicy(**policy.get("coordination_policy", {})),
         CovariancePolicy(**policy.get("covariance_policy", {})),
@@ -1253,56 +1557,142 @@ def coordination_hook_from_records(policy: Mapping[str, Any], risk_rows: Iterabl
     )
 
 
-def default_coordination_inputs(ctx: CoordinationContext, hook: CoordinationHook) -> CoordinationInputs:
+def default_coordination_inputs(
+    ctx: CoordinationContext, hook: CoordinationHook
+) -> CoordinationInputs:
     """Active certified published forecasts + actual holdings + pending orders + as-of risk history."""
     allowed = {h.security_id: h for h in hook.hedge_allowances}
-    wanted = {s.security_id for s in hook.hedge_requests} | (set(ctx.held_weights) & set(allowed))
+    wanted = {s.security_id for s in hook.hedge_requests} | (
+        set(ctx.held_weights) & set(allowed)
+    )
     for sid in sorted(wanted):
         if sid not in allowed:
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, f"hedge {sid} is not in the explicit hedge allowance", "No arbitrary futures/ETF hedge is allowed.")
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"hedge {sid} is not in the explicit hedge allowance",
+                "No arbitrary futures/ETF hedge is allowed.",
+            )
         row = ctx.rows.get(sid)
         if row is None or not row.tradable:
-            fail(ErrorCode.LIQUIDITY_UNAVAILABLE, f"HEDGE_UNAVAILABLE: no tradable dated market row for hedge {sid} at {ctx.period}", "A hedge with no dated liquidity evidence cannot be requested or held.")
+            fail(
+                ErrorCode.LIQUIDITY_UNAVAILABLE,
+                f"HEDGE_UNAVAILABLE: no tradable dated market row for hedge {sid} at {ctx.period}",
+                "A hedge with no dated liquidity evidence cannot be requested or held.",
+            )
     hedges = tuple(
-        HedgeInstrument(sid, ctx.rows[sid].beta, ctx.rows[sid].sector, float(ctx.rows[sid].market_cap_usd),
-                        float(ctx.rows[sid].adv_dollars), allowed[sid].shortable, allowed[sid].max_abs_weight)
+        HedgeInstrument(
+            sid,
+            ctx.rows[sid].beta,
+            ctx.rows[sid].sector,
+            float(ctx.rows[sid].market_cap_usd),
+            float(ctx.rows[sid].adv_dollars),
+            allowed[sid].shortable,
+            allowed[sid].max_abs_weight,
+        )
         for sid in sorted(wanted)
     )
     universe = tuple(
-        SecurityMeta(sid, float(r.market_cap_usd), r.sector, r.beta, float(r.price), float(r.adv_dollars), tradable=r.tradable)
-        for sid, r in sorted(ctx.rows.items()) if sid not in wanted
+        SecurityMeta(
+            sid,
+            float(r.market_cap_usd),
+            r.sector,
+            r.beta,
+            float(r.price),
+            float(r.adv_dollars),
+            tradable=r.tradable,
+        )
+        for sid, r in sorted(ctx.rows.items())
+        if sid not in wanted
     )
     pods = sorted({f.strategy_id for f in ctx.forecasts})
     auth = tuple(
-        PodAuthorization(p, ctx.namespace or "unscoped",
-                         min(ctx.certificates[f.admission_certificate_id].effective_start for f in ctx.forecasts if f.strategy_id == p))
+        PodAuthorization(
+            p,
+            ctx.namespace or "unscoped",
+            min(
+                ctx.certificates[f.admission_certificate_id].effective_start
+                for f in ctx.forecasts
+                if f.strategy_id == p
+            ),
+        )
         for p in pods
     )
     at = ctx.decision_at
     requests: dict[str, list[HedgeRequest]] = {}
     for s in hook.hedge_requests:
         if s.requester != CIO and s.requester not in pods:
-            fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, f"hedge requester {s.requester!r} has no active certified forecast", "Only active pods or the CIO may request hedges.")
-        requests.setdefault(s.requester, []).append(HedgeRequest(
-            f"hr_{ctx.period}_{s.requester}_{s.security_id}_{s.dimension}", s.requester, s.security_id, s.dimension,
-            s.max_abs_weight, at, at + dt.timedelta(days=1), "trusted-host hedge request"))
+            fail(
+                ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                f"hedge requester {s.requester!r} has no active certified forecast",
+                "Only active pods or the CIO may request hedges.",
+            )
+        requests.setdefault(s.requester, []).append(
+            HedgeRequest(
+                f"hr_{ctx.period}_{s.requester}_{s.security_id}_{s.dimension}",
+                s.requester,
+                s.security_id,
+                s.dimension,
+                s.max_abs_weight,
+                at,
+                at + dt.timedelta(days=1),
+                "trusted-host hedge request",
+            )
+        )
     intentions = []
     for p in pods:
         decl = hook.declarations.get(p, {})
         pod_forecasts = tuple(
             PodForecast(
-                f.forecast_id, p, f.security_id, float(f.return_forecast.expected_excess_return), ctx.neutral_uncertainty,
-                f.created_at, f.expires_at, f.forecast_id, decl.get("family_label"), tuple(f.source_family_ids),
-                tuple(decl.get("event_ids", ())), None, tuple(decl.get("measurement_ids", ())), tuple(decl.get("exposure_ids", ())),
-                information_cutoff=f.information_cutoff)
-            for f in ctx.forecasts if f.strategy_id == p and f.security_id in ctx.rows and f.security_id not in wanted
+                f.forecast_id,
+                p,
+                f.security_id,
+                float(f.return_forecast.expected_excess_return),
+                ctx.neutral_uncertainty,
+                f.created_at,
+                f.expires_at,
+                f.forecast_id,
+                decl.get("family_label"),
+                tuple(f.source_family_ids),
+                tuple(decl.get("event_ids", ())),
+                None,
+                tuple(decl.get("measurement_ids", ())),
+                tuple(decl.get("exposure_ids", ())),
+                information_cutoff=f.information_cutoff,
+            )
+            for f in ctx.forecasts
+            if f.strategy_id == p
+            and f.security_id in ctx.rows
+            and f.security_id not in wanted
         )
-        intentions.append(PodIntention(p, pod_forecasts, hedge_requests=tuple(requests.get(p, ()))))
-    held = tuple(Holding(s, float(w)) for s, w in sorted(ctx.held_weights.items()) if w != ZERO)
-    snapshot = PortfolioSnapshot(f"snap_{ctx.period}", at, f"nav_{ctx.period}", f"px_{ctx.period}", held, ctx.pending_orders)
+        intentions.append(
+            PodIntention(
+                p, pod_forecasts, hedge_requests=tuple(requests.get(p, ()))
+            )
+        )
+    held = tuple(
+        Holding(s, float(w))
+        for s, w in sorted(ctx.held_weights.items())
+        if w != ZERO
+    )
+    snapshot = PortfolioSnapshot(
+        f"snap_{ctx.period}",
+        at,
+        f"nav_{ctx.period}",
+        f"px_{ctx.period}",
+        held,
+        ctx.pending_orders,
+    )
     return CoordinationInputs(
-        ctx.run_id, at, auth, tuple(intentions), universe, hedges, snapshot, ctx.cost_model_version,
-        tuple(requests.get(CIO, ())), hook.history.as_of(at),
+        ctx.run_id,
+        at,
+        auth,
+        tuple(intentions),
+        universe,
+        hedges,
+        snapshot,
+        ctx.cost_model_version,
+        tuple(requests.get(CIO, ())),
+        hook.history.as_of(at),
     )
 
 
@@ -1311,60 +1701,106 @@ def default_coordination_inputs(ctx: CoordinationContext, hook: CoordinationHook
 
 def planned_order_to_pending(order: Any, nav: Decimal) -> PendingOrder:
     """PlannedOrder -> CIO PendingOrder (signed NAV fraction still unfilled)."""
-    return PendingOrder(order.order_id, order.security_id, float(order.order_dollars / nav))
+    return PendingOrder(
+        order.order_id, order.security_id, float(order.order_dollars / nav)
+    )
 
 
-def fill_state_to_feedback(order: Any, state: Any, nav: Decimal) -> Optional[FillFeedback]:
+def fill_state_to_feedback(
+    order: Any, state: Any, nav: Decimal
+) -> Optional[FillFeedback]:
     """FillState -> CIO FillFeedback (signed like the order); None when nothing filled. Idempotent event id."""
     if state.filled_dollars == ZERO:
         return None
     sign = 1.0 if order.order_dollars > ZERO else -1.0
-    return FillFeedback(f"fill:{order.order_id}", order.order_id, sign * float(state.filled_dollars / nav))
+    return FillFeedback(
+        f"fill:{order.order_id}",
+        order.order_id,
+        sign * float(state.filled_dollars / nav),
+    )
 
 
-def assert_plan_current(result: CoordinationResult, snapshot: PortfolioSnapshot, requests: Sequence[HedgeRequest]) -> None:
+def assert_plan_current(
+    result: CoordinationResult,
+    snapshot: PortfolioSnapshot,
+    requests: Sequence[HedgeRequest],
+) -> None:
     """An old coordination plan may only drive orders while holdings, pending orders and requests are unchanged."""
     if not result.is_current_for(snapshot, requests):
-        fail(ErrorCode.ASOF_VIOLATION, "STALE_COORDINATION_PLAN: holdings/pending/hedge state changed since the plan", "Re-coordinate from the new state; an old plan is never executed.")
+        fail(
+            ErrorCode.ASOF_VIOLATION,
+            "STALE_COORDINATION_PLAN: holdings/pending/hedge state changed since the plan",
+            "Re-coordinate from the new state; an old plan is never executed.",
+        )
 
 
 FEE_RESERVE_DEFAULTS = {"margin": 0.10, "max": 0.05, "max_iterations": 12}
 
 
-def planned_fee_fraction(cost_model: CostModel, trades: Mapping[str, float], rows: Mapping[str, MarketRow], nav: Decimal) -> float:
+def planned_fee_fraction(
+    cost_model: CostModel,
+    trades: Mapping[str, float],
+    rows: Mapping[str, MarketRow],
+    nav: Decimal,
+) -> float:
     """Declared-cost-model fee of signed NAV-fraction trades, as a fraction of pre-trade NAV.
 
     Each name is costed as one whole order at its formation liquidity. The cost rate rises with order size,
     so this bounds the same order filled over several days at smaller daily participation.
     """
     if nav <= ZERO:
-        fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, "nonpositive NAV for fee reserve", "Fee reserve needs a positive actual NAV.")
+        fail(
+            ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+            "nonpositive NAV for fee reserve",
+            "Fee reserve needs a positive actual NAV.",
+        )
     total = ZERO
     for sid, weight in sorted(trades.items()):
         row = rows.get(sid)
         if row is None or row.adv_dollars <= ZERO:
-            fail(ErrorCode.LIQUIDITY_UNAVAILABLE, f"no formation liquidity to bound fees for {sid}", "A fee bound needs dated liquidity for every traded name.")
-        liquidity = LiquiditySnapshot(sid, row.adv_dollars, row.daily_volatility, row.size_tier, row.price)
+            fail(
+                ErrorCode.LIQUIDITY_UNAVAILABLE,
+                f"no formation liquidity to bound fees for {sid}",
+                "A fee bound needs dated liquidity for every traded name.",
+            )
+        liquidity = LiquiditySnapshot(
+            sid, row.adv_dollars, row.daily_volatility, row.size_tier, row.price
+        )
         total += cost_model.expected_cost(liquidity, abs(_dec(weight)) * nav)
     return float(total / nav)
 
 
-def assert_fees_within_reserve(fees: Decimal, nav_open: Decimal, reserve: float, period: str) -> None:
+def assert_fees_within_reserve(
+    fees: Decimal, nav_open: Decimal, reserve: float, period: str
+) -> None:
     """Actual cost above the planned reserve is never absorbed: the run stops."""
     if float(fees / nav_open) > reserve:
-        fail(ErrorCode.PORTFOLIO_INFEASIBLE, f"actual fees {fees} exceed the planned fee reserve {reserve:.3e} of NAV {nav_open} at {period}", "Realised cost above the pre-trade bound would breach the risk cap after fees; failing closed.")
+        fail(
+            ErrorCode.PORTFOLIO_INFEASIBLE,
+            f"actual fees {fees} exceed the planned fee reserve {reserve:.3e} of NAV {nav_open} at {period}",
+            "Realised cost above the pre-trade bound would breach the risk cap after fees; failing closed.",
+        )
 
 
 def _cov_receipt(cov: Any) -> dict:
     ids, n = list(cov.security_ids), len(cov.security_ids)
     out = {
-        "version": cov.version, "as_of": cov.as_of, "n_observations": cov.n_observations, "shrinkage": cov.shrinkage,
-        "pd_checked": cov.pd_checked, "pd_method": cov.pd_method, "security_ids": ids, "matrix_sha256": digest_of(cov.matrix),
+        "version": cov.version,
+        "as_of": cov.as_of,
+        "n_observations": cov.n_observations,
+        "shrinkage": cov.shrinkage,
+        "pd_checked": cov.pd_checked,
+        "pd_method": cov.pd_method,
+        "security_ids": ids,
+        "matrix_sha256": digest_of(cov.matrix),
     }
     if n <= 100:
         sd = [math.sqrt(cov.matrix[i][i]) for i in range(n)]
         out["covariance"] = [list(r) for r in cov.matrix]
-        out["correlation"] = [[cov.matrix[i][j] / (sd[i] * sd[j]) for j in range(n)] for i in range(n)]
+        out["correlation"] = [
+            [cov.matrix[i][j] / (sd[i] * sd[j]) for j in range(n)]
+            for i in range(n)
+        ]
     return out
 
 
@@ -1394,13 +1830,17 @@ class ControlledReplay:
         # Explicit certificate policy: argument > config["certificate_policy"] > "fixture_compat".
         # fixture_compat accepts legacy free-text certificates for controlled-replay fixtures only
         # and labels them legacy_unverified; "production" rejects them (see research/certificates.py).
-        self.cert_policy = resolve_policy(certificate_policy or self.cfg.get("certificate_policy"))
+        self.cert_policy = resolve_policy(
+            certificate_policy or self.cfg.get("certificate_policy")
+        )
         self.revocations = revocations
         self.certificate_checks: dict[str, CertificateCheck] = {}
         self.writer = ArtifactWriter(out_dir, overwrite=overwrite)
         self.overlay = risk_overlay
         self.gate = SourceEligibilityGate(research_only)
-        self.compliance = PeriodComplianceLog(OfficialLimits(**self.cfg.get("official_limits", {})))
+        self.compliance = PeriodComplianceLog(
+            OfficialLimits(**self.cfg.get("official_limits", {}))
+        )
         self.periods_log: list[dict] = []
         self.review_log: list[dict] = []
         self.actual_review_log: list[dict] = []
@@ -1411,100 +1851,262 @@ class ControlledReplay:
         if declared is None and self.hook is None:
             return  # legacy fixtures: unchanged behavior
         if declared is None:
-            fail(ErrorCode.SCHEMA_MISMATCH, "a coordination hook was supplied but config.coordination is not declared", "Coordinated mode must be declared in config and supplied by the host; it is never implied.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "a coordination hook was supplied but config.coordination is not declared",
+                "Coordinated mode must be declared in config and supplied by the host; it is never implied.",
+            )
         if declared.get("mode") != COORDINATION_MODE:
-            fail(ErrorCode.SCHEMA_MISMATCH, f"unknown coordination mode {declared.get('mode')!r}", f"Only {COORDINATION_MODE!r} is implemented.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"unknown coordination mode {declared.get('mode')!r}",
+                f"Only {COORDINATION_MODE!r} is implemented.",
+            )
         if self.hook is None:
-            fail(ErrorCode.SCHEMA_MISMATCH, "config declares coordinated mode but no trusted-host coordination hook was supplied", "Refusing to fall back to the legacy trading path.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "config declares coordinated mode but no trusted-host coordination hook was supplied",
+                "Refusing to fall back to the legacy trading path.",
+            )
         pin = declared.get("policy_digest")
         if pin is not None and pin != self.hook.digest():
-            fail(ErrorCode.SCHEMA_MISMATCH, "coordination hook digest does not match config.coordination.policy_digest", "The declared policy and risk history must be the supplied ones.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "coordination hook digest does not match config.coordination.policy_digest",
+                "The declared policy and risk history must be the supplied ones.",
+            )
 
-    def _coordinate_period(self, coordinator, period, decision_at, active, rows, replay, alphas) -> tuple[CoordinationInputs, CoordinationResult, dict]:
+    def _coordinate_period(
+        self, coordinator, period, decision_at, active, rows, replay, alphas
+    ) -> tuple[CoordinationInputs, CoordinationResult, dict]:
         """Compute the CIO book from actual pre-trade state; any failure stops the run (never legacy)."""
         hook = self.hook
         ctx = CoordinationContext(
-            f"{self.cfg['run_id']}_{period}", period, decision_at, tuple(active), self.fx.certificates, rows,
-            {k: v for k, v in replay.actual_weights().items() if v != ZERO}, (), self.cfg.get("neutral_uncertainty", 0.1),
-            self.cost_model_id, self.cfg.get("namespace"),
+            f"{self.cfg['run_id']}_{period}",
+            period,
+            decision_at,
+            tuple(active),
+            self.fx.certificates,
+            rows,
+            {k: v for k, v in replay.actual_weights().items() if v != ZERO},
+            (),
+            self.cfg.get("neutral_uncertainty", 0.1),
+            self.cost_model_id,
+            self.cfg.get("namespace"),
         )
         try:
-            inputs = (hook.input_factory or default_coordination_inputs)(ctx, hook)
+            inputs = (hook.input_factory or default_coordination_inputs)(
+                ctx, hook
+            )
         except PodPlatformError:
             raise
         except Exception as error:
-            fail(ErrorCode.SCHEMA_MISMATCH, f"coordination input factory failed: {type(error).__name__}: {error}", "Coordination cannot be computed; the run fails closed.")
-        if not isinstance(inputs, CoordinationInputs) or inputs.decision_at != decision_at:
-            fail(ErrorCode.ASOF_VIOLATION, "coordination inputs are not dated at this decision", "Inputs must be built for exactly this decision time.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                f"coordination input factory failed: {type(error).__name__}: {error}",
+                "Coordination cannot be computed; the run fails closed.",
+            )
+        if (
+            not isinstance(inputs, CoordinationInputs)
+            or inputs.decision_at != decision_at
+        ):
+            fail(
+                ErrorCode.ASOF_VIOLATION,
+                "coordination inputs are not dated at this decision",
+                "Inputs must be built for exactly this decision time.",
+            )
         actual = {k: float(v) for k, v in ctx.held_weights.items()}
-        snap = {h.security_id: h.weight for h in inputs.snapshot.holdings if h.weight != 0.0}
-        gap = max((abs(actual.get(s, 0.0) - snap.get(s, 0.0)) for s in set(actual) | set(snap)), default=0.0)
-        if gap > RECONCILE_TOL or inputs.snapshot.pending_orders != ctx.pending_orders:
-            fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"coordination snapshot differs from actual pre-trade holdings/pending (gap {gap:.3e})", "Coordination must start from the ledger's actual holdings.")
+        snap = {
+            h.security_id: h.weight
+            for h in inputs.snapshot.holdings
+            if h.weight != 0.0
+        }
+        gap = max(
+            (
+                abs(actual.get(s, 0.0) - snap.get(s, 0.0))
+                for s in set(actual) | set(snap)
+            ),
+            default=0.0,
+        )
+        if (
+            gap > RECONCILE_TOL
+            or inputs.snapshot.pending_orders != ctx.pending_orders
+        ):
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"coordination snapshot differs from actual pre-trade holdings/pending (gap {gap:.3e})",
+                "Coordination must start from the ledger's actual holdings.",
+            )
         nav = replay.nav()
-        fr = {**FEE_RESERVE_DEFAULTS, **self.cfg["coordination"].get("fee_reserve", {})}
-        if (not math.isfinite(float(fr["margin"])) or float(fr["margin"]) < 0
-                or not 0 <= float(fr["max"]) < 1
-                or isinstance(fr["max_iterations"], bool) or not isinstance(fr["max_iterations"], int)
-                or not 1 <= fr["max_iterations"] <= 100):
-            fail(ErrorCode.SCHEMA_MISMATCH, "invalid fee reserve configuration", "Reserve margin must be nonnegative, maximum below one, and iterations 1..100.")
+        fr = {
+            **FEE_RESERVE_DEFAULTS,
+            **self.cfg["coordination"].get("fee_reserve", {}),
+        }
+        if (
+            not math.isfinite(float(fr["margin"]))
+            or float(fr["margin"]) < 0
+            or not 0 <= float(fr["max"]) < 1
+            or isinstance(fr["max_iterations"], bool)
+            or not isinstance(fr["max_iterations"], int)
+            or not 1 <= fr["max_iterations"] <= 100
+        ):
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "invalid fee reserve configuration",
+                "Reserve margin must be nonnegative, maximum below one, and iterations 1..100.",
+            )
         cost_model = CostModel(CostModelConfig(**self.cfg["cost_model"]))
-        planner = ExecutionPlanner(ExecutionPolicy(**self.cfg["execution_policy"]), cost_model)
+        planner = ExecutionPlanner(
+            ExecutionPolicy(**self.cfg["execution_policy"]), cost_model
+        )
         reserve, execution_buffer, iterations = 0.0, 0.0, 0
         try:
             # Fixed point for fees and execution error. For covariance norm ||.||,
             # ||executed|| <= ||target|| + ||executed-target||. Reserving both terms
             # before fees protects the unchanged cap after the NAV denominator shrinks.
             while True:
-                result = coordinator.coordinate(inputs, fee_reserve=reserve, execution_vol_buffer=execution_buffer)
-                bound = planned_fee_fraction(cost_model, result.trades, rows, nav)
+                result = coordinator.coordinate(
+                    inputs,
+                    fee_reserve=reserve,
+                    execution_vol_buffer=execution_buffer,
+                )
+                bound = planned_fee_fraction(
+                    cost_model, result.trades, rows, nav
+                )
                 need = bound * (1.0 + float(fr["margin"]))
-                target = {p.security_id: p.target_weight for p in result.target_book.positions}
-                orders, liquidity = self._plan_execution(planner, target, ctx.held_weights, rows, nav, alphas,
-                    {i.security_id for i in inputs.hedge_universe}, decision_at, result.target_book.target_book_id, period)
+                target = {
+                    p.security_id: p.target_weight
+                    for p in result.target_book.positions
+                }
+                orders, liquidity = self._plan_execution(
+                    planner,
+                    target,
+                    ctx.held_weights,
+                    rows,
+                    nav,
+                    alphas,
+                    {i.security_id for i in inputs.hedge_universe},
+                    decision_at,
+                    result.target_book.target_book_id,
+                    period,
+                )
                 projected = dict(actual)
                 preview_engine = FillEngine(cost_model)
                 for order in orders:
-                    state = self._fill_order(preview_engine, order, liquidity[order.security_id], decision_at)
+                    state = self._fill_order(
+                        preview_engine,
+                        order,
+                        liquidity[order.security_id],
+                        decision_at,
+                    )
                     sign = 1.0 if order.order_dollars > ZERO else -1.0
-                    projected[order.security_id] = projected.get(order.security_id, 0.0) + sign * float(state.filled_dollars / nav)
-                error = {sid: projected.get(sid, 0.0) - float(target.get(sid, ZERO)) for sid in set(projected) | set(target)}
+                    projected[order.security_id] = projected.get(
+                        order.security_id, 0.0
+                    ) + sign * float(state.filled_dollars / nav)
+                error = {
+                    sid: projected.get(sid, 0.0) - float(target.get(sid, ZERO))
+                    for sid in set(projected) | set(target)
+                }
                 error_vol = result.covariance.volatility(error)
                 iterations += 1
                 if bound <= reserve and error_vol <= execution_buffer:
                     break
-                if need > float(fr["max"]) or iterations >= int(fr["max_iterations"]):
-                    fail(ErrorCode.PORTFOLIO_INFEASIBLE, f"fee reserve {need:.3e} of NAV exceeds the bound or does not converge at {period}", "Costs the declared model cannot bound pre-trade are never traded.")
+                if need > float(fr["max"]) or iterations >= int(
+                    fr["max_iterations"]
+                ):
+                    fail(
+                        ErrorCode.PORTFOLIO_INFEASIBLE,
+                        f"fee reserve {need:.3e} of NAV exceeds the bound or does not converge at {period}",
+                        "Costs the declared model cannot bound pre-trade are never traded.",
+                    )
                 reserve = max(reserve, need)
-                execution_buffer = max(execution_buffer, error_vol * (1.0 + float(fr["margin"])))
+                execution_buffer = max(
+                    execution_buffer, error_vol * (1.0 + float(fr["margin"]))
+                )
         except PodPlatformError:
             raise
         except Exception as error:
-            fail(ErrorCode.PORTFOLIO_INFEASIBLE, f"coordination could not be computed: {type(error).__name__}: {error}", "A configured coordination failure never runs the legacy path.")
+            fail(
+                ErrorCode.PORTFOLIO_INFEASIBLE,
+                f"coordination could not be computed: {type(error).__name__}: {error}",
+                "A configured coordination failure never runs the legacy path.",
+            )
         if not result.executable:
-            fail(ErrorCode.PORTFOLIO_INFEASIBLE, f"CIO risk review blocked {period}: {result.risk_review.decision.value}", "A blocked coordinated book is never traded.")
-        assert_plan_current(result, inputs.snapshot, inputs.all_hedge_requests())
-        evidence = {"reserve": reserve, "planned_fee_fraction": bound, "margin": float(fr["margin"]), "max": float(fr["max"]),
-                    "iterations": iterations, "nav_open": str(nav), "capital_usd": float(nav), "vol_cap_policy": self.hook.policy.max_ex_ante_vol,
-                    "vol_cap_sized": self.hook.policy.max_ex_ante_vol * (1.0 - reserve), "cost_model_id": cost_model.model_id,
-                    "execution_vol_buffer": execution_buffer, "projected_execution_error_vol": error_vol,
-                    "target_vol_cap": self.hook.policy.max_ex_ante_vol * (1.0 - reserve) - execution_buffer}
+            fail(
+                ErrorCode.PORTFOLIO_INFEASIBLE,
+                f"CIO risk review blocked {period}: {result.risk_review.decision.value}",
+                "A blocked coordinated book is never traded.",
+            )
+        assert_plan_current(
+            result, inputs.snapshot, inputs.all_hedge_requests()
+        )
+        evidence = {
+            "reserve": reserve,
+            "planned_fee_fraction": bound,
+            "margin": float(fr["margin"]),
+            "max": float(fr["max"]),
+            "iterations": iterations,
+            "nav_open": str(nav),
+            "capital_usd": float(nav),
+            "vol_cap_policy": self.hook.policy.max_ex_ante_vol,
+            "vol_cap_sized": self.hook.policy.max_ex_ante_vol * (1.0 - reserve),
+            "cost_model_id": cost_model.model_id,
+            "execution_vol_buffer": execution_buffer,
+            "projected_execution_error_vol": error_vol,
+            "target_vol_cap": self.hook.policy.max_ex_ante_vol * (1.0 - reserve)
+            - execution_buffer,
+        }
         return inputs, result, evidence
 
-    def _plan_execution(self, planner, target, drifted, rows, nav, alphas, hedge_ids, decision_at, book_id, period):
+    def _plan_execution(
+        self,
+        planner,
+        target,
+        drifted,
+        rows,
+        nav,
+        alphas,
+        hedge_ids,
+        decision_at,
+        book_id,
+        period,
+    ):
         """One planning path shared by pre-trade bounds and actual order placement."""
         liquidity, desires = {}, []
         for sid in sorted(set(target) | set(drifted)):
             row = rows.get(sid)
             if row is None:
-                fail(ErrorCode.LIQUIDITY_UNAVAILABLE, f"no liquidity evidence at {period} for {sid}", "Held names need dated liquidity evidence to be traded.")
-            liquidity[sid] = LiquiditySnapshot(sid, row.adv_dollars, row.daily_volatility, row.size_tier, row.price)
+                fail(
+                    ErrorCode.LIQUIDITY_UNAVAILABLE,
+                    f"no liquidity evidence at {period} for {sid}",
+                    "Held names need dated liquidity evidence to be traded.",
+                )
+            liquidity[sid] = LiquiditySnapshot(
+                sid,
+                row.adv_dollars,
+                row.daily_volatility,
+                row.size_tier,
+                row.price,
+            )
             target_w, current_w = target.get(sid, ZERO), drifted.get(sid, ZERO)
             if target_w != current_w:
-                desires.append(DesiredTrade(security_id=sid, side=OrderSide.BUY if target_w > current_w else OrderSide.SELL,
-                    target_weight=target_w, current_weight=current_w, nav=nav,
-                    declared_edge_bp=HEDGE_EDGE_BP if sid in hedge_ids else Decimal(str(abs(alphas.get(sid, 0.0)) * 10000.0))))
-        return planner.plan(desires, liquidity, decision_at=decision_at, target_book_id=book_id), liquidity
+                desires.append(
+                    DesiredTrade(
+                        security_id=sid,
+                        side=OrderSide.BUY
+                        if target_w > current_w
+                        else OrderSide.SELL,
+                        target_weight=target_w,
+                        current_weight=current_w,
+                        nav=nav,
+                        declared_edge_bp=HEDGE_EDGE_BP
+                        if sid in hedge_ids
+                        else Decimal(str(abs(alphas.get(sid, 0.0)) * 10000.0)),
+                    )
+                )
+        return planner.plan(
+            desires, liquidity, decision_at=decision_at, target_book_id=book_id
+        ), liquidity
 
     def _fill_order(self, engine, order, liquidity, decision_at):
         """Apply the declared deterministic fill window to an order without touching the ledger."""
@@ -1512,13 +2114,29 @@ class ControlledReplay:
         for day in range(int(self.cfg.get("fill_window_days", 5))):
             if not state.pending:
                 break
-            engine.fill_day(state, liquidity, fill_dollars=None if day == order.days_to_complete - 1 else order.daily_fill_dollars)
+            engine.fill_day(
+                state,
+                liquidity,
+                fill_dollars=None
+                if day == order.days_to_complete - 1
+                else order.daily_fill_dollars,
+            )
         if state.pending:
             engine.expire(state, decision_at)
         engine.assert_no_assumed_holdings([state])
         return state
 
-    def _reconcile_coordination(self, coordinator, inputs, result, placed, nav_open, trade, decision_at, period) -> dict:
+    def _reconcile_coordination(
+        self,
+        coordinator,
+        inputs,
+        result,
+        placed,
+        nav_open,
+        trade,
+        decision_at,
+        period,
+    ) -> dict:
         """Partial fills stale the plan: rebuild post-fill state through the adapters and recompute the residual.
 
         Nothing is re-executed here; expired remainders are cancelled, and the residual hedge is sized from the
@@ -1526,78 +2144,193 @@ class ControlledReplay:
         """
         requests = inputs.all_hedge_requests()
         pend = tuple(planned_order_to_pending(o, nav_open) for o, _ in placed)
-        with_orders = replace(inputs.snapshot, snapshot_id=f"{inputs.snapshot.snapshot_id}+orders", pending_orders=pend)
-        feedback = [fb for fb in (fill_state_to_feedback(o, s, nav_open) for o, s in placed) if fb is not None]
+        with_orders = replace(
+            inputs.snapshot,
+            snapshot_id=f"{inputs.snapshot.snapshot_id}+orders",
+            pending_orders=pend,
+        )
+        feedback = [
+            fb
+            for fb in (
+                fill_state_to_feedback(o, s, nav_open) for o, s in placed
+            )
+            if fb is not None
+        ]
         post = with_orders.apply_fills(feedback, as_of=decision_at)
         # Fill adapters carry notionals / pre-trade NAV. Actual ledger weights
         # use post-fee NAV; normalize every holding to that same denominator.
         if trade.nav_post_trade <= ZERO:
-            fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, 'nonpositive post-trade NAV', 'Cannot normalize post-fill holdings.')
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                "nonpositive post-trade NAV",
+                "Cannot normalize post-fill holdings.",
+            )
         nav_ratio = float(nav_open / trade.nav_post_trade)
-        post = replace(post,
-            holdings=tuple(replace(h, weight=h.weight*nav_ratio) for h in post.holdings),
-            nav_snapshot_id=f'{post.nav_snapshot_id}+post-trade:{trade.nav_post_trade}')
+        post = replace(
+            post,
+            holdings=tuple(
+                replace(h, weight=h.weight * nav_ratio) for h in post.holdings
+            ),
+            nav_snapshot_id=f"{post.nav_snapshot_id}+post-trade:{trade.nav_post_trade}",
+        )
         stale = not result.is_current_for(post, requests)
         cancelled = tuple(o.order_id for o in post.pending_orders)
         post = replace(post, pending_orders=())
         live = {k: float(v) for k, v in trade.post_weights.items()}
         held = {h.security_id: h.weight for h in post.holdings}
-        gap = max((abs(held.get(s, 0.0) - live.get(s, 0.0)) for s in set(held) | set(live)), default=0.0)
+        gap = max(
+            (
+                abs(held.get(s, 0.0) - live.get(s, 0.0))
+                for s in set(held) | set(live)
+            ),
+            default=0.0,
+        )
         if gap > RECONCILE_TOL:
-            fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"fill feedback does not reconcile to ledger weights at {period} (gap {gap:.3e})", "Executed fills and accounting must agree.")
+            fail(
+                ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                f"fill feedback does not reconcile to ledger weights at {period} (gap {gap:.3e})",
+                "Executed fills and accounting must agree.",
+            )
         try:
-            residual = coordinator.coordinate(replace(inputs, snapshot=post, run_id=f"{inputs.run_id}.residual"))
+            residual = coordinator.coordinate(
+                replace(
+                    inputs, snapshot=post, run_id=f"{inputs.run_id}.residual"
+                )
+            )
         except PodPlatformError:
             raise
         except Exception as error:
-            fail(ErrorCode.PORTFOLIO_INFEASIBLE, f"residual coordination could not be computed: {type(error).__name__}: {error}", "Post-fill coordination fails closed.")
+            fail(
+                ErrorCode.PORTFOLIO_INFEASIBLE,
+                f"residual coordination could not be computed: {type(error).__name__}: {error}",
+                "Post-fill coordination fails closed.",
+            )
         review = residual.actual_review
         out = {
-            "plan_stale_after_fills": stale, "fill_feedback": feedback, "cancelled_remainders": cancelled,
-            "ledger_gap": gap, "residual_state_digest": residual.state_digest, "residual_orders_placed": 0,
+            "plan_stale_after_fills": stale,
+            "fill_feedback": feedback,
+            "cancelled_remainders": cancelled,
+            "ledger_gap": gap,
+            "residual_state_digest": residual.state_digest,
+            "residual_orders_placed": 0,
             "residual_hedge_lines": [
-                {"security_id": l.security_id, "dimension": l.dimension, "target_weight": l.target_weight,
-                 "held_weight": l.held_weight, "pending_weight": l.pending_weight, "new_order_weight": l.new_order_weight}
-                for l in residual.hedge_plan.lines],
+                {
+                    "security_id": line.security_id,
+                    "dimension": line.dimension,
+                    "target_weight": line.target_weight,
+                    "held_weight": line.held_weight,
+                    "pending_weight": line.pending_weight,
+                    "new_order_weight": line.new_order_weight,
+                }
+                for line in residual.hedge_plan.lines
+            ],
             "residual_trades": residual.trades,
-            "post_fill_covariance_review": None if review is None else {"id": review.risk_review_id, "digest": review.digest(), "decision": review.decision.value},
+            "post_fill_covariance_review": None
+            if review is None
+            else {
+                "id": review.risk_review_id,
+                "digest": review.digest(),
+                "decision": review.decision.value,
+            },
         }
-        if review is not None and review.decision in (RiskDecision.BLOCK, RiskDecision.INFEASIBLE):
+        if review is not None and review.decision in (
+            RiskDecision.BLOCK,
+            RiskDecision.INFEASIBLE,
+        ):
             self.coordination_log[-1]["post_fill"] = _plain(out)
-            fail(ErrorCode.PORTFOLIO_INFEASIBLE, f"covariance review blocked post-fill holdings {period}: {'; '.join(review.remedy_constraints)}", "Actual post-fill weights must satisfy the CIO covariance limits.")
+            fail(
+                ErrorCode.PORTFOLIO_INFEASIBLE,
+                f"covariance review blocked post-fill holdings {period}: {'; '.join(review.remedy_constraints)}",
+                "Actual post-fill weights must satisfy the CIO covariance limits.",
+            )
         return out
 
-    def _coordination_receipt(self, period, inputs, result, active, fee_evidence) -> dict:
-        evidence = {f.forecast_id: (f.digest(), f.admission_certificate_id, self.fx.certificates[f.admission_certificate_id].digest()) for f in active}
+    def _coordination_receipt(
+        self, period, inputs, result, active, fee_evidence
+    ) -> dict:
+        evidence = {
+            f.forecast_id: (
+                f.digest(),
+                f.admission_certificate_id,
+                self.fx.certificates[f.admission_certificate_id].digest(),
+            )
+            for f in active
+        }
         reviews = {}
-        for name, rv in (("target", result.risk_review), ("actual_holdings", result.actual_review), ("pending_applied", result.post_fill_review)):
-            reviews[name] = None if rv is None else {"id": rv.risk_review_id, "digest": rv.digest(), "decision": rv.decision.value}
+        for name, rv in (
+            ("target", result.risk_review),
+            ("actual_holdings", result.actual_review),
+            ("pending_applied", result.post_fill_review),
+        ):
+            reviews[name] = (
+                None
+                if rv is None
+                else {
+                    "id": rv.risk_review_id,
+                    "digest": rv.digest(),
+                    "decision": rv.decision.value,
+                }
+            )
         rows = inputs.return_history
-        return _plain({
-            "period": period, "mode": COORDINATION_MODE, "policy_digest": self.hook.digest(),
-            "input_digest": result.input_digest, "state_digest": result.state_digest,
-            "risk_snapshot": {
-                "rows_used": len(rows), "first_observed_at": min((r.observed_at for r in rows), default=None),
-                "last_observed_at": max((r.observed_at for r in rows), default=None),
-                "rows_sha256": risk_rows_digest(rows), "history_total_sha256": self.hook.history.digest(),
-                "covariance": _cov_receipt(result.covariance),
-            },
-            "overlap": result.overlap, "risk_budgets": result.risk_budgets, "groups": result.groups,
-            "overlap_diagnostics": result.overlap_diagnostics,
-            "hedge_netting": {"plan": result.hedge_plan, "original_requests": inputs.all_hedge_requests()},
-            "original_evidence": {
-                "forecasts": [{"forecast_id": d.forecast.forecast_id, "status": d.status, "group_id": d.group_id,
-                               "forecast_digest": evidence.get(d.forecast.forecast_id, (None,) * 3)[0],
-                               "certificate_id": evidence.get(d.forecast.forecast_id, (None,) * 3)[1],
-                               "certificate_digest": evidence.get(d.forecast.forecast_id, (None,) * 3)[2]}
-                              for d in result.forecast_dispositions],
-            },
-            "vol_scale": result.vol_scale, "ex_ante_vol": result.ex_ante_vol, "exposures": result.exposures,
-            "risk_contributions": result.risk_contributions, "attribution": result.attribution,
-            "coordinated_trades": result.trades, "stress": result.stress, "reviews": reviews,
-            "target_book_id": result.target_book.target_book_id, "target_book_digest": result.target_book.digest(),
-            "fee_reserve": fee_evidence,
-        })
+        return _plain(
+            {
+                "period": period,
+                "mode": COORDINATION_MODE,
+                "policy_digest": self.hook.digest(),
+                "input_digest": result.input_digest,
+                "state_digest": result.state_digest,
+                "risk_snapshot": {
+                    "rows_used": len(rows),
+                    "first_observed_at": min(
+                        (r.observed_at for r in rows), default=None
+                    ),
+                    "last_observed_at": max(
+                        (r.observed_at for r in rows), default=None
+                    ),
+                    "rows_sha256": risk_rows_digest(rows),
+                    "history_total_sha256": self.hook.history.digest(),
+                    "covariance": _cov_receipt(result.covariance),
+                },
+                "overlap": result.overlap,
+                "risk_budgets": result.risk_budgets,
+                "groups": result.groups,
+                "overlap_diagnostics": result.overlap_diagnostics,
+                "hedge_netting": {
+                    "plan": result.hedge_plan,
+                    "original_requests": inputs.all_hedge_requests(),
+                },
+                "original_evidence": {
+                    "forecasts": [
+                        {
+                            "forecast_id": d.forecast.forecast_id,
+                            "status": d.status,
+                            "group_id": d.group_id,
+                            "forecast_digest": evidence.get(
+                                d.forecast.forecast_id, (None,) * 3
+                            )[0],
+                            "certificate_id": evidence.get(
+                                d.forecast.forecast_id, (None,) * 3
+                            )[1],
+                            "certificate_digest": evidence.get(
+                                d.forecast.forecast_id, (None,) * 3
+                            )[2],
+                        }
+                        for d in result.forecast_dispositions
+                    ],
+                },
+                "vol_scale": result.vol_scale,
+                "ex_ante_vol": result.ex_ante_vol,
+                "exposures": result.exposures,
+                "risk_contributions": result.risk_contributions,
+                "attribution": result.attribution,
+                "coordinated_trades": result.trades,
+                "stress": result.stress,
+                "reviews": reviews,
+                "target_book_id": result.target_book.target_book_id,
+                "target_book_digest": result.target_book.digest(),
+                "fee_reserve": fee_evidence,
+            }
+        )
 
     # ------------------------------------------------------------- helpers
     @property
@@ -1607,32 +2340,74 @@ class ControlledReplay:
     def _risk_engine(self) -> tuple[RiskEngine, dict]:
         r = self.cfg["risk"]
         limits = [
-            RiskLimit(name="gross", threshold=f"<= {r['max_gross']}", hard=True),
-            RiskLimit(name="abs_net", threshold=f"<= {r['max_abs_net']}", hard=True),
-            RiskLimit(name="max_name_weight", threshold=f"<= {r['max_name_weight']}", hard=True),
-            RiskLimit(name="position_count", threshold=f">= {r['min_names']}", hard=True),
+            RiskLimit(
+                name="gross", threshold=f"<= {r['max_gross']}", hard=True
+            ),
+            RiskLimit(
+                name="abs_net", threshold=f"<= {r['max_abs_net']}", hard=True
+            ),
+            RiskLimit(
+                name="max_name_weight",
+                threshold=f"<= {r['max_name_weight']}",
+                hard=True,
+            ),
+            RiskLimit(
+                name="position_count",
+                threshold=f">= {r['min_names']}",
+                hard=True,
+            ),
         ]
         if "max_abs_beta" in r:
-            limits.append(RiskLimit(name="abs_beta", threshold=f"<= {r['max_abs_beta']}", hard=False))
-        return RiskEngine(RiskPolicy(policy_version=r["policy_version"], limits=limits)), r
+            limits.append(
+                RiskLimit(
+                    name="abs_beta",
+                    threshold=f"<= {r['max_abs_beta']}",
+                    hard=False,
+                )
+            )
+        return RiskEngine(
+            RiskPolicy(policy_version=r["policy_version"], limits=limits)
+        ), r
 
-    def _measure(self, weights: Mapping[str, Decimal], rows: Mapping[str, MarketRow], r: dict) -> list[MeasuredExposure]:
+    def _measure(
+        self,
+        weights: Mapping[str, Decimal],
+        rows: Mapping[str, MarketRow],
+        r: dict,
+    ) -> list[MeasuredExposure]:
         gross = float(sum((abs(w) for w in weights.values()), ZERO))
         net = float(sum(weights.values(), ZERO))
         max_name = float(max((abs(w) for w in weights.values()), default=ZERO))
         exposures = [
             MeasuredExposure("gross", gross, float(r["max_gross"]), True),
-            MeasuredExposure("abs_net", abs(net), float(r["max_abs_net"]), True),
-            MeasuredExposure("max_name_weight", max_name, float(r["max_name_weight"]), True),
-            MeasuredExposure("position_count", float(len(weights)), float(r["min_names"]), False),
+            MeasuredExposure(
+                "abs_net", abs(net), float(r["max_abs_net"]), True
+            ),
+            MeasuredExposure(
+                "max_name_weight", max_name, float(r["max_name_weight"]), True
+            ),
+            MeasuredExposure(
+                "position_count",
+                float(len(weights)),
+                float(r["min_names"]),
+                False,
+            ),
         ]
         if "max_abs_beta" in r:
             beta = 0.0
             for sid, w in weights.items():
                 if sid not in rows:
-                    fail(ErrorCode.SCHEMA_MISMATCH, f"no beta evidence for {sid}", "Risk needs measured exposures for every name.")
+                    fail(
+                        ErrorCode.SCHEMA_MISMATCH,
+                        f"no beta evidence for {sid}",
+                        "Risk needs measured exposures for every name.",
+                    )
                 beta += float(w) * rows[sid].beta
-            exposures.append(MeasuredExposure("abs_beta", abs(beta), float(r["max_abs_beta"]), True))
+            exposures.append(
+                MeasuredExposure(
+                    "abs_beta", abs(beta), float(r["max_abs_beta"]), True
+                )
+            )
         return exposures
 
     def _review_actual_fills(
@@ -1651,27 +2426,57 @@ class ControlledReplay:
         uneven fills are measured as they are. Each attempt is logged (including failures)
         in ``actual_review_log`` before any exception propagates.
         """
-        weights = {k: _dec(v) for k, v in post_weights.items() if _dec(v) != ZERO}
-        entry: dict = {"period": period, "stage": "actual_fill", "reviewed_kind": "actual", "post_weights": {k: str(v) for k, v in sorted(weights.items())}}
+        weights = {
+            k: _dec(v) for k, v in post_weights.items() if _dec(v) != ZERO
+        }
+        entry: dict = {
+            "period": period,
+            "stage": "actual_fill",
+            "reviewed_kind": "actual",
+            "post_weights": {k: str(v) for k, v in sorted(weights.items())},
+        }
         self.actual_review_log.append(entry)
         try:
             book = reviewed.model_copy(
                 update={
                     "target_book_id": f"{reviewed.target_book_id}_actualfill",
-                    "positions": [TargetPosition(security_id=k, target_weight=v) for k, v in sorted(weights.items())],
+                    "positions": [
+                        TargetPosition(security_id=k, target_weight=v)
+                        for k, v in sorted(weights.items())
+                    ],
                 }
             )
             review = risk_engine.review(
-                book, self._measure(weights, rows, risk_cfg), effective_at=decision_at, reviewed_kind="actual"
+                book,
+                self._measure(weights, rows, risk_cfg),
+                effective_at=decision_at,
+                reviewed_kind="actual",
             )
         except Exception as error:
-            entry.update({"decision": "INVALID", "error": f"{type(error).__name__}: {error}"})
-            fail(ErrorCode.RISK_REVIEW_REQUIRED, f"actual-fill risk review could not be produced for {period}: {type(error).__name__}", "Execution results need a valid independent review; the period is not accepted.")
+            entry.update(
+                {
+                    "decision": "INVALID",
+                    "error": f"{type(error).__name__}: {error}",
+                }
+            )
+            fail(
+                ErrorCode.RISK_REVIEW_REQUIRED,
+                f"actual-fill risk review could not be produced for {period}: {type(error).__name__}",
+                "Execution results need a valid independent review; the period is not accepted.",
+            )
         entry.update(review.model_dump(mode="json"))
         if review.decision in (RiskDecision.BLOCK, RiskDecision.INFEASIBLE):
-            fail(ErrorCode.PORTFOLIO_INFEASIBLE, f"independent risk review blocked actual fills {period}: {'; '.join(review.remedy_constraints)}", "Actual post-fill weights must satisfy the same independent risk policy; the period is not accepted.")
+            fail(
+                ErrorCode.PORTFOLIO_INFEASIBLE,
+                f"independent risk review blocked actual fills {period}: {'; '.join(review.remedy_constraints)}",
+                "Actual post-fill weights must satisfy the same independent risk policy; the period is not accepted.",
+            )
         if not review.is_valid_at(decision_at):
-            fail(ErrorCode.RISK_REVIEW_REQUIRED, f"actual-fill risk review for {period} is not valid at decision time", "Execution results need a valid review.")
+            fail(
+                ErrorCode.RISK_REVIEW_REQUIRED,
+                f"actual-fill risk review for {period} is not valid at decision time",
+                "Execution results need a valid review.",
+            )
         return review
 
     def _active_forecasts(self, decision_at: dt.datetime) -> list[Forecast]:
@@ -1688,16 +2493,25 @@ class ControlledReplay:
                 continue
             key = (f.security_id, f.strategy_id)
             rank = (f.information_cutoff, f.created_at, f.forecast_id)
-            if key not in best or rank > (best[key].information_cutoff, best[key].created_at, best[key].forecast_id):
+            if key not in best or rank > (
+                best[key].information_cutoff,
+                best[key].created_at,
+                best[key].forecast_id,
+            ):
                 best[key] = f
         active = [best[k] for k in sorted(best)]
         horizons = {f.return_forecast.horizon_trading_days for f in active}
         if len(horizons) > 1:
-            fail(ErrorCode.SCHEMA_MISMATCH, 'active forecasts have incompatible return horizons',
-                 'Supply forecasts calibrated to one declared decision horizon; no automatic time scaling.')
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "active forecasts have incompatible return horizons",
+                "Supply forecasts calibrated to one declared decision horizon; no automatic time scaling.",
+            )
         return active
 
-    def _verify_certificate(self, forecast: Forecast, decision_at: dt.datetime) -> AdmissionCertificate:
+    def _verify_certificate(
+        self, forecast: Forecast, decision_at: dt.datetime
+    ) -> AdmissionCertificate:
         cert = self.fx.certificates.get(forecast.admission_certificate_id)
         snapshots = {
             source_id: self.fx.cards[source_id].snapshot_id
@@ -1706,7 +2520,10 @@ class ControlledReplay:
         }
         # Only sealed certificates outside research-only runs; a research-only run needs no
         # formation-grade certificate (and can never freeze), so it accepts any environment.
-        policy = self.cert_policy.replace(require_seal=self.cert_policy.require_seal and not self.research_only)
+        policy = self.cert_policy.replace(
+            require_seal=self.cert_policy.require_seal
+            and not self.research_only
+        )
         check = validate_certificate(
             forecast,
             cert,
@@ -1715,13 +2532,20 @@ class ControlledReplay:
             universe=self.cfg.get("universe_id"),
             namespace=self.cfg.get("namespace"),
             policy=policy,
-            environment=CertificateEnvironment.TEST if self.research_only else None,
+            environment=CertificateEnvironment.TEST
+            if self.research_only
+            else None,
             revocations=self.revocations,
         )
         self.certificate_checks[check.certificate_id] = check
         return cert
 
-    def _check_certificate_limits(self, active: Sequence[Forecast], post_risk: Mapping[str, Decimal], nav: Decimal) -> None:
+    def _check_certificate_limits(
+        self,
+        active: Sequence[Forecast],
+        post_risk: Mapping[str, Decimal],
+        nav: Decimal,
+    ) -> None:
         """Book-level scope limits (declared numeric limits compare against the whole book)."""
         weights = [_dec(w) for w in post_risk.values() if _dec(w) != ZERO]
         exposures = {
@@ -1731,7 +2555,9 @@ class ControlledReplay:
             "nav_usd": nav,
             "position_count": len(weights),
         }
-        for certificate_id in sorted({f.admission_certificate_id for f in active}):
+        for certificate_id in sorted(
+            {f.admission_certificate_id for f in active}
+        ):
             check_scope_limits(self.fx.certificates[certificate_id], exposures)
 
     # ----------------------------------------------------------------- run
@@ -1739,10 +2565,14 @@ class ControlledReplay:
         try:
             return self._run()
         except PodPlatformError as error:
-            self._write_failure(str(error.response.error.code.value), error.response.summary)
+            self._write_failure(
+                str(error.response.error.code.value), error.response.summary
+            )
             raise
         except Exception as error:
-            self._write_failure("UNTYPED_EXCEPTION", f"{type(error).__name__}: {error}")
+            self._write_failure(
+                "UNTYPED_EXCEPTION", f"{type(error).__name__}: {error}"
+            )
             raise
 
     def _write_failure(self, code: str, summary: str) -> None:
@@ -1752,15 +2582,23 @@ class ControlledReplay:
             "summary": summary,
             "periods_completed": [p["period"] for p in self.periods_log],
             "frozen": False,
-            "run_label": "RESEARCH_ONLY_NOT_FREEZABLE" if self.research_only else "FORMATION_ELIGIBLE_ATTEMPT",
+            "run_label": "RESEARCH_ONLY_NOT_FREEZABLE"
+            if self.research_only
+            else "FORMATION_ELIGIBLE_ATTEMPT",
         }
         self.writer.write_json("failure.json", body)
-        self.writer.write_json("compliance_report.partial.json", self.compliance.as_dict())
+        self.writer.write_json(
+            "compliance_report.partial.json", self.compliance.as_dict()
+        )
         self.writer.write_json("periods.partial.json", self.periods_log)
         self.writer.write_json("risk_reviews.partial.json", self.review_log)
-        self.writer.write_json("risk_reviews_actual_fill.partial.json", self.actual_review_log)
+        self.writer.write_json(
+            "risk_reviews_actual_fill.partial.json", self.actual_review_log
+        )
         if self.hook is not None:
-            self.writer.write_json("coordination_receipts.partial.json", self.coordination_log)
+            self.writer.write_json(
+                "coordination_receipts.partial.json", self.coordination_log
+            )
 
     def _run(self) -> dict:
         cfg = self.cfg
@@ -1768,13 +2606,24 @@ class ControlledReplay:
         periods = fx.periods
         validate_contiguous_periods([(a, b) for a, b, _ in periods])
         if cfg.get("run_kind") not in ("replay", "trial"):
-            fail(ErrorCode.SCHEMA_MISMATCH, "config.run_kind must be 'replay' or 'trial'", "Runs carry an explicit trial/replay label.")
+            fail(
+                ErrorCode.SCHEMA_MISMATCH,
+                "config.run_kind must be 'replay' or 'trial'",
+                "Runs carry an explicit trial/replay label.",
+            )
 
         official = OfficialLimits(**cfg.get("official_limits", {}))
-        engine = ConstructionEngine(official, InternalPolicy(**cfg.get("internal_policy", {})))
-        integrator = FamilyIntegrator(cfg["admitted_families"], neutral_uncertainty=cfg.get("neutral_uncertainty", 0.1))
+        engine = ConstructionEngine(
+            official, InternalPolicy(**cfg.get("internal_policy", {}))
+        )
+        integrator = FamilyIntegrator(
+            cfg["admitted_families"],
+            neutral_uncertainty=cfg.get("neutral_uncertainty", 0.1),
+        )
         cost_model = CostModel(CostModelConfig(**cfg["cost_model"]))
-        planner = ExecutionPlanner(ExecutionPolicy(**cfg["execution_policy"]), cost_model)
+        planner = ExecutionPlanner(
+            ExecutionPolicy(**cfg["execution_policy"]), cost_model
+        )
         fills_engine = FillEngine(cost_model)
         risk_engine, risk_cfg = self._risk_engine()
         self._check_coordination_mode()
@@ -1782,11 +2631,19 @@ class ControlledReplay:
         borrow = cfg.get("borrow", {})
         schedule = BorrowSchedule(
             schedule_id=borrow.get("schedule_id", "controlled_flat"),
-            large_cap_threshold_usd=Decimal(str(borrow.get("large_cap_threshold_usd", "1e10"))),
-            large_cap_annual_rate=Decimal(str(borrow.get("large_cap_annual_rate", "0.01"))),
-            other_annual_rate=Decimal(str(borrow.get("other_annual_rate", "0.05"))),
+            large_cap_threshold_usd=Decimal(
+                str(borrow.get("large_cap_threshold_usd", "1e10"))
+            ),
+            large_cap_annual_rate=Decimal(
+                str(borrow.get("large_cap_annual_rate", "0.01"))
+            ),
+            other_annual_rate=Decimal(
+                str(borrow.get("other_annual_rate", "0.05"))
+            ),
         )
-        replay = MonthlyAccountingReplay(Decimal(str(cfg["starting_nav"])), borrow_schedule=schedule)
+        replay = MonthlyAccountingReplay(
+            Decimal(str(cfg["starting_nav"])), borrow_schedule=schedule
+        )
         core = [("core", sid, "core") for sid in cfg.get("core_sources", [])]
         gate_uses: dict[tuple[str, str], SourceUse] = {}
         dossier = DossierBuilder()
@@ -1807,28 +2664,62 @@ class ControlledReplay:
                 # dollar / min-position / ADV sizing uses the compounding actual NAV, never the static initial capital
                 nav_now = replay.nav()
                 if nav_now <= ZERO:
-                    fail(ErrorCode.ACCOUNTING_RECONCILIATION_FAILED, f"NAV is not positive at {period}", "Sizing needs a positive actual NAV.")
-                internal_now = InternalPolicy(**{**cfg.get("internal_policy", {}), "capital_usd": float(nav_now)})
-                coordinator = CIOCoordinator(official, internal_now, self.hook.policy, self.hook.covariance_policy)
+                    fail(
+                        ErrorCode.ACCOUNTING_RECONCILIATION_FAILED,
+                        f"NAV is not positive at {period}",
+                        "Sizing needs a positive actual NAV.",
+                    )
+                internal_now = InternalPolicy(
+                    **{
+                        **cfg.get("internal_policy", {}),
+                        "capital_usd": float(nav_now),
+                    }
+                )
+                coordinator = CIOCoordinator(
+                    official,
+                    internal_now,
+                    self.hook.policy,
+                    self.hook.covariance_policy,
+                )
             rows = fx.market.get(formation)
             if not rows:
-                fail(ErrorCode.SCHEMA_MISMATCH, f"no market data for formation {period}", "Periods are never skipped.")
+                fail(
+                    ErrorCode.SCHEMA_MISMATCH,
+                    f"no market data for formation {period}",
+                    "Periods are never skipped.",
+                )
             for sid, row in rows.items():
                 caps[sid] = row.market_cap_usd
             active = self._active_forecasts(decision_at)
             if not active:
-                fail(ErrorCode.SCHEMA_MISMATCH, f"no active approved forecasts at {period}", "A decision cycle without forecasts cannot construct a book.")
+                fail(
+                    ErrorCode.SCHEMA_MISMATCH,
+                    f"no active approved forecasts at {period}",
+                    "A decision cycle without forecasts cannot construct a book.",
+                )
             uses = list(self.gate.resolve(core, fx.cards))
             for f in active:
                 if f.strategy_id not in integrator.families:
-                    fail(ErrorCode.ADMISSION_CERTIFICATE_INVALID, f"strategy {f.strategy_id} is not an admitted family", "Only admitted families are integrated.")
+                    fail(
+                        ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+                        f"strategy {f.strategy_id} is not an admitted family",
+                        "Only admitted families are integrated.",
+                    )
                 self._verify_certificate(f, decision_at)
-                uses += self.gate.resolve([(f.strategy_id, s, "external") for s in f.source_family_ids], fx.cards)
+                uses += self.gate.resolve(
+                    [
+                        (f.strategy_id, s, "external")
+                        for s in f.source_family_ids
+                    ],
+                    fx.cards,
+                )
             gate_result = self.gate.evaluate(uses)
             for use in uses:
                 gate_uses[(use.name, use.source_id)] = use
             for f in active:
-                certificates_used[f.admission_certificate_id] = fx.certificates[f.admission_certificate_id]
+                certificates_used[f.admission_certificate_id] = fx.certificates[
+                    f.admission_certificate_id
+                ]
                 forecasts_used[f.forecast_id] = f
 
             by_security: dict[str, list[Forecast]] = {}
@@ -1840,7 +2731,15 @@ class ControlledReplay:
             alphas: dict[str, float] = {}
             for sid, fcs in sorted(by_security.items()):
                 integrated = integrator.integrate(
-                    [FamilyEstimate(f.strategy_id, sid, float(f.return_forecast.expected_excess_return), cfg.get("neutral_uncertainty", 0.1)) for f in fcs]
+                    [
+                        FamilyEstimate(
+                            f.strategy_id,
+                            sid,
+                            float(f.return_forecast.expected_excess_return),
+                            cfg.get("neutral_uncertainty", 0.1),
+                        )
+                        for f in fcs
+                    ]
                 )
                 alphas[sid] = integrated.alpha
                 row = rows[sid]
@@ -1855,7 +2754,9 @@ class ControlledReplay:
                         beta=row.beta,
                     )
                 )
-            forecast_ids = sorted({f.forecast_id for fcs in by_security.values() for f in fcs})
+            forecast_ids = sorted(
+                {f.forecast_id for fcs in by_security.values() for f in fcs}
+            )
             coord_inputs = coord_result = fee_evidence = None
             if coordinator is None:
                 book = engine.build(
@@ -1867,49 +2768,106 @@ class ControlledReplay:
                     nav_snapshot_id=f"nav_{period}",
                     price_snapshot_id=f"px_{period}",
                     risk_envelope_version=risk_cfg["policy_version"],
-                    covariance_version=cfg.get("covariance_version", "none_declared"),
+                    covariance_version=cfg.get(
+                        "covariance_version", "none_declared"
+                    ),
                     cost_model_version=cost_model.model_id,
                     attribution_method="family_equal_contribution",
                 )
             else:
                 # the CIO book REPLACES the construction book: it sizes the actual target and orders
-                coord_inputs, coord_result, fee_evidence = self._coordinate_period(coordinator, period, decision_at, active, rows, replay, alphas)
+                coord_inputs, coord_result, fee_evidence = (
+                    self._coordinate_period(
+                        coordinator,
+                        period,
+                        decision_at,
+                        active,
+                        rows,
+                        replay,
+                        alphas,
+                    )
+                )
                 book = coord_result.target_book
-                self.coordination_log.append(self._coordination_receipt(period, coord_inputs, coord_result, active, fee_evidence))
-            hedge_ids = {i.security_id for i in coord_inputs.hedge_universe} if coord_inputs else set()
+                self.coordination_log.append(
+                    self._coordination_receipt(
+                        period, coord_inputs, coord_result, active, fee_evidence
+                    )
+                )
+            hedge_ids = (
+                {i.security_id for i in coord_inputs.hedge_universe}
+                if coord_inputs
+                else set()
+            )
             target = {p.security_id: p.target_weight for p in book.positions}
             drifted = replay.actual_weights()
-            self.compliance.record(period, "formation_target", drifted, target, caps)
+            self.compliance.record(
+                period, "formation_target", drifted, target, caps
+            )
 
             post_risk = dict(target)
             if self.overlay is not None:
-                post_risk = {k: _dec(v) for k, v in self.overlay(target, formation).items()}
+                post_risk = {
+                    k: _dec(v)
+                    for k, v in self.overlay(target, formation).items()
+                }
             reviewed = book
             if post_risk != target:
                 reviewed = book.model_copy(
                     update={
                         "target_book_id": f"{book.target_book_id}_postrisk",
-                        "positions": [TargetPosition(security_id=k, target_weight=v) for k, v in sorted(post_risk.items())],
+                        "positions": [
+                            TargetPosition(security_id=k, target_weight=v)
+                            for k, v in sorted(post_risk.items())
+                        ],
                     }
                 )
-            review = risk_engine.review(reviewed, self._measure(post_risk, rows, risk_cfg), effective_at=decision_at)
-            self.review_log.append({"period": period, **review.model_dump(mode="json")})
+            review = risk_engine.review(
+                reviewed,
+                self._measure(post_risk, rows, risk_cfg),
+                effective_at=decision_at,
+            )
+            self.review_log.append(
+                {"period": period, **review.model_dump(mode="json")}
+            )
             self.compliance.record(period, "post_risk", target, post_risk, caps)
             self._check_certificate_limits(active, post_risk, replay.nav())
             if review.decision in (RiskDecision.BLOCK, RiskDecision.INFEASIBLE):
-                fail(ErrorCode.PORTFOLIO_INFEASIBLE, f"independent risk review blocked {period}: {'; '.join(review.remedy_constraints)}", "A blocked book is never traded.")
+                fail(
+                    ErrorCode.PORTFOLIO_INFEASIBLE,
+                    f"independent risk review blocked {period}: {'; '.join(review.remedy_constraints)}",
+                    "A blocked book is never traded.",
+                )
             if not review.is_valid_at(decision_at):
-                fail(ErrorCode.RISK_REVIEW_REQUIRED, f"risk review for {period} is not valid at decision time", "Execution needs a valid review.")
+                fail(
+                    ErrorCode.RISK_REVIEW_REQUIRED,
+                    f"risk review for {period} is not valid at decision time",
+                    "Execution needs a valid review.",
+                )
 
             # ---- planner -> fills -> ledger (held-name union kept)
             nav_open = replay.nav()
-            orders, liquidity = self._plan_execution(planner, post_risk, drifted, rows, nav_open, alphas,
-                hedge_ids, decision_at, reviewed.target_book_id, period)
+            orders, liquidity = self._plan_execution(
+                planner,
+                post_risk,
+                drifted,
+                rows,
+                nav_open,
+                alphas,
+                hedge_ids,
+                decision_at,
+                reviewed.target_book_id,
+                period,
+            )
             instructions: list[FillInstruction] = []
             order_log: list[dict] = []
             placed: list[tuple] = []
             for order in orders:
-                state = self._fill_order(fills_engine, order, liquidity[order.security_id], decision_at)
+                state = self._fill_order(
+                    fills_engine,
+                    order,
+                    liquidity[order.security_id],
+                    decision_at,
+                )
                 placed.append((order, state))
                 sign = ONE if order.order_dollars > ZERO else -ONE
                 complete = state.remaining_dollars == ZERO
@@ -1919,7 +2877,9 @@ class ControlledReplay:
                         "security_id": order.security_id,
                         "order_dollars": str(order.order_dollars),
                         "filled_dollars": str(state.filled_dollars),
-                        "unfilled_dollars": format(state.remaining_dollars.normalize(), "f"),
+                        "unfilled_dollars": format(
+                            state.remaining_dollars.normalize(), "f"
+                        ),
                         "expired": state.expired,
                         "cost": str(state.costs_paid),
                     }
@@ -1931,43 +2891,104 @@ class ControlledReplay:
                         security_id=order.security_id,
                         signed_dollars=sign * state.filled_dollars,
                         fee=state.costs_paid,
-                        close_out=complete and post_risk.get(order.security_id, ZERO) == ZERO,
+                        close_out=complete
+                        and post_risk.get(order.security_id, ZERO) == ZERO,
                         entry_price=rows[order.security_id].price,
                         order_id=f"_{order.order_id}",
                     )
                 )
             trade = replay.apply_fills(instructions, at=decision_at, tag="fill")
             if fee_evidence is not None:
-                assert_fees_within_reserve(trade.fees, nav_open, fee_evidence["reserve"], period)
-            self.compliance.record(period, "post_trade_actual", trade.pre_weights, trade.post_weights, caps)
+                assert_fees_within_reserve(
+                    trade.fees, nav_open, fee_evidence["reserve"], period
+                )
+            self.compliance.record(
+                period,
+                "post_trade_actual",
+                trade.pre_weights,
+                trade.post_weights,
+                caps,
+            )
             # same independent policy, applied to what was actually filled (held-name union incl. unfilled legs)
             actual_review = self._review_actual_fills(
-                risk_engine, risk_cfg, reviewed, trade.post_weights, rows, period, decision_at
+                risk_engine,
+                risk_cfg,
+                reviewed,
+                trade.post_weights,
+                rows,
+                period,
+                decision_at,
             )
             coord_summary = None
             if coordinator is not None:
-                post_fill = self._reconcile_coordination(coordinator, coord_inputs, coord_result, placed, nav_open, trade, decision_at, period)
+                post_fill = self._reconcile_coordination(
+                    coordinator,
+                    coord_inputs,
+                    coord_result,
+                    placed,
+                    nav_open,
+                    trade,
+                    decision_at,
+                    period,
+                )
                 receipt = self.coordination_log[-1]
-                receipt["execution"] = _plain({"orders": order_log, "trades": trade.trades, "post_trade_weights": trade.post_weights})
+                receipt["execution"] = _plain(
+                    {
+                        "orders": order_log,
+                        "trades": trade.trades,
+                        "post_trade_weights": trade.post_weights,
+                    }
+                )
                 receipt["post_fill"] = _plain(post_fill)
-                receipt["receipt_sha256"] = digest_of({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+                receipt["receipt_sha256"] = digest_of(
+                    {k: v for k, v in receipt.items() if k != "receipt_sha256"}
+                )
                 coord_summary = {
-                    "receipt_sha256": receipt["receipt_sha256"], "input_digest": receipt["input_digest"],
-                    "risk_snapshot_sha256": receipt["risk_snapshot"]["rows_sha256"],
-                    "covariance_version": receipt["risk_snapshot"]["covariance"]["version"],
-                    "plan_stale_after_fills": post_fill["plan_stale_after_fills"],
+                    "receipt_sha256": receipt["receipt_sha256"],
+                    "input_digest": receipt["input_digest"],
+                    "risk_snapshot_sha256": receipt["risk_snapshot"][
+                        "rows_sha256"
+                    ],
+                    "covariance_version": receipt["risk_snapshot"][
+                        "covariance"
+                    ]["version"],
+                    "plan_stale_after_fills": post_fill[
+                        "plan_stale_after_fills"
+                    ],
                 }
 
             # ---- outcome resolution happens only after the trade
             outcomes = fx.outcomes.get(formation, {})
             resolved = resolve_outcomes(
-                replay.held(), outcomes, fx.liquidations.get(formation, {}), formation_at=decision_at, period_end_at=end_at
+                replay.held(),
+                outcomes,
+                fx.liquidations.get(formation, {}),
+                formation_at=decision_at,
+                period_end_at=end_at,
             )
-            result = replay.advance(period_end_at=end_at, rf_monthly=tb3ms / 1200.0, resolved=resolved, market_caps=caps)
-            self.compliance.record(period, "period_end_drifted", trade.post_weights, result.drifted_weights, caps)
+            result = replay.advance(
+                period_end_at=end_at,
+                rf_monthly=tb3ms / 1200.0,
+                resolved=resolved,
+                market_caps=caps,
+            )
+            self.compliance.record(
+                period,
+                "period_end_drifted",
+                trade.post_weights,
+                result.drifted_weights,
+                caps,
+            )
 
             for sid, weight in sorted(trade.post_weights.items()):
-                holdings_rows.append([period, sid, str(weight), "long" if weight > ZERO else "short"])
+                holdings_rows.append(
+                    [
+                        period,
+                        sid,
+                        str(weight),
+                        "long" if weight > ZERO else "short",
+                    ]
+                )
                 ever_held[sid] = decision_at
             monthly.append(
                 {
@@ -1984,7 +3005,9 @@ class ControlledReplay:
                 {
                     "period": period,
                     "forecast_ids": forecast_ids,
-                    "certificate_ids": sorted({f.admission_certificate_id for f in active}),
+                    "certificate_ids": sorted(
+                        {f.admission_certificate_id for f in active}
+                    ),
                     "target_book_id": book.target_book_id,
                     "target_book_digest": book.digest(),
                     "risk_review_id": review.risk_review_id,
@@ -1997,21 +3020,75 @@ class ControlledReplay:
                     "trades": trade.trades,
                     "outcome_basis": resolved.basis,
                     "source_gate": gate_result.as_dict(),
-                    **({"coordination": coord_summary} if coord_summary else {}),
+                    **(
+                        {"coordination": coord_summary} if coord_summary else {}
+                    ),
                 }
             )
             for sid in sorted(trade.post_weights):
                 if coord_summary:
-                    dossier.record(_event(f"coordination_{period}_{sid}", decision_at, f"CIO coordination receipt for {sid}", f"coordination_{period}", {f"coordination_{period}": coord_summary["receipt_sha256"]}, self.hook.policy.policy_version))
+                    dossier.record(
+                        _event(
+                            f"coordination_{period}_{sid}",
+                            decision_at,
+                            f"CIO coordination receipt for {sid}",
+                            f"coordination_{period}",
+                            {
+                                f"coordination_{period}": coord_summary[
+                                    "receipt_sha256"
+                                ]
+                            },
+                            self.hook.policy.policy_version,
+                        )
+                    )
                 for f in by_security.get(sid, []):
                     dossier.record(
-                        _event(f"forecast_{period}_{sid}_{f.strategy_id}", decision_at, f"admit forecast {f.forecast_id} for {sid}", f.forecast_id, {f.forecast_id: f.digest(), f.admission_certificate_id: certificates_used[f.admission_certificate_id].digest()}, f.admission_certificate_id)
+                        _event(
+                            f"forecast_{period}_{sid}_{f.strategy_id}",
+                            decision_at,
+                            f"admit forecast {f.forecast_id} for {sid}",
+                            f.forecast_id,
+                            {
+                                f.forecast_id: f.digest(),
+                                f.admission_certificate_id: certificates_used[
+                                    f.admission_certificate_id
+                                ].digest(),
+                            },
+                            f.admission_certificate_id,
+                        )
                     )
-                dossier.record(_event(f"target_{period}_{sid}", decision_at, f"target position in {sid} from {reviewed.target_book_id}", reviewed.target_book_id, {reviewed.target_book_id: book.digest()}, "rule_deterministic_construction_v1"))
-                dossier.record(_event(f"review_{period}_{sid}", decision_at, f"risk review {review.risk_review_id} for {sid}", review.risk_review_id, {review.risk_review_id: review.digest()}, risk_cfg["policy_version"]))
+                dossier.record(
+                    _event(
+                        f"target_{period}_{sid}",
+                        decision_at,
+                        f"target position in {sid} from {reviewed.target_book_id}",
+                        reviewed.target_book_id,
+                        {reviewed.target_book_id: book.digest()},
+                        "rule_deterministic_construction_v1",
+                    )
+                )
+                dossier.record(
+                    _event(
+                        f"review_{period}_{sid}",
+                        decision_at,
+                        f"risk review {review.risk_review_id} for {sid}",
+                        review.risk_review_id,
+                        {review.risk_review_id: review.digest()},
+                        risk_cfg["policy_version"],
+                    )
+                )
             for o in order_log:
                 if o["security_id"] in trade.post_weights:
-                    dossier.record(_event(f"fill_{period}_{o['order_id']}", decision_at, f"fill order for {o['security_id']}", f"fill_{o['order_id']}", {o["order_id"]: sha256_hex(dumps(o).encode())}, cost_model.model_id))
+                    dossier.record(
+                        _event(
+                            f"fill_{period}_{o['order_id']}",
+                            decision_at,
+                            f"fill order for {o['security_id']}",
+                            f"fill_{o['order_id']}",
+                            {o["order_id"]: sha256_hex(dumps(o).encode())},
+                            cost_model.model_id,
+                        )
+                    )
 
         last_formation = periods[-1][0]
         last_rows = fx.market[last_formation]
@@ -2020,14 +3097,46 @@ class ControlledReplay:
             if row is not None:
                 position = replay.ledger.positions[sid]
                 final_rows.append(
-                    HoldingsRow(sid, row.ticker, row.name, row.label_source, row.label_reference_date, float(position.quantity), float(weight), "long" if weight > ZERO else "short")
+                    HoldingsRow(
+                        sid,
+                        row.ticker,
+                        row.name,
+                        row.label_source,
+                        row.label_reference_date,
+                        float(position.quantity),
+                        float(weight),
+                        "long" if weight > ZERO else "short",
+                    )
                 )
         return self._finalize(
-            replay, monthly, holdings_rows, final_rows, dossier, ever_held, gate_uses, certificates_used, forecasts_used, periods, last_rows
+            replay,
+            monthly,
+            holdings_rows,
+            final_rows,
+            dossier,
+            ever_held,
+            gate_uses,
+            certificates_used,
+            forecasts_used,
+            periods,
+            last_rows,
         )
 
     # ------------------------------------------------------------ outputs
-    def _finalize(self, replay, monthly, holdings_rows, final_rows, dossier, ever_held, gate_uses, certificates_used, forecasts_used, periods, last_rows) -> dict:
+    def _finalize(
+        self,
+        replay,
+        monthly,
+        holdings_rows,
+        final_rows,
+        dossier,
+        ever_held,
+        gate_uses,
+        certificates_used,
+        forecasts_used,
+        periods,
+        last_rows,
+    ) -> dict:
         cfg = self.cfg
         w = self.writer
         gate = self.gate.evaluate(list(gate_uses.values()))
@@ -2041,7 +3150,9 @@ class ControlledReplay:
                 elapsed_years=n / 12.0,
                 periods_per_year=12,
                 portfolio_returns=tuple(m["net_return"] for m in monthly),
-                benchmark_returns=tuple(m["benchmark_monthly"] for m in monthly),
+                benchmark_returns=tuple(
+                    m["benchmark_monthly"] for m in monthly
+                ),
                 risk_free_returns=tuple(m["rf_monthly"] for m in monthly),
                 gross_returns=tuple(m["gross_return"] for m in monthly),
                 cost_returns=tuple(m["cost_return"] for m in monthly),
@@ -2049,18 +3160,35 @@ class ControlledReplay:
                 position_counts=tuple(m["names"] for m in monthly),
                 gross_exposures=tuple(m["gross_exposure"] for m in monthly),
                 net_exposures=tuple(m["net_exposure"] for m in monthly),
-                turnover_per_rebalance=tuple(m["turnover_one_way"] for m in monthly),
+                turnover_per_rebalance=tuple(
+                    m["turnover_one_way"] for m in monthly
+                ),
             ).as_table()
         else:
-            table_note = "fewer than two periods: ratio statistics are undefined"
+            table_note = (
+                "fewer than two periods: ratio statistics are undefined"
+            )
         labels = {
             "run_kind": cfg["run_kind"],
-            "evidence_class": "controlled_fixture_replay",
+            "evidence_class": (
+                "actual_market_replay"
+                if cfg.get("input_scope") == "actual_market"
+                and self.cert_policy.name == "production"
+                else "controlled_fixture_replay"
+            ),
             "frequency": "monthly",
             "return_basis": "net of modeled trading cost and borrow on ledger NAV",
         }
         w.write_json("monthly.json", monthly)
-        w.write_json("performance_report.json", {"labels": labels, "table": table, "note": table_note, "limitations": list(MONTHLY_LIMITATIONS)})
+        w.write_json(
+            "performance_report.json",
+            {
+                "labels": labels,
+                "table": table,
+                "note": table_note,
+                "limitations": list(MONTHLY_LIMITATIONS),
+            },
+        )
         w.write_json("compliance_report.json", self.compliance.as_dict())
         w.write_json("risk_reviews.json", self.review_log)
         w.write_json("risk_reviews_actual_fill.json", self.actual_review_log)
@@ -2069,57 +3197,107 @@ class ControlledReplay:
         if self.hook is not None:
             w.write_json("coordination_receipts.json", self.coordination_log)
             coordination_hashes = {
-                "coordination:policy": self.hook.digest(), "coordination:risk_history": self.hook.history.digest(),
+                "coordination:policy": self.hook.digest(),
+                "coordination:risk_history": self.hook.history.digest(),
                 "coordination:receipts": w.hashes["coordination_receipts.json"],
-                **{f"coordination:risk_snapshot:{r['period']}": r["risk_snapshot"]["rows_sha256"] for r in self.coordination_log},
+                **{
+                    f"coordination:risk_snapshot:{r['period']}": r[
+                        "risk_snapshot"
+                    ]["rows_sha256"]
+                    for r in self.coordination_log
+                },
             }
-        w.write_text("returns_export.csv", returns_csv([(m["period"], m["net_return"]) for m in monthly]))
+        w.write_text(
+            "returns_export.csv",
+            returns_csv([(m["period"], m["net_return"]) for m in monthly]),
+        )
         w.write_text("holdings_export.csv", holdings_csv(final_rows))
         buffer = io.StringIO()
         writer = csv.writer(buffer, lineterminator="\n")
         writer.writerow(["period", "security_id", "post_trade_weight", "side"])
         writer.writerows(holdings_rows)
         w.write_text("holdings_by_period.csv", buffer.getvalue())
-        explanations = {sid: dossier.build(sid, at).explanation() for sid, at in sorted(ever_held.items())}
+        explanations = {
+            sid: dossier.build(sid, at).explanation()
+            for sid, at in sorted(ever_held.items())
+        }
         w.write_json("decision_dossier.json", explanations)
 
         lineage = self.fx.lineage
-        missing_lineage = [k for k in LINEAGE_REQUIRED if lineage.get(k) in (None, "")]
+        missing_lineage = [
+            k for k in LINEAGE_REQUIRED if lineage.get(k) in (None, "")
+        ]
         config_hashes = {
             "config": canonical_digest(cfg),
-            **{f"fixture:{name}": digest for name, digest in sorted(self.fx.file_hashes.items())},
+            **{
+                f"fixture:{name}": digest
+                for name, digest in sorted(self.fx.file_hashes.items())
+            },
             **coordination_hashes,
         }
         manifest: Optional[RunManifest] = None
-        if not self.research_only and not missing_lineage and gate.formation_inputs_approved:
+        if (
+            not self.research_only
+            and not missing_lineage
+            and gate.formation_inputs_approved
+        ):
             manifest = RunManifest(
                 run_id=cfg["run_id"],
-                code_commit_or_tree_hash=tree_hash(Path(__file__).resolve().parent.parent),
+                code_commit_or_tree_hash=tree_hash(
+                    Path(__file__).resolve().parent.parent
+                ),
                 environment_lock_hash=environment_lock_hash(),
                 config_hashes=config_hashes,
-                source_snapshot_ids={u["source_id"]: u["card_snapshot_id"] for u in gate.uses},
+                source_snapshot_ids={
+                    u["source_id"]: u["card_snapshot_id"] for u in gate.uses
+                },
                 security_master_version=lineage["security_master_version"],
                 economic_graph_version=lineage["economic_graph_version"],
-                model_versions={f.model_id: c.model_hash for f in forecasts_used.values() for c in [certificates_used[f.admission_certificate_id]]},
+                model_versions={
+                    f.model_id: c.model_hash
+                    for f in forecasts_used.values()
+                    for c in [certificates_used[f.admission_certificate_id]]
+                },
                 calendar_policy=lineage["calendar_policy"],
                 timezone_policy=lineage["timezone_policy"],
-                data_access_policy_version=lineage["data_access_policy_version"],
+                data_access_policy_version=lineage[
+                    "data_access_policy_version"
+                ],
                 evaluation_policy_version=lineage["evaluation_policy_version"],
-                initial_accounting_state={"starting_nav": str(replay.ledger.starting_cash), "currency": "USD"},
+                initial_accounting_state={
+                    "starting_nav": str(replay.ledger.starting_cash),
+                    "currency": "USD",
+                },
                 expected_outputs={name: name for name in sorted(w.hashes)},
             )
             w.write_json("run_manifest.json", manifest.model_dump(mode="json"))
 
-        certificate_count = sum(1 for f in forecasts_used.values() if certificates_used[f.admission_certificate_id].verify_seal())
+        certificate_count = sum(
+            1
+            for f in forecasts_used.values()
+            if certificates_used[f.admission_certificate_id].verify_seal()
+        )
         frozen_at = cfg.get("frozen_at")
-        frozen_at = dt.datetime.fromisoformat(frozen_at) if frozen_at else utc_close(periods[-1][1])
+        frozen_at = (
+            dt.datetime.fromisoformat(frozen_at)
+            if frozen_at
+            else utc_close(periods[-1][1])
+        )
         freeze_outputs = {
             "holdings_export": w.payloads["holdings_export.csv"],
             "returns_export": w.payloads["returns_export.csv"],
             "performance_report": w.payloads["performance_report.json"],
             "compliance_report": w.payloads["compliance_report.json"],
             "decision_dossier": w.payloads["decision_dossier.json"],
-            **({"coordination_receipts": w.payloads["coordination_receipts.json"]} if self.hook is not None else {}),
+            **(
+                {
+                    "coordination_receipts": w.payloads[
+                        "coordination_receipts.json"
+                    ]
+                }
+                if self.hook is not None
+                else {}
+            ),
         }
         assessment = assess_freeze(
             manifest=manifest,
@@ -2130,7 +3308,9 @@ class ControlledReplay:
             accounting_reconciled=True,  # advance() raises on any residual, so reaching here is measured
             compliance=self.compliance,
             trial_count=int(lineage.get("trial_count", 0) or 0),
-            evaluation_access_count=int(lineage["evaluation_access_count"]) if lineage.get("evaluation_access_count") is not None else -1,
+            evaluation_access_count=int(lineage["evaluation_access_count"])
+            if lineage.get("evaluation_access_count") is not None
+            else -1,
             frozen_at=frozen_at,
         )
         w.write_json("freeze_assessment.json", assessment.as_dict())
@@ -2138,7 +3318,10 @@ class ControlledReplay:
             "run_id": cfg["run_id"],
             "labels": labels,
             "source_policy": gate.as_dict(),
-            "environment": {"environment_lock_hash": environment_lock_hash(), "python": sys.version.split()[0]},
+            "environment": {
+                "environment_lock_hash": environment_lock_hash(),
+                "python": sys.version.split()[0],
+            },
             "periods": n,
             "ending_nav": str(replay.nav()),
             "freeze_status": assessment.status,
@@ -2148,18 +3331,35 @@ class ControlledReplay:
             "limitations": list(MONTHLY_LIMITATIONS),
             "llm_called": False,
             "certificate_policy": self.cert_policy.name,
-            "certificate_checks": [self.certificate_checks[k].as_dict() for k in sorted(self.certificate_checks)],
+            "certificate_checks": [
+                self.certificate_checks[k].as_dict()
+                for k in sorted(self.certificate_checks)
+            ],
             # a controlled fixture replay never authorizes a real competition book, whatever the certificates say
             "certificates_authorize_competition_book": False,
         }
         if self.hook is not None:  # legacy summaries are unchanged
-            summary["coordination"] = {"mode": COORDINATION_MODE, "hashes": coordination_hashes}
+            summary["coordination"] = {
+                "mode": COORDINATION_MODE,
+                "hashes": coordination_hashes,
+            }
         w.write_json("run_summary.json", summary)
         w.write_json("artifact_hashes.json", dict(sorted(w.hashes.items())))
-        return {"summary": summary, "assessment": assessment, "hashes": dict(w.hashes)}
+        return {
+            "summary": summary,
+            "assessment": assessment,
+            "hashes": dict(w.hashes),
+        }
 
 
-def _event(event_id: str, at: dt.datetime, action: str, result_id: str, inputs: dict[str, str], authority: str) -> DecisionEvent:
+def _event(
+    event_id: str,
+    at: dt.datetime,
+    action: str,
+    result_id: str,
+    inputs: dict[str, str],
+    authority: str,
+) -> DecisionEvent:
     return DecisionEvent(
         owner="orchestration",
         created_at=at,

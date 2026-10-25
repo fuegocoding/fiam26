@@ -23,6 +23,12 @@ matrix is rejected (``PD_UNVERIFIABLE``), i.e. validation fails closed.
 
 from __future__ import annotations
 
+try:
+    import numpy
+except ImportError:
+    numpy = None
+
+
 import datetime as dt
 import hashlib
 import json
@@ -77,10 +83,6 @@ def _cholesky_ok(matrix: Sequence[Sequence[float]]) -> bool:
 
 def _load_numpy():
     """Optional NumPy; a seam so tests can simulate its absence."""
-    try:
-        import numpy
-    except Exception:  # pragma: no cover - depends on the environment
-        return None
     return numpy
 
 
@@ -93,7 +95,9 @@ def _diagonally_dominant(matrix: Sequence[Sequence[float]]) -> bool:
     return True
 
 
-def verify_positive_definite(matrix: Sequence[Sequence[float]], max_python_assets: int) -> str:
+def verify_positive_definite(
+    matrix: Sequence[Sequence[float]], max_python_assets: int
+) -> str:
     """Return the method that proved positive definiteness, or raise ``CovarianceError``.
 
     Never returns for an unverified matrix: ``NOT_PSD`` when a check refutes it,
@@ -108,7 +112,10 @@ def verify_positive_definite(matrix: Sequence[Sequence[float]], max_python_asset
     if np is not None:
         smallest = float(np.linalg.eigvalsh(np.array(matrix, dtype=float))[0])
         if not smallest > 1e-12 * max(matrix[i][i] for i in range(n)):
-            raise CovarianceError("NOT_PSD", f"matrix is not positive definite (min eigenvalue {smallest:.3e})")
+            raise CovarianceError(
+                "NOT_PSD",
+                f"matrix is not positive definite (min eigenvalue {smallest:.3e})",
+            )
         return "eigvalsh_numpy"
     if _diagonally_dominant(matrix):
         return "gershgorin_diagonal_dominance"
@@ -129,10 +136,14 @@ class CovarianceModel:
     version: str
     pd_checked: bool = True
     pd_method: str = "cholesky_python"
-    _index: dict = field(default_factory=dict, init=False, repr=False, compare=False)
+    _index: dict = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_index", {s: i for i, s in enumerate(self.security_ids)})
+        object.__setattr__(
+            self, "_index", {s: i for i, s in enumerate(self.security_ids)}
+        )
 
     # ---- construction from an explicit matrix (validated) ----
     @classmethod
@@ -150,34 +161,60 @@ class CovarianceModel:
     ) -> "CovarianceModel":
         ids = tuple(security_ids)
         n = len(ids)
-        if n == 0 or len(set(ids)) != n or len(matrix) != n or any(len(r) != n for r in matrix):
-            raise CovarianceError("SHAPE", "matrix must be square over unique security ids")
+        if (
+            n == 0
+            or len(set(ids)) != n
+            or len(matrix) != n
+            or any(len(r) != n for r in matrix)
+        ):
+            raise CovarianceError(
+                "SHAPE", "matrix must be square over unique security ids"
+            )
         for row in matrix:
             if not all(math.isfinite(v) for v in row):
-                raise CovarianceError("NONFINITE", "covariance matrix has non-finite entries")
+                raise CovarianceError(
+                    "NONFINITE", "covariance matrix has non-finite entries"
+                )
         for i in range(n):
             if matrix[i][i] <= 0:
-                raise CovarianceError("NOT_PSD", f"non-positive variance for {ids[i]!r}")
+                raise CovarianceError(
+                    "NOT_PSD", f"non-positive variance for {ids[i]!r}"
+                )
             for j in range(i):
-                if abs(matrix[i][j] - matrix[j][i]) > 1e-12 * max(1.0, abs(matrix[i][j])):
+                if abs(matrix[i][j] - matrix[j][i]) > 1e-12 * max(
+                    1.0, abs(matrix[i][j])
+                ):
                     raise CovarianceError("NOT_PSD", "matrix is not symmetric")
         method = verify_positive_definite(matrix, pd_check_max_assets)
         rows = tuple(tuple(float(v) for v in r) for r in matrix)
-        return cls(ids, rows, require_aware(as_of, "as_of"), n_observations, shrinkage,
-                   periods_per_year, _version(label, ids, rows, as_of, n_observations, shrinkage), True, method)
+        return cls(
+            ids,
+            rows,
+            require_aware(as_of, "as_of"),
+            n_observations,
+            shrinkage,
+            periods_per_year,
+            _version(label, ids, rows, as_of, n_observations, shrinkage),
+            True,
+            method,
+        )
 
     # ---- queries ----
     def _check(self, weights: Mapping[str, float]) -> None:
         unknown = sorted(s for s in weights if s not in self._index)
         if unknown:
-            raise CovarianceError("UNKNOWN_EXPOSURE", f"no covariance for {unknown[:5]}")
+            raise CovarianceError(
+                "UNKNOWN_EXPOSURE", f"no covariance for {unknown[:5]}"
+            )
 
     def covariance(self, a: str, b: str) -> float:
         self._check({a: 0.0, b: 0.0})
         return self.matrix[self._index[a]][self._index[b]]
 
     def correlation(self, a: str, b: str) -> float:
-        return self.covariance(a, b) / math.sqrt(self.covariance(a, a) * self.covariance(b, b))
+        return self.covariance(a, b) / math.sqrt(
+            self.covariance(a, a) * self.covariance(b, b)
+        )
 
     def cov_times(self, weights: Mapping[str, float]) -> dict[str, float]:
         """(Sigma w)_i for every modelled security (per-period units)."""
@@ -188,7 +225,9 @@ class CovarianceModel:
             for i, sid in enumerate(self.security_ids)
         }
 
-    def cross_variance(self, a: Mapping[str, float], b: Mapping[str, float]) -> float:
+    def cross_variance(
+        self, a: Mapping[str, float], b: Mapping[str, float]
+    ) -> float:
         self._check(a)
         self._check(b)
         sb = self.cov_times(b)
@@ -199,19 +238,33 @@ class CovarianceModel:
 
     def volatility(self, weights: Mapping[str, float]) -> float:
         """Annualised ex-ante volatility."""
-        return math.sqrt(max(self.variance(weights), 0.0) * self.periods_per_year)
+        return math.sqrt(
+            max(self.variance(weights), 0.0) * self.periods_per_year
+        )
 
-    def stressed_variance(self, weights: Mapping[str, float], rho: float) -> float:
+    def stressed_variance(
+        self, weights: Mapping[str, float], rho: float
+    ) -> float:
         """Per-period variance with every pairwise correlation set to ``rho``."""
         self._check(weights)
-        sig = {s: math.sqrt(self.covariance(s, s)) * w for s, w in weights.items()}
-        return (1.0 - rho) * sum(v * v for v in sig.values()) + rho * sum(sig.values()) ** 2
+        sig = {
+            s: math.sqrt(self.covariance(s, s)) * w for s, w in weights.items()
+        }
+        return (1.0 - rho) * sum(v * v for v in sig.values()) + rho * sum(
+            sig.values()
+        ) ** 2
 
 
 def _version(label, ids, rows, as_of, n_obs, shrinkage) -> str:
     blob = json.dumps(
-        [label, list(ids), [[round(v, 15) for v in r] for r in rows],
-         require_aware(as_of, "as_of").isoformat(), n_obs, round(shrinkage, 12)],
+        [
+            label,
+            list(ids),
+            [[round(v, 15) for v in r] for r in rows],
+            require_aware(as_of, "as_of").isoformat(),
+            n_obs,
+            round(shrinkage, 12),
+        ],
         separators=(",", ":"),
     )
     return "cov_" + hashlib.sha256(blob.encode()).hexdigest()[:16]
@@ -222,7 +275,11 @@ class CovarianceEstimator:
         self._policy = policy or CovariancePolicy()
 
     def estimate(
-        self, rows: Sequence[ReturnRow], security_ids: Sequence[str], *, as_of: dt.datetime
+        self,
+        rows: Sequence[ReturnRow],
+        security_ids: Sequence[str],
+        *,
+        as_of: dt.datetime,
     ) -> CovarianceModel:
         p = self._policy
         as_of = require_aware(as_of, "as_of")
@@ -230,38 +287,58 @@ class CovarianceEstimator:
         if not ids:
             raise CovarianceError("UNKNOWN_EXPOSURE", "no securities requested")
         if len(ids) > p.max_assets:
-            raise CovarianceError("ASSET_CAP", f"{len(ids)} assets exceeds max_assets={p.max_assets}")
+            raise CovarianceError(
+                "ASSET_CAP",
+                f"{len(ids)} assets exceeds max_assets={p.max_assets}",
+            )
         seen: set[dt.datetime] = set()
         for row in rows:
             at = require_aware(row.observed_at, "observed_at")
             if at > as_of:
-                raise CovarianceError("FUTURE_ROW", f"row observed at {at.isoformat()} is after as_of")
+                raise CovarianceError(
+                    "FUTURE_ROW",
+                    f"row observed at {at.isoformat()} is after as_of",
+                )
             if at in seen:
-                raise CovarianceError("DUPLICATE_ROW", f"two rows observed at {at.isoformat()}")
+                raise CovarianceError(
+                    "DUPLICATE_ROW", f"two rows observed at {at.isoformat()}"
+                )
             seen.add(at)
         ordered = sorted(rows, key=lambda r: r.observed_at)
         known = {s for r in ordered for s in r.returns}
         missing = [s for s in ids if s not in known]
         if missing:
-            raise CovarianceError("UNKNOWN_EXPOSURE", f"no return history for {missing[:5]}")
-        window = ordered[-p.max_observations:]
+            raise CovarianceError(
+                "UNKNOWN_EXPOSURE", f"no return history for {missing[:5]}"
+            )
+        window = ordered[-p.max_observations :]
         data: list[list[float]] = []
         for row in window:
             vals = []
             for s in ids:
                 if s not in row.returns:
-                    raise CovarianceError("MISSING_VALUE", f"{s!r} missing at {row.observed_at.isoformat()}")
+                    raise CovarianceError(
+                        "MISSING_VALUE",
+                        f"{s!r} missing at {row.observed_at.isoformat()}",
+                    )
                 v = row.returns[s]
                 if not isinstance(v, (int, float)) or not math.isfinite(v):
-                    raise CovarianceError("NONFINITE", f"non-finite return for {s!r}")
+                    raise CovarianceError(
+                        "NONFINITE", f"non-finite return for {s!r}"
+                    )
                 vals.append(float(v))
             data.append(vals)
         t, n = len(data), len(ids)
         if t < p.min_observations:
-            raise CovarianceError("TOO_SHORT", f"{t} observations < min_observations={p.min_observations}")
+            raise CovarianceError(
+                "TOO_SHORT",
+                f"{t} observations < min_observations={p.min_observations}",
+            )
         latest = window[-1].observed_at
         if as_of - latest > dt.timedelta(days=p.max_staleness_days):
-            raise CovarianceError("STALE", f"latest matured row {latest.isoformat()} is stale")
+            raise CovarianceError(
+                "STALE", f"latest matured row {latest.isoformat()} is stale"
+            )
         means = [sum(r[j] for r in data) / t for j in range(n)]
         dev = [[r[j] - means[j] for j in range(n)] for r in data]
         sample = [[0.0] * n for _ in range(n)]
@@ -272,7 +349,9 @@ class CovarianceEstimator:
         delta = min(1.0, max(p.min_shrinkage, n / (t + n)))
         shrunk = [
             [
-                max(sample[i][i], p.variance_floor) if i == j else (1.0 - delta) * sample[i][j]
+                max(sample[i][i], p.variance_floor)
+                if i == j
+                else (1.0 - delta) * sample[i][j]
                 for j in range(n)
             ]
             for i in range(n)
@@ -287,6 +366,13 @@ class CovarianceEstimator:
             method = "shrinkage_construction"
         rows_t = tuple(tuple(r) for r in shrunk)
         return CovarianceModel(
-            ids, rows_t, as_of, t, delta, p.periods_per_year,
-            _version("shrunk_diag", ids, rows_t, as_of, t, delta), True, method,
+            ids,
+            rows_t,
+            as_of,
+            t,
+            delta,
+            p.periods_per_year,
+            _version("shrunk_diag", ids, rows_t, as_of, t, delta),
+            True,
+            method,
         )

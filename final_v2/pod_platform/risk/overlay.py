@@ -73,7 +73,11 @@ def protect(
         return OverlayResult(weights, pd.DataFrame(), {})
     formation = month - 1
     history = panel.loc[panel["eom"] <= formation]
-    now = history.loc[history["eom"] == formation].drop_duplicates("permno").set_index("permno")
+    now = (
+        history.loc[history["eom"] == formation]
+        .drop_duplicates("permno")
+        .set_index("permno")
+    )
     shorts = book.index[book < 0]
 
     probability = _peer_squeeze_probability(history, now, formation)
@@ -112,7 +116,9 @@ def protect(
     table = pd.DataFrame(
         {
             "peer_squeeze_probability": probability.reindex(book.index),
-            "jump_1_in_100_months": _jump_level(history, shorts, formation).reindex(book.index),
+            "jump_1_in_100_months": _jump_level(
+                history, shorts, formation
+            ).reindex(book.index),
             "risk_multiplier": (adjusted / book).to_numpy(),
         },
         index=book.index,
@@ -120,25 +126,37 @@ def protect(
     summary = {
         "peer_flagged_shorts": int(flagged.sum()),
         "runup_capped_shorts": int(capped.sum()),
-        "expected_shortfall": float(shortfall) if np.isfinite(shortfall) else None,
+        "expected_shortfall": float(shortfall)
+        if np.isfinite(shortfall)
+        else None,
         "shortfall_norm": float(norm) if np.isfinite(norm) else None,
         "risk_scale": scale,
         "edge_t": float(edge_t) if np.isfinite(edge_t) else None,
         "edge_scale": edge_scale,
-        "short_weight_in_flagged": float(-adjusted[flagged[flagged].index].sum()) if flagged.any() else 0.0,
+        "short_weight_in_flagged": float(
+            -adjusted[flagged[flagged].index].sum()
+        )
+        if flagged.any()
+        else 0.0,
         "post_overlay_net_capped": net_capped,
     }
     return OverlayResult(adjusted.to_dict(), table, summary)
 
 
-def _edge_throttle(scores: pd.DataFrame, history: pd.DataFrame, month: pd.Period):
+def _edge_throttle(
+    scores: pd.DataFrame, history: pd.DataFrame, month: pd.Period
+):
     past = scores.loc[
         (scores["return_month"] < month)
         & (scores["return_month"] >= month - EDGE_MONTHS)
         & (scores["prc"] >= MIN_PRICE)
     ]
-    realized = history[["permno", "eom", "ret_exc"]].rename(columns={"eom": "return_month"})
-    past = past.merge(realized, on=["return_month", "permno"]).dropna(subset=["final_score", "ret_exc"])
+    realized = history[["permno", "eom", "ret_exc"]].rename(
+        columns={"eom": "return_month"}
+    )
+    past = past.merge(realized, on=["return_month", "permno"]).dropna(
+        subset=["final_score", "ret_exc"]
+    )
     rank = past.groupby("return_month")["final_score"].rank(pct=True)
     top = past[rank > 1 - EDGE_TAIL].groupby("return_month")["ret_exc"].mean()
     bottom = past[rank <= EDGE_TAIL].groupby("return_month")["ret_exc"].mean()
@@ -184,7 +202,9 @@ def _squeeze_probability(returns: np.ndarray) -> float:
     return len(excess) / len(returns) * base ** (-1 / shape)
 
 
-def _peer_squeeze_probability(history: pd.DataFrame, now: pd.DataFrame, formation: pd.Period):
+def _peer_squeeze_probability(
+    history: pd.DataFrame, now: pd.DataFrame, formation: pd.Period
+):
     window = history.loc[history["eom"] > formation - PEER_WINDOW_MONTHS]
     pooled = _peer_keys(window).assign(ret=window["ret_exc"].clip(-1.0, 5.0))
     current = _peer_keys(now)
@@ -194,14 +214,18 @@ def _peer_squeeze_probability(history: pd.DataFrame, now: pd.DataFrame, formatio
         stats = grouped.apply(lambda r: _squeeze_probability(r.to_numpy()))
         stats = stats[grouped.size() >= PEER_MIN_OBSERVATIONS]
         lookup = (
-            pd.MultiIndex.from_frame(current[keys]) if len(keys) > 1 else pd.Index(current[keys[0]])
+            pd.MultiIndex.from_frame(current[keys])
+            if len(keys) > 1
+            else pd.Index(current[keys[0]])
         )
         found = pd.Series(stats.reindex(lookup).to_numpy(), index=now.index)
         probability = probability.fillna(found)
     return probability
 
 
-def _shrink_flagged(book: pd.Series, flagged: pd.Series, sector: pd.Series) -> pd.Series:
+def _shrink_flagged(
+    book: pd.Series, flagged: pd.Series, sector: pd.Series
+) -> pd.Series:
     adjusted = book.copy()
     shorts = book[book < 0]
     if not flagged.any():
@@ -220,7 +244,9 @@ def _shrink_flagged(book: pd.Series, flagged: pd.Series, sector: pd.Series) -> p
     return adjusted
 
 
-def _expected_shortfall(book: pd.Series, history: pd.DataFrame, formation: pd.Period):
+def _expected_shortfall(
+    book: pd.Series, history: pd.DataFrame, formation: pd.Period
+):
     span = ES_WINDOW_MONTHS + ES_NORM_MONTHS
     window = history.loc[
         (history["eom"] > formation - span) & history["permno"].isin(book.index)
@@ -237,7 +263,9 @@ def _expected_shortfall(book: pd.Series, history: pd.DataFrame, formation: pd.Pe
 
     current = shortfall(pnl[-ES_WINDOW_MONTHS:])
     earlier = [
-        shortfall(pnl[max(0, len(pnl) - lag - ES_WINDOW_MONTHS) : len(pnl) - lag])
+        shortfall(
+            pnl[max(0, len(pnl) - lag - ES_WINDOW_MONTHS) : len(pnl) - lag]
+        )
         for lag in range(1, ES_NORM_MONTHS + 1)
     ]
     earlier = [value for value in earlier if np.isfinite(value)]
@@ -247,7 +275,8 @@ def _expected_shortfall(book: pd.Series, history: pd.DataFrame, formation: pd.Pe
 
 def _jump_level(history: pd.DataFrame, permnos: pd.Index, formation: pd.Period):
     window = history.loc[
-        (history["eom"] > formation - GEV_WINDOW_MONTHS) & history["permno"].isin(permnos)
+        (history["eom"] > formation - GEV_WINDOW_MONTHS)
+        & history["permno"].isin(permnos)
     ].drop_duplicates(["eom", "permno"])
     maxima = window.pivot(index="eom", columns="permno", values="rmax1_21d")
     if maxima.empty:
@@ -260,7 +289,9 @@ def _jump_level(history: pd.DataFrame, permnos: pd.Index, formation: pd.Period):
     with np.errstate(divide="ignore", invalid="ignore"):
         b0 = values.sum(0) / count
         b1 = ((rank - 1) / (count - 1) * values).sum(0) / count
-        b2 = ((rank - 1) * (rank - 2) / ((count - 1) * (count - 2)) * values).sum(0) / count
+        b2 = (
+            (rank - 1) * (rank - 2) / ((count - 1) * (count - 2)) * values
+        ).sum(0) / count
         l2 = 2 * b1 - b0
         skew = np.clip((6 * b2 - 6 * b1 + b0) / l2, -0.5, 0.9)
         c = 2 / (3 + skew) - math.log(2) / math.log(3)

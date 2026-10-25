@@ -55,6 +55,7 @@ class DecisionEvent(DurableModel):
             ]
             if missing:
                 raise ValueError(
-                    "an agent decision must record model/prompt/cache references: " + ", ".join(missing)
+                    "an agent decision must record model/prompt/cache references: "
+                    + ", ".join(missing)
                 )
         return self

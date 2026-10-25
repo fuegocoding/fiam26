@@ -17,7 +17,7 @@ from typing import Optional, Sequence
 
 from pydantic import Field, model_validator
 
-from ..contracts.base import StrictModel, require_aware
+from ..contracts.base import StrictModel
 from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
 from ..contracts.portfolio import (
     ConstraintResult,
@@ -72,7 +72,9 @@ class InternalPolicy(StrictModel):
     @model_validator(mode="after")
     def _check(self) -> "InternalPolicy":
         if self.retention_band >= 2.0:
-            raise ValueError("retention band must be a tight band around k, not an unbounded keep-all")
+            raise ValueError(
+                "retention band must be a tight band around k, not an unbounded keep-all"
+            )
         if self.beta_upper <= self.beta_lower:
             raise ValueError("beta_upper must exceed beta_lower")
         return self
@@ -171,7 +173,9 @@ class ConstructionEngine:
         official = self._official
         internal = self._internal
         n_per_side = max(1, internal.target_positions // 2)
-        one_usd = internal.capital_usd * (internal.target_gross / 2.0) / n_per_side
+        one_usd = (
+            internal.capital_usd * (internal.target_gross / 2.0) / n_per_side
+        )
 
         base_tradable = [
             c
@@ -184,7 +188,12 @@ class ConstructionEngine:
             c
             for c in base_tradable
             if internal.long_adv_participation <= 0.0
-            or (c.adv_usd * internal.long_adv_participation * internal.execution_days >= one_usd)
+            or (
+                c.adv_usd
+                * internal.long_adv_participation
+                * internal.execution_days
+                >= one_usd
+            )
         ]
         shortable = [
             c
@@ -193,7 +202,12 @@ class ConstructionEngine:
             and not (c.short_interest_pct >= internal.max_short_interest)
             and (
                 internal.short_adv_participation <= 0.0
-                or (c.adv_usd * internal.short_adv_participation * internal.execution_days >= one_usd)
+                or (
+                    c.adv_usd
+                    * internal.short_adv_participation
+                    * internal.execution_days
+                    >= one_usd
+                )
             )
         ]
 
@@ -201,8 +215,12 @@ class ConstructionEngine:
             return (0, int(sid)) if sid.isdigit() else (1, sid)
 
         if internal.allow_all_ranked_sides:
-            longs = sorted(tradable, key=lambda c: (-c.alpha, _tie_key(c.security_id)))
-            shorts = sorted(shortable, key=lambda c: (c.alpha, _tie_key(c.security_id)))
+            longs = sorted(
+                tradable, key=lambda c: (-c.alpha, _tie_key(c.security_id))
+            )
+            shorts = sorted(
+                shortable, key=lambda c: (c.alpha, _tie_key(c.security_id))
+            )
         else:
             longs = sorted(
                 (c for c in tradable if c.alpha > 0),
@@ -231,7 +249,11 @@ class ConstructionEngine:
             sector_counts: dict[str, int] = {}
             for c in list(longs) + list(shorts):
                 sector_counts[c.sector] = sector_counts.get(c.sector, 0) + 1
-            eligible_counts = {s: n for s, n in sector_counts.items() if n >= internal.min_sector_names}
+            eligible_counts = {
+                s: n
+                for s, n in sector_counts.items()
+                if n >= internal.min_sector_names
+            }
             quota = _quota(eligible_counts, k)
             selected_longs: list[Candidate] = []
             selected_shorts: list[Candidate] = []
@@ -243,17 +265,23 @@ class ConstructionEngine:
                 k_pair = min(k_sector, len(lo), len(so))
                 if k_pair <= 0:
                     continue
-                picked_shorts = self._select_with_retention(so, k_pair, side="short")
+                picked_shorts = self._select_with_retention(
+                    so, k_pair, side="short"
+                )
                 short_ids = {c.security_id for c in picked_shorts}
                 picked_longs = self._select_with_retention(
-                    [c for c in lo if c.security_id not in short_ids], k_pair, side="long"
+                    [c for c in lo if c.security_id not in short_ids],
+                    k_pair,
+                    side="long",
                 )
                 k_pair = min(len(picked_shorts), len(picked_longs))
                 selected_longs += picked_longs[:k_pair]
                 selected_shorts += picked_shorts[:k_pair]
         else:
             selected_longs = self._select_with_retention(longs, k, side="long")
-            selected_shorts = self._select_with_retention(shorts, k, side="short")
+            selected_shorts = self._select_with_retention(
+                shorts, k, side="short"
+            )
 
         if not selected_longs or not selected_shorts:
             result.status = SolverStatus.INFEASIBLE
@@ -274,10 +302,12 @@ class ConstructionEngine:
             beta_low = Decimal(str(internal.beta_lower))
             beta_high = Decimal(str(internal.beta_upper))
             long_betas = [
-                min(max(Decimal(str(c.beta)), beta_low), beta_high) for c in selected_longs
+                min(max(Decimal(str(c.beta)), beta_low), beta_high)
+                for c in selected_longs
             ]
             short_betas = [
-                min(max(Decimal(str(c.beta)), beta_low), beta_high) for c in selected_shorts
+                min(max(Decimal(str(c.beta)), beta_low), beta_high)
+                for c in selected_shorts
             ]
             long_beta = sum(long_betas) / Decimal(len(long_betas))
             short_beta = sum(short_betas) / Decimal(len(short_betas))
@@ -287,7 +317,9 @@ class ConstructionEngine:
             long_notional = min(max(raw, half * (1 - tilt)), half * (1 + tilt))
             if internal.enforce_max_abs_net:
                 max_dev = Decimal(str(internal.max_abs_net)) / Decimal(2)
-                long_notional = min(max(long_notional, half - max_dev), half + max_dev)
+                long_notional = min(
+                    max(long_notional, half - max_dev), half + max_dev
+                )
             short_notional = gross - long_notional
 
         long_unit = (long_notional / Decimal(len(selected_longs))).quantize(
@@ -341,7 +373,9 @@ class ConstructionEngine:
                 name="position_count",
                 threshold=f"{official.min_positions}..{official.max_positions}",
                 value=str(count),
-                status="pass" if official.min_positions <= count <= official.max_positions else "fail",
+                status="pass"
+                if official.min_positions <= count <= official.max_positions
+                else "fail",
             ),
             ConstraintResult(
                 name="gross",
@@ -353,7 +387,9 @@ class ConstructionEngine:
                 name="net",
                 threshold=f"[{official.min_net}, {official.max_net}]",
                 value=str(net),
-                status="pass" if min_net - tol <= net <= max_net + tol else "fail",
+                status="pass"
+                if min_net - tol <= net <= max_net + tol
+                else "fail",
             ),
             ConstraintResult(
                 name="max_abs_name_weight",
@@ -364,7 +400,11 @@ class ConstructionEngine:
             ConstraintResult(
                 name="short_market_cap",
                 threshold=f">= {official.min_short_market_cap_usd}",
-                value=str(min((c.market_cap_usd for c in selected_shorts), default=0.0)),
+                value=str(
+                    min(
+                        (c.market_cap_usd for c in selected_shorts), default=0.0
+                    )
+                ),
                 status="pass",
             ),
         ]
@@ -377,7 +417,9 @@ class ConstructionEngine:
                 name="abs_net",
                 threshold=f"<= {internal.max_abs_net}",
                 value=str(abs(net)),
-                status="pass" if abs(net) <= Decimal(str(internal.max_abs_net)) + tol else "warn",
+                status="pass"
+                if abs(net) <= Decimal(str(internal.max_abs_net)) + tol
+                else "warn",
             ),
         ]
         result.positions = positions

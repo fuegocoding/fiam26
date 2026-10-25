@@ -6,10 +6,15 @@ annualized, daily vs monthly frequency, gross vs net of modeled costs).
 
 from __future__ import annotations
 
+try:
+    import numpy as np
+except ImportError:
+    np = None
 import math
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
+from ..accounting.evaluation import ols, ols_hac
 from ..accounting.returns import (
     annualized_arithmetic,
     annualized_volatility,
@@ -57,7 +62,9 @@ class RequiredTable:
             ("gross_returns", self.gross_returns),
         ):
             if len(series) != n:
-                raise ValueError(f"{name} length {len(series)} != portfolio length {n}")
+                raise ValueError(
+                    f"{name} length {len(series)} != portfolio length {n}"
+                )
 
     def cumulative_return(self) -> float:
         self._check_lengths()
@@ -68,14 +75,18 @@ class RequiredTable:
 
     def annualized_arithmetic_return(self) -> float:
         self._check_lengths()
-        return annualized_arithmetic(self.portfolio_returns, self.periods_per_year)
+        return annualized_arithmetic(
+            self.portfolio_returns, self.periods_per_year
+        )
 
     def cagr(self) -> float:
         return cagr(self.starting_value, self.ending_value, self.elapsed_years)
 
     def annualized_volatility(self) -> float:
         self._check_lengths()
-        return annualized_volatility(self.portfolio_returns, self.periods_per_year)
+        return annualized_volatility(
+            self.portfolio_returns, self.periods_per_year
+        )
 
     def max_drawdown(self) -> float:
         self._check_lengths()
@@ -92,21 +103,32 @@ class RequiredTable:
 
     def tracking_error(self) -> float:
         self._check_lengths()
-        active = [p - b for p, b in zip(self.portfolio_returns, self.benchmark_returns)]
+        active = [
+            p - b
+            for p, b in zip(self.portfolio_returns, self.benchmark_returns)
+        ]
         return annualized_volatility(active, self.periods_per_year)
 
     def information_ratio(self) -> float:
         self._check_lengths()
-        active = [p - b for p, b in zip(self.portfolio_returns, self.benchmark_returns)]
+        active = [
+            p - b
+            for p, b in zip(self.portfolio_returns, self.benchmark_returns)
+        ]
         mean = sum(active) / len(active)
         var = sum((x - mean) ** 2 for x in active) / (len(active) - 1)
         if var == 0:
-            raise ValueError("zero active dispersion; information ratio undefined")
+            raise ValueError(
+                "zero active dispersion; information ratio undefined"
+            )
         return math.sqrt(self.periods_per_year) * mean / math.sqrt(var)
 
     def sharpe_ratio(self) -> float:
         self._check_lengths()
-        excess = [p - r for p, r in zip(self.portfolio_returns, self.risk_free_returns)]
+        excess = [
+            p - r
+            for p, r in zip(self.portfolio_returns, self.risk_free_returns)
+        ]
         mean = sum(excess) / len(excess)
         var = sum((x - mean) ** 2 for x in excess) / (len(excess) - 1)
         if var == 0:
@@ -116,7 +138,9 @@ class RequiredTable:
     def turnover_per_rebalance_avg(self) -> float:
         if not self.turnover_per_rebalance:
             return 0.0
-        return sum(self.turnover_per_rebalance) / len(self.turnover_per_rebalance)
+        return sum(self.turnover_per_rebalance) / len(
+            self.turnover_per_rebalance
+        )
 
     def turnover_annualized(self) -> float:
         if not self.turnover_per_rebalance:
@@ -158,7 +182,9 @@ class RequiredTable:
         total = sum(self.cost_returns) + sum(self.borrow_returns)
         return total / self.elapsed_years
 
-    def max_drawdown_duration_periods(self, returns: Optional[Sequence[float]] = None) -> int:
+    def max_drawdown_duration_periods(
+        self, returns: Optional[Sequence[float]] = None
+    ) -> int:
         series = self.portfolio_returns if returns is None else returns
         peak = self.starting_value
         val = self.starting_value
@@ -179,11 +205,17 @@ class RequiredTable:
         self._check_lengths()
         if not self.portfolio_returns:
             return 0.0
-        wins = sum(1 for p, b in zip(self.portfolio_returns, self.benchmark_returns) if p > b)
+        wins = sum(
+            1
+            for p, b in zip(self.portfolio_returns, self.benchmark_returns)
+            if p > b
+        )
         return wins / len(self.portfolio_returns)
 
     def sp500_regression(self) -> dict[str, Optional[float]]:
-        if not self.spx_returns or len(self.spx_returns) != len(self.portfolio_returns):
+        if not self.spx_returns or len(self.spx_returns) != len(
+            self.portfolio_returns
+        ):
             return {
                 "beta_monthly": None,
                 "beta_monthly_se": None,
@@ -192,11 +224,18 @@ class RequiredTable:
                 "alpha_monthly_se_ann": None,
                 "alpha_monthly_t_hac": None,
             }
-        import numpy as np
-        from ..accounting.evaluation import ols, ols_hac
 
-        y = np.array([p - rf for p, rf in zip(self.portfolio_returns, self.risk_free_returns)], dtype=float)
-        x = np.array([s - rf for s, rf in zip(self.spx_returns, self.risk_free_returns)], dtype=float)
+        y = np.array(
+            [
+                p - rf
+                for p, rf in zip(self.portfolio_returns, self.risk_free_returns)
+            ],
+            dtype=float,
+        )
+        x = np.array(
+            [s - rf for s, rf in zip(self.spx_returns, self.risk_free_returns)],
+            dtype=float,
+        )
         mask = np.isfinite(y) & np.isfinite(x)
         if mask.sum() <= 6:
             return {
@@ -225,9 +264,13 @@ class RequiredTable:
             b_comp *= 1.0 + r
         b_end = self.starting_value * b_comp
         b_cum = b_comp - 1.0
-        b_arith = annualized_arithmetic(self.benchmark_returns, self.periods_per_year)
+        b_arith = annualized_arithmetic(
+            self.benchmark_returns, self.periods_per_year
+        )
         b_cagr = cagr(self.starting_value, b_end, self.elapsed_years)
-        b_vol = annualized_volatility(self.benchmark_returns, self.periods_per_year)
+        b_vol = annualized_volatility(
+            self.benchmark_returns, self.periods_per_year
+        )
         b_path = [self.starting_value]
         v = self.starting_value
         for r in self.benchmark_returns:
@@ -258,7 +301,11 @@ class RequiredTable:
         hold_days = (
             self.avg_holding_period_days
             if self.avg_holding_period_days is not None
-            else (gross_stats["average"] / max(t_ann, 1e-9) * 252.0 if t_ann > 0 else 0.0)
+            else (
+                gross_stats["average"] / max(t_ann, 1e-9) * 252.0
+                if t_ann > 0
+                else 0.0
+            )
         )
         avg_pos_pct = (
             gross_stats["average"] / max(pos_stats["average"], 1.0)
@@ -271,14 +318,38 @@ class RequiredTable:
             else (avg_pos_pct * (self.starting_value / 1e6))
         )
         section_9_1 = {
-            "01_ending_value_usd": {"strategy": self.ending_value, "benchmark": bench["ending_value"]},
-            "02_cumulative_return_net": {"strategy": self.cumulative_return(), "benchmark": bench["cumulative_return"]},
-            "03_annualized_arithmetic_return": {"strategy": self.annualized_arithmetic_return(), "benchmark": bench["annualized_arithmetic_return"]},
-            "04_cagr_compounded": {"strategy": self.cagr(), "benchmark": bench["cagr"]},
-            "05_annualized_volatility": {"strategy": self.annualized_volatility(), "benchmark": bench["annualized_volatility"]},
-            "06_tracking_error": {"strategy": self.tracking_error(), "benchmark": 0.0},
-            "07_information_ratio": {"strategy": self.information_ratio(), "benchmark": 0.0},
-            "08_sharpe_ratio_vs_tb3ms": {"strategy": self.sharpe_ratio(), "benchmark": None},
+            "01_ending_value_usd": {
+                "strategy": self.ending_value,
+                "benchmark": bench["ending_value"],
+            },
+            "02_cumulative_return_net": {
+                "strategy": self.cumulative_return(),
+                "benchmark": bench["cumulative_return"],
+            },
+            "03_annualized_arithmetic_return": {
+                "strategy": self.annualized_arithmetic_return(),
+                "benchmark": bench["annualized_arithmetic_return"],
+            },
+            "04_cagr_compounded": {
+                "strategy": self.cagr(),
+                "benchmark": bench["cagr"],
+            },
+            "05_annualized_volatility": {
+                "strategy": self.annualized_volatility(),
+                "benchmark": bench["annualized_volatility"],
+            },
+            "06_tracking_error": {
+                "strategy": self.tracking_error(),
+                "benchmark": 0.0,
+            },
+            "07_information_ratio": {
+                "strategy": self.information_ratio(),
+                "benchmark": 0.0,
+            },
+            "08_sharpe_ratio_vs_tb3ms": {
+                "strategy": self.sharpe_ratio(),
+                "benchmark": None,
+            },
             "09_beta_vs_sp500": {
                 "beta_monthly": reg["beta_monthly"],
                 "beta_monthly_se": reg["beta_monthly_se"],
@@ -292,7 +363,10 @@ class RequiredTable:
                 "alpha_monthly_se_ann": reg["alpha_monthly_se_ann"],
                 "alpha_monthly_t_hac": reg["alpha_monthly_t_hac"],
             },
-            "11_max_drawdown": {"strategy": self.max_drawdown(), "benchmark": bench["max_drawdown"]},
+            "11_max_drawdown": {
+                "strategy": self.max_drawdown(),
+                "benchmark": bench["max_drawdown"],
+            },
             "12_max_drawdown_duration_months": {
                 "strategy": self.max_drawdown_duration_periods(),
                 "benchmark": bench["max_drawdown_duration_periods"],
@@ -316,8 +390,14 @@ class RequiredTable:
             "21_net_exposure_pct_nav": net_stats,
             "22_annual_total_cost_pct_nav": {
                 "total_cost_pct_nav": self.annual_cost_pct_nav(),
-                "trading_cost_pct_nav": sum(self.cost_returns) / self.elapsed_years if self.elapsed_years > 0 else 0.0,
-                "borrow_cost_pct_nav": sum(self.borrow_returns) / self.elapsed_years if self.elapsed_years > 0 else 0.0,
+                "trading_cost_pct_nav": sum(self.cost_returns)
+                / self.elapsed_years
+                if self.elapsed_years > 0
+                else 0.0,
+                "borrow_cost_pct_nav": sum(self.borrow_returns)
+                / self.elapsed_years
+                if self.elapsed_years > 0
+                else 0.0,
             },
         }
         return {

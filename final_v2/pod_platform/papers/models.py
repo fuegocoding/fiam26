@@ -83,10 +83,23 @@ class ReplicationLabel(str, Enum):
 
 
 CLAIM_KINDS = (
-    "economic_claim", "mechanism", "universe", "period", "target", "horizon",
-    "variable_definition", "timing", "statistical_design", "baseline",
-    "fixed_parameter", "estimated_parameter", "replication", "contrary_evidence",
-    "correction", "limitation", "other",
+    "economic_claim",
+    "mechanism",
+    "universe",
+    "period",
+    "target",
+    "horizon",
+    "variable_definition",
+    "timing",
+    "statistical_design",
+    "baseline",
+    "fixed_parameter",
+    "estimated_parameter",
+    "replication",
+    "contrary_evidence",
+    "correction",
+    "limitation",
+    "other",
 )
 
 # ---------------------------------------------------------------- identifiers
@@ -103,7 +116,11 @@ def normalize_doi(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
     v = value.strip()
-    v = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:)", "", v, flags=re.I).strip().lower()
+    v = (
+        re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:)", "", v, flags=re.I)
+        .strip()
+        .lower()
+    )
     if not DOI_RE.match(v):
         raise PaperValidationError("invalid DOI")
     return v
@@ -112,7 +129,9 @@ def normalize_doi(value: Optional[str]) -> Optional[str]:
 def split_arxiv(value: str) -> tuple[str, Optional[int]]:
     """Return (base id, version or None); accepts ``arXiv:`` and abs URLs."""
     v = value.strip()
-    v = re.sub(r"^(?:arxiv:|https?://(?:export\.)?arxiv\.org/abs/)", "", v, flags=re.I)
+    v = re.sub(
+        r"^(?:arxiv:|https?://(?:export\.)?arxiv\.org/abs/)", "", v, flags=re.I
+    )
     m = ARXIV_VERSIONED_RE.match(v)
     if m:
         return m.group(1), int(m.group(2))
@@ -149,7 +168,11 @@ def canonical_paper_id(value: str) -> tuple[str, Optional[int]]:
 
 # ----------------------------------------------------------------------- time
 def ensure_aware(dt: Any, name: str = "datetime") -> datetime:
-    if not isinstance(dt, datetime) or dt.tzinfo is None or dt.utcoffset() is None:
+    if (
+        not isinstance(dt, datetime)
+        or dt.tzinfo is None
+        or dt.utcoffset() is None
+    ):
         raise TemporalError(f"{name} must be a timezone-aware datetime")
     return dt.astimezone(timezone.utc)
 
@@ -179,7 +202,9 @@ def parse_instant(value: Any, *, name: str = "date") -> datetime:
 def parse_as_of(value: Any) -> Optional[datetime]:
     if value is None:
         return None
-    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+    if isinstance(value, str) and re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}", value.strip()
+    ):
         try:
             d = date.fromisoformat(value.strip())
         except ValueError as exc:
@@ -194,7 +219,13 @@ def sha256_text(text: str) -> str:
 
 
 def canonical_json(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
 
 
 # ---------------------------------------------------------------------- cards
@@ -244,7 +275,9 @@ class PaperCard(_Model):
     arxiv_id: Optional[str] = None
     version: Optional[int] = None  # arXiv version number of this card, if known
     latest_version: Optional[int] = None
-    version_key: str  # "v3", "pub" (published version of record) or "unversioned"
+    version_key: (
+        str  # "v3", "pub" (published version of record) or "unversioned"
+    )
     openalex_id: Optional[str] = None
     source: str  # provider name: arxiv | openalex | local
     first_public_date: Optional[datetime] = None
@@ -257,7 +290,9 @@ class PaperCard(_Model):
     original_hash: Optional[str] = None  # sha256 of raw bytes/text as received
     content_chars: int = 0
     content_truncated: bool = False
-    text_status: str = "none"  # none | abstract_only | full_text | incomplete:<reason>
+    text_status: str = (
+        "none"  # none | abstract_only | full_text | incomplete:<reason>
+    )
     claims: list[Claim] = Field(default_factory=list)
     retrieved_at: datetime
     card_hash: Optional[str] = None

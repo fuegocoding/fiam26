@@ -22,9 +22,12 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 from pydantic import Field, field_validator
 
-from ..agents.durable_cache import CacheCorruptionError, CachedStructuredExtractor, DurableExtractionCache, StructuredRun
+from ..agents.durable_cache import (
+    CachedStructuredExtractor,
+    DurableExtractionCache,
+    StructuredRun,
+)
 from ..agents.provider import (
-    BudgetExhausted,
     CallBudget,
     GenerationParams,
     LLMProvider,
@@ -39,11 +42,9 @@ from ..contracts.errors import PodPlatformError
 from ..research.jobs import JobRecord, LeaseError, QueueError, ResearchQueue
 from ..research.memory import MemoryEntry, PodMemory
 from ..research.partitions import DESIGN
-from .charters import PodSpec, pod_spec
+from .charters import PodSpec
 from .schema import (
     MAX_VARIANTS,
-    CitationError,
-    EvidenceError,
     EvidenceItem,
     ExperimentVariant,
     ResearchProposal,
@@ -57,7 +58,11 @@ MAX_PRIOR_WORK = 5
 
 
 def build_system_prompt(pod: PodSpec) -> str:
-    schema = json.dumps(ResearchProposal.model_json_schema(), sort_keys=True, separators=(",", ":"))
+    schema = json.dumps(
+        ResearchProposal.model_json_schema(),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return (
         f"You are the research pod '{pod.pod_id}' (charter: {pod.charter.value}). Mission: {pod.mission}\n"
         f"Mechanism families: {', '.join(pod.mechanism_families)}.\n"
@@ -71,7 +76,8 @@ def build_system_prompt(pod: PodSpec) -> str:
         "4. State the mechanism, a falsifiable target, a baseline, feature definitions with timing "
         "(when each input becomes known relative to the signal date), competing explanation and limitations. "
         "Express confidence only via evidence_quality.\n"
-        "5. Respond with exactly one JSON object and no prose, matching this JSON schema: " + schema
+        "5. Respond with exactly one JSON object and no prose, matching this JSON schema: "
+        + schema
     )
 
 
@@ -135,7 +141,9 @@ class ExecutorRegistry:
     def __init__(self) -> None:
         self._fns: dict[str, Callable[[ExperimentRequest], Any]] = {}
 
-    def register(self, executor_id: str, fn: Callable[[ExperimentRequest], Any]) -> None:
+    def register(
+        self, executor_id: str, fn: Callable[[ExperimentRequest], Any]
+    ) -> None:
         if not _IDENT.match(executor_id):
             raise ValueError("invalid executor id")
         if executor_id in self._fns:
@@ -148,18 +156,31 @@ class ExecutorRegistry:
     def run(self, request: ExperimentRequest) -> ExperimentResult:
         fn = self._fns.get(request.executor_id)
         if fn is None:
-            raise ExecutorError(f"no registered executor {request.executor_id!r}")
+            raise ExecutorError(
+                f"no registered executor {request.executor_id!r}"
+            )
         try:
             raw = fn(request)
-            result = raw if isinstance(raw, ExperimentResult) else ExperimentResult.model_validate(raw)
+            result = (
+                raw
+                if isinstance(raw, ExperimentResult)
+                else ExperimentResult.model_validate(raw)
+            )
         except ExecutorError:
             raise
         except Exception as exc:
-            raise ExecutorError(f"executor {request.executor_id} failed: {type(exc).__name__}: {str(exc)[:300]}") from None
-        if result.executor_id != request.executor_id or result.variant_name != request.variant.name:
+            raise ExecutorError(
+                f"executor {request.executor_id} failed: {type(exc).__name__}: {str(exc)[:300]}"
+            ) from None
+        if (
+            result.executor_id != request.executor_id
+            or result.variant_name != request.variant.name
+        ):
             raise ExecutorError("executor result does not match the request")
         if result.data_partition != DESIGN:
-            raise ExecutorError(f"research executors may only report on the design partition, not {result.data_partition!r}")
+            raise ExecutorError(
+                f"research executors may only report on the design partition, not {result.data_partition!r}"
+            )
         return result
 
 
@@ -212,9 +233,16 @@ class PodResearchRunner:
         mode = ResearchMode(mode)
         allowed = tuple(sorted(set(executors)))
         if not allowed or any(not _IDENT.match(e) for e in allowed):
-            raise ValueError("at least one valid allowed executor id is required")
+            raise ValueError(
+                "at least one valid allowed executor id is required"
+            )
         research_asof = require_aware(research_asof, "research_asof")
-        items = filter_eligible(list(evidence), mode=mode, research_asof=research_asof, now=self.clock())
+        items = filter_eligible(
+            list(evidence),
+            mode=mode,
+            research_asof=research_asof,
+            now=self.clock(),
+        )
         payload = {
             "task": {
                 "pod_id": self.pod.pod_id,
@@ -272,7 +300,11 @@ class PodResearchRunner:
             validator=validator,
         )
         proposal: ResearchProposal = run.value  # type: ignore[assignment]
-        flags = {item.evidence_id: list(item.injection_flags) for item in items if item.injection_flags}
+        flags = {
+            item.evidence_id: list(item.injection_flags)
+            for item in items
+            if item.injection_flags
+        }
         content = {
             "status": "draft",
             "evaluated": False,
@@ -287,7 +319,9 @@ class PodResearchRunner:
                     "evidence_id": i.evidence_id,
                     "kind": i.kind,
                     "content_hash": i.content_hash,
-                    "available_at": i.available_at.isoformat() if i.available_at else None,
+                    "available_at": i.available_at.isoformat()
+                    if i.available_at
+                    else None,
                     "availability_verified": i.availability_verified,
                 }
                 for i in items
@@ -302,7 +336,11 @@ class PodResearchRunner:
                 "call": run.call.model_dump(mode="json") if run.call else None,
             },
         }
-        entry = self.memory.append("draft_proposal", content, idempotency_key=idempotency_key or f"draft:{run.cache_key}")
+        entry = self.memory.append(
+            "draft_proposal",
+            content,
+            idempotency_key=idempotency_key or f"draft:{run.cache_key}",
+        )
         return ProposalResult(
             status="draft",
             evaluated=False,
@@ -324,7 +362,9 @@ class PodResearchRunner:
         """Run registered executors on a stored draft; resumable per variant."""
         draft = self.memory.get(draft_entry_id)
         if draft is None or draft.kind != "draft_proposal":
-            raise ExecutorError(f"no draft proposal {draft_entry_id} in namespace {self.pod.namespace}")
+            raise ExecutorError(
+                f"no draft proposal {draft_entry_id} in namespace {self.pod.namespace}"
+            )
         proposal = ResearchProposal.model_validate(draft.content["proposal"])
         plan = proposal.experiment_plan
         selected = list(plan.variants)
@@ -332,23 +372,38 @@ class PodResearchRunner:
             wanted = set(variant_names)
             selected = [v for v in selected if v.name in wanted]
             if {v.name for v in selected} != wanted:
-                raise ExecutorError("requested variants are not part of the stored plan")
+                raise ExecutorError(
+                    "requested variants are not part of the stored plan"
+                )
         if len(selected) > MAX_VARIANTS:
             raise ExecutorError("variant budget exceeded")
         if plan.executor_id not in executors.ids():
-            raise ExecutorError(f"no registered executor {plan.executor_id!r}; nothing was evaluated")
+            raise ExecutorError(
+                f"no registered executor {plan.executor_id!r}; nothing was evaluated"
+            )
         out: list[MemoryEntry] = []
         for variant in selected:
             key = f"eval:{draft_entry_id}:{variant.name}"
             existing = self.memory.get_by_key(key)
             if existing is not None:
                 # a colliding key must never turn a draft/note into an "evaluated" result
-                if existing.kind != "evaluated_result" or not existing.evaluated:
-                    raise ExecutorError(f"memory key {key!r} is held by a {existing.kind} entry, not an executor result")
+                if (
+                    existing.kind != "evaluated_result"
+                    or not existing.evaluated
+                ):
+                    raise ExecutorError(
+                        f"memory key {key!r} is held by a {existing.kind} entry, not an executor result"
+                    )
                 out.append(existing)
                 continue
             result = executors.run(
-                ExperimentRequest(self.pod.namespace, draft_entry_id, plan.executor_id, variant, proposal)
+                ExperimentRequest(
+                    self.pod.namespace,
+                    draft_entry_id,
+                    plan.executor_id,
+                    variant,
+                    proposal,
+                )
             )
             out.append(
                 self.memory.append(
@@ -365,7 +420,9 @@ class PodResearchRunner:
         return out
 
 
-def _clean_prior_work(prior: Optional[Sequence[Mapping[str, Any]]]) -> list[dict[str, Any]]:
+def _clean_prior_work(
+    prior: Optional[Sequence[Mapping[str, Any]]],
+) -> list[dict[str, Any]]:
     cleaned = []
     for item in list(prior or [])[:MAX_PRIOR_WORK]:
         cleaned.append(
@@ -430,7 +487,9 @@ class PodWorker:
                 kinds=("propose", "experiment"),
             )
             if job is not None:
-                self._cursor = index + 1  # next call starts after the pod just served
+                self._cursor = (
+                    index + 1
+                )  # next call starts after the pod just served
                 return job
         return None
 
@@ -441,15 +500,21 @@ class PodWorker:
         runner = self.runners[job.namespace]
         try:
             result = self._dispatch(runner, job)
-        except Exception as exc:  # every failure is persisted, none becomes success
+        except (
+            Exception
+        ) as exc:  # every failure is persisted, none becomes success
             return self._record_failure(job, runner, exc)
         try:
             self.queue.complete(job.job_id, job.lease_token or "", result)
         except LeaseError as exc:
-            return WorkerOutcome(job.job_id, "lease_lost", error={"message": str(exc)})
+            return WorkerOutcome(
+                job.job_id, "lease_lost", error={"message": str(exc)}
+            )
         return WorkerOutcome(job.job_id, "succeeded", result=result)
 
-    def _dispatch(self, runner: PodResearchRunner, job: JobRecord) -> dict[str, Any]:
+    def _dispatch(
+        self, runner: PodResearchRunner, job: JobRecord
+    ) -> dict[str, Any]:
         payload = job.payload
         if job.kind == "propose":
             evidence: list[EvidenceItem] = []
@@ -458,7 +523,9 @@ class PodWorker:
                 ("dataset_cards", "dataset_card"),
                 ("source_cards", "source_card"),
             ):
-                evidence.extend(normalise_evidence(payload.get(field_name) or [], kind))  # type: ignore[arg-type]
+                evidence.extend(
+                    normalise_evidence(payload.get(field_name) or [], kind)
+                )  # type: ignore[arg-type]
             asof = dt.datetime.fromisoformat(str(payload["research_asof"]))
             result = runner.propose(
                 payload["question"],
@@ -467,7 +534,9 @@ class PodWorker:
                 mode=ResearchMode(payload["mode"]),
                 executors=payload["executors"],
                 checkpoint_id=payload.get("checkpoint_id"),
-                policy=TemporalPolicy(payload.get("policy", TemporalPolicy.RELEASE_GATED.value)),
+                policy=TemporalPolicy(
+                    payload.get("policy", TemporalPolicy.RELEASE_GATED.value)
+                ),
                 prior_work=payload.get("prior_work"),
                 idempotency_key=f"draft-job:{job.payload_hash}",
             )
@@ -483,12 +552,16 @@ class PodWorker:
                 "provider_is_mock": result.run.provider_is_mock,
                 "temporal_label": result.temporal_label,
                 "cache_key": result.run.cache_key,
-                "response_hash": result.run.call.response_hash if result.run.call else None,
+                "response_hash": result.run.call.response_hash
+                if result.run.call
+                else None,
                 "injection_flags": result.injection_flags,
             }
         if job.kind == "experiment":
             entries = runner.run_experiments(
-                payload["draft_entry_id"], self.executors, variant_names=payload.get("variants") or None
+                payload["draft_entry_id"],
+                self.executors,
+                variant_names=payload.get("variants") or None,
             )
             return {
                 "status": "evaluated_by_registered_executor",
@@ -498,9 +571,17 @@ class PodWorker:
             }
         raise QueueError(f"unsupported job kind {job.kind}")
 
-    def _record_failure(self, job: JobRecord, runner: Optional[PodResearchRunner], exc: Exception) -> WorkerOutcome:
+    def _record_failure(
+        self,
+        job: JobRecord,
+        runner: Optional[PodResearchRunner],
+        exc: Exception,
+    ) -> WorkerOutcome:
         retryable = isinstance(exc, ProviderError) and exc.retryable
-        error: dict[str, Any] = {"type": type(exc).__name__, "message": str(exc)[:500]}
+        error: dict[str, Any] = {
+            "type": type(exc).__name__,
+            "message": str(exc)[:500],
+        }
         if isinstance(exc, PodPlatformError) and exc.response.error is not None:
             error["code"] = exc.response.error.code.value
         if isinstance(exc, MalformedOutputError) and exc.record is not None:
@@ -511,10 +592,17 @@ class PodWorker:
             try:
                 runner.memory.append(
                     "failure_note",
-                    {"job_id": job.job_id, "kind": job.kind, "attempt": job.attempts, "error": error},
+                    {
+                        "job_id": job.job_id,
+                        "kind": job.kind,
+                        "attempt": job.attempts,
+                        "error": error,
+                    },
                     idempotency_key=f"failure:{job.job_id}:{job.attempts}",
                 )
-            except Exception:  # memory trouble must not mask the original failure
+            except (
+                Exception
+            ):  # memory trouble must not mask the original failure
                 error["memory_note"] = "failed to persist"
         try:
             updated = self.queue.fail(
@@ -525,6 +613,10 @@ class PodWorker:
                 retry_delay_s=self.retry_delay_s,
             )
         except LeaseError as lease_exc:
-            return WorkerOutcome(job.job_id, "lease_lost", error={"message": str(lease_exc), **error})
+            return WorkerOutcome(
+                job.job_id,
+                "lease_lost",
+                error={"message": str(lease_exc), **error},
+            )
         state = "will_retry" if updated.state == "queued" else "failed"
         return WorkerOutcome(job.job_id, state, error=error)

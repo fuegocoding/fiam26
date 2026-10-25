@@ -41,8 +41,12 @@ def demo_responder(request: LLMRequest) -> str:
             "description": "Run the registered executor on the design partition only.",
         },
         "competing_explanation": "The apparent effect may be a known factor under another name.",
-        "limitations": ["Demo output; no model reasoning and no evaluation have occurred."],
-        "missing_information": ["Everything: this is not a real research result."],
+        "limitations": [
+            "Demo output; no model reasoning and no evaluation have occurred."
+        ],
+        "missing_information": [
+            "Everything: this is not a real research result."
+        ],
         "evidence_quality": "weak",
     }
     return json.dumps(proposal)

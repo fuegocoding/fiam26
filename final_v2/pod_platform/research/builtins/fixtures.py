@@ -8,22 +8,35 @@ Rows before and after the design window are included on purpose, to exercise win
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import json
 import math
 import random
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .timeutil import month_end_date, month_index
-import datetime as dt
 
 FIXTURE_DATASET_ID = "fixture_panel"
 FIXTURE_SOURCE_ID = "fixture_synthetic_panel"
 FIXTURE_SNAPSHOT_ID = "fixture_snapshot_v1"
 SECTOR_CODES = ("10101010", "20101010", "30101010", "45101010")
 FIELDS = (
-    "permno", "eom", "gics", "me", "niq_su", "sale_gr1", "ni_me", "be_me", "eqnetis_at", "netis_at",
-    "ret_1_0", "ret_12_1", "dolvol_126d", "ocf_at", "ret_exc_lead1m",
+    "permno",
+    "eom",
+    "gics",
+    "me",
+    "niq_su",
+    "sale_gr1",
+    "ni_me",
+    "be_me",
+    "eqnetis_at",
+    "netis_at",
+    "ret_1_0",
+    "ret_12_1",
+    "dolvol_126d",
+    "ocf_at",
+    "ret_exc_lead1m",
 )
 
 
@@ -43,10 +56,23 @@ def generate_rows(
 ) -> list[dict[str, Any]]:
     """Deterministic synthetic monthly panel. ``ret_signal=0`` gives a pure-noise null."""
     rng = random.Random(seed)
-    start, stop = month_index(dt.date(first[0], first[1], 1)), month_index(dt.date(last[0], last[1], 1))
+    start, stop = (
+        month_index(dt.date(first[0], first[1], 1)),
+        month_index(dt.date(last[0], last[1], 1)),
+    )
     names = ("q", "v", "iss", "mom", "rev", "liq", "sz")
-    phis = {"q": 0.9, "v": 0.95, "iss": 0.9, "mom": 0.85, "rev": 0.1, "liq": 0.95, "sz": 0.98}
-    latents = [{n: rng.gauss(0.0, 1.0) for n in names} for _ in range(n_securities)]
+    phis = {
+        "q": 0.9,
+        "v": 0.95,
+        "iss": 0.9,
+        "mom": 0.85,
+        "rev": 0.1,
+        "liq": 0.95,
+        "sz": 0.98,
+    }
+    latents = [
+        {n: rng.gauss(0.0, 1.0) for n in names} for _ in range(n_securities)
+    ]
     sector_shock: dict[tuple[int, int], float] = {}
     rows: list[dict[str, Any]] = []
     for idx in range(start, stop + 1):
@@ -56,33 +82,47 @@ def generate_rows(
             for n in names:
                 z[n] = _ar1(rng, phis[n], z[n])
             sector = i % len(SECTOR_CODES)
-            shock = sector_shock.setdefault((sector, idx), 0.01 * rng.gauss(0.0, 1.0))
+            shock = sector_shock.setdefault(
+                (sector, idx), 0.01 * rng.gauss(0.0, 1.0)
+            )
             ret = (
-                ret_signal * (1.0 * z["mom"] - 0.5 * z["rev"] + 0.4 * z["q"] - 0.4 * z["iss"] + 0.3 * z["v"])
-                + shock + ret_noise * rng.gauss(0.0, 1.0)
+                ret_signal
+                * (
+                    1.0 * z["mom"]
+                    - 0.5 * z["rev"]
+                    + 0.4 * z["q"]
+                    - 0.4 * z["iss"]
+                    + 0.3 * z["v"]
+                )
+                + shock
+                + ret_noise * rng.gauss(0.0, 1.0)
             )
             iss = 0.02 + 0.03 * z["iss"] + 0.005 * rng.gauss(0.0, 1.0)
 
             def maybe(value: float) -> Any:
                 return "" if rng.random() < missing_rate else f"{value:.10g}"
 
-            rows.append({
-                "permno": 10000 + i,
-                "eom": day.isoformat(),
-                "gics": SECTOR_CODES[sector],
-                "me": f"{math.exp(6.2 + 0.9 * z['sz']):.10g}",
-                "niq_su": f"{0.8 * z['q'] + 0.6 * rng.gauss(0.0, 1.0):.10g}",
-                "sale_gr1": maybe(0.5 * z["q"] + rng.gauss(0.0, 1.0)),
-                "ni_me": f"{0.3 * z['q'] + 0.5 * z['v'] + 0.5 * rng.gauss(0.0, 1.0):.10g}",
-                "be_me": f"{math.exp(0.4 * z['v']):.10g}",
-                "eqnetis_at": f"{iss:.10g}",
-                "netis_at": f"{iss + 0.01 * rng.gauss(0.0, 1.0):.10g}",
-                "ret_1_0": f"{0.07 * z['rev']:.10g}",
-                "ret_12_1": f"{0.02 + 0.25 * z['mom']:.10g}",
-                "dolvol_126d": f"{math.exp(14.0 + z['liq']):.10g}",
-                "ocf_at": maybe(0.10 + 0.05 * z["q"] + 0.02 * rng.gauss(0.0, 1.0)),
-                "ret_exc_lead1m": f"{ret:.10g}",
-            })
+            rows.append(
+                {
+                    "permno": 10000 + i,
+                    "eom": day.isoformat(),
+                    "gics": SECTOR_CODES[sector],
+                    "me": f"{math.exp(6.2 + 0.9 * z['sz']):.10g}",
+                    "niq_su": f"{0.8 * z['q'] + 0.6 * rng.gauss(0.0, 1.0):.10g}",
+                    "sale_gr1": maybe(0.5 * z["q"] + rng.gauss(0.0, 1.0)),
+                    "ni_me": f"{0.3 * z['q'] + 0.5 * z['v'] + 0.5 * rng.gauss(0.0, 1.0):.10g}",
+                    "be_me": f"{math.exp(0.4 * z['v']):.10g}",
+                    "eqnetis_at": f"{iss:.10g}",
+                    "netis_at": f"{iss + 0.01 * rng.gauss(0.0, 1.0):.10g}",
+                    "ret_1_0": f"{0.07 * z['rev']:.10g}",
+                    "ret_12_1": f"{0.02 + 0.25 * z['mom']:.10g}",
+                    "dolvol_126d": f"{math.exp(14.0 + z['liq']):.10g}",
+                    "ocf_at": maybe(
+                        0.10 + 0.05 * z["q"] + 0.02 * rng.gauss(0.0, 1.0)
+                    ),
+                    "ret_exc_lead1m": f"{ret:.10g}",
+                }
+            )
     return rows
 
 
@@ -101,16 +141,24 @@ def fixture_source_card() -> dict[str, Any]:
         "formation_eligible": True,
         "entity_grain": ["permno", "eom"],
         "screen": {
-            "history": established("fixture: generated by pod_platform.research.builtins.fixtures"),
-            "metric_lag": established("fixture: characteristics generated at month end by construction"),
-            "vintage": established("fixture: deterministic generator, fixed seed"),
+            "history": established(
+                "fixture: generated by pod_platform.research.builtins.fixtures"
+            ),
+            "metric_lag": established(
+                "fixture: characteristics generated at month end by construction"
+            ),
+            "vintage": established(
+                "fixture: deterministic generator, fixed seed"
+            ),
             "coverage": established("fixture: fixed synthetic universe"),
         },
         "unresolved_questions": [],
     }
 
 
-def fixture_manifest(path: str = "panel.csv", dataset_id: str = FIXTURE_DATASET_ID) -> dict[str, Any]:
+def fixture_manifest(
+    path: str = "panel.csv", dataset_id: str = FIXTURE_DATASET_ID
+) -> dict[str, Any]:
     feature = {"role": "feature", "dtype": "float"}
     return {
         "schema_version": "dataset_manifest.v1",
@@ -134,11 +182,39 @@ def fixture_manifest(path: str = "panel.csv", dataset_id: str = FIXTURE_DATASET_
                 },
                 "label": {"column": "ret_exc_lead1m", "resolve_months": 1},
                 "columns": {
-                    "gics": {"role": "context", "dtype": "str", "allow_missing": False},
-                    "me": {"role": "context", "dtype": "float", "allow_missing": False, "min_value": 0.0, "unit": "millions_usd"},
-                    **{name: dict(feature) for name in (
-                        "niq_su", "sale_gr1", "ni_me", "be_me", "eqnetis_at", "netis_at", "ret_1_0", "ret_12_1", "dolvol_126d", "ocf_at")},
-                    "ret_exc_lead1m": {"role": "label", "dtype": "float", "allow_missing": True, "unit": "decimal_return"},
+                    "gics": {
+                        "role": "context",
+                        "dtype": "str",
+                        "allow_missing": False,
+                    },
+                    "me": {
+                        "role": "context",
+                        "dtype": "float",
+                        "allow_missing": False,
+                        "min_value": 0.0,
+                        "unit": "millions_usd",
+                    },
+                    **{
+                        name: dict(feature)
+                        for name in (
+                            "niq_su",
+                            "sale_gr1",
+                            "ni_me",
+                            "be_me",
+                            "eqnetis_at",
+                            "netis_at",
+                            "ret_1_0",
+                            "ret_12_1",
+                            "dolvol_126d",
+                            "ocf_at",
+                        )
+                    },
+                    "ret_exc_lead1m": {
+                        "role": "label",
+                        "dtype": "float",
+                        "allow_missing": True,
+                        "unit": "decimal_return",
+                    },
                 },
                 "sector_column": "gics",
                 "market_cap_column": "me",
@@ -178,7 +254,20 @@ def write_fixture_dataset(
     """Write ``panel.csv`` and an operator-style manifest into ``directory``; returns the manifest path."""
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True)
-    write_csv(generate_rows(seed=seed, n_securities=n_securities, ret_signal=ret_signal, ret_noise=ret_noise), root / "panel.csv")
+    write_csv(
+        generate_rows(
+            seed=seed,
+            n_securities=n_securities,
+            ret_signal=ret_signal,
+            ret_noise=ret_noise,
+        ),
+        root / "panel.csv",
+    )
     manifest_path = root / manifest_name
-    manifest_path.write_text(json.dumps(fixture_manifest(dataset_id=dataset_id), indent=2, sort_keys=True), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(
+            fixture_manifest(dataset_id=dataset_id), indent=2, sort_keys=True
+        ),
+        encoding="utf-8",
+    )
     return manifest_path

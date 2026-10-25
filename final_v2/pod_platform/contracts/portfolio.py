@@ -56,8 +56,12 @@ class TargetBook(DurableModel):
     cost_model_version: str = Field(min_length=1)
     positions: list[TargetPosition] = Field(default_factory=list)
     diagnostics: dict[str, str] = Field(default_factory=dict)
-    official_constraint_results: list[ConstraintResult] = Field(default_factory=list)
-    internal_constraint_results: list[ConstraintResult] = Field(default_factory=list)
+    official_constraint_results: list[ConstraintResult] = Field(
+        default_factory=list
+    )
+    internal_constraint_results: list[ConstraintResult] = Field(
+        default_factory=list
+    )
     solver_status: SolverStatus
     relaxations: list[Relaxation] = Field(default_factory=list)
     attribution_method: str = Field(min_length=1)
@@ -81,7 +85,9 @@ class TargetBook(DurableModel):
         if len(set(names)) != len(names):
             raise ValueError("target positions must be unique per security")
         if any(r.status == "fail" for r in self.official_constraint_results):
-            raise ValueError("official constraints may never fail on a published target book")
+            raise ValueError(
+                "official constraints may never fail on a published target book"
+            )
         return self
 
 
@@ -129,8 +135,13 @@ class RiskReview(DurableModel):
         require_aware(self.expires_at, "expires_at")
         if self.expires_at <= self.effective_at:
             raise ValueError("expires_at must lie after effective_at")
-        if self.decision in (RiskDecision.PASS_WITH_REMEDY, RiskDecision.BLOCK) and not self.remedy_constraints:
-            raise ValueError(f"{self.decision.value} requires remedy constraints")
+        if (
+            self.decision in (RiskDecision.PASS_WITH_REMEDY, RiskDecision.BLOCK)
+            and not self.remedy_constraints
+        ):
+            raise ValueError(
+                f"{self.decision.value} requires remedy constraints"
+            )
         if self.decision == RiskDecision.PASS and self.remedy_constraints:
             raise ValueError("a clean PASS cannot attach remedy constraints")
         return self

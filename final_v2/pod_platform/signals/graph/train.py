@@ -77,12 +77,16 @@ def train(
                         )
                         baseline = _predict(tokens, net, variant)
                     continue
-                net, state, epoch, loss = _fit(tokens, variant, year, seed, baseline)
+                net, state, epoch, loss = _fit(
+                    tokens, variant, year, seed, baseline
+                )
                 test_year = None if variant == "own" else year
                 scores = _predict(tokens, net, variant, test_year, baseline)
                 if variant == "own":
                     baseline = scores.detach()
-                frame = tokens.frame.loc[test, ["permno", "eom", "target_month"]].copy()
+                frame = tokens.frame.loc[
+                    test, ["permno", "eom", "target_month"]
+                ].copy()
                 # The EPS task is the forecast used downstream; the return and
                 # risk tasks only shape the shared representation.
                 eps = dataset.TASKS.index("eps")
@@ -263,7 +267,9 @@ def _fit(
             )
         if value < best - 1e-7:
             best, best_epoch, stale = value, epoch, 0
-            state = {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
+            state = {
+                k: v.detach().cpu().clone() for k, v in net.state_dict().items()
+            }
         else:
             stale += 1
         if stale >= PATIENCE:

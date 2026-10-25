@@ -11,7 +11,13 @@ import datetime as dt
 from decimal import Decimal
 from typing import Optional
 
-from .base import Belief, Charter, RankSpreadBridge, SecurityFeatures, StrategyCandidate
+from .base import (
+    Belief,
+    Charter,
+    RankSpreadBridge,
+    SecurityFeatures,
+    StrategyCandidate,
+)
 
 D = Decimal
 
@@ -62,7 +68,10 @@ class EarningsInnovationCandidate(StrategyCandidate):
         surprise = features.get("earnings_surprise")
         revision = features.get("consensus_revision_3m")
         return _belief(
-            self, features, 0.5 * surprise + 0.5 * revision, expected_resolution_at
+            self,
+            features,
+            0.5 * surprise + 0.5 * revision,
+            expected_resolution_at,
         )
 
     def scaled_score(self, belief: Belief) -> Decimal:
@@ -109,7 +118,9 @@ class ValuationGapCandidate(StrategyCandidate):
     ) -> Optional[Belief]:
         gap = features.get("valuation_gap")
         quality = features.get("earnings_quality_score")
-        return _belief(self, features, gap + 0.25 * quality, expected_resolution_at)
+        return _belief(
+            self, features, gap + 0.25 * quality, expected_resolution_at
+        )
 
     def scaled_score(self, belief: Belief) -> Decimal:
         return _scaled(float(belief.prediction))
@@ -131,7 +142,12 @@ class LiquidityPressureCandidate(StrategyCandidate):
     ) -> Optional[Belief]:
         reversal = features.get("reversal_signal")
         volume_shock = features.get("volume_shock")
-        return _belief(self, features, reversal + 0.5 * volume_shock, expected_resolution_at)
+        return _belief(
+            self,
+            features,
+            reversal + 0.5 * volume_shock,
+            expected_resolution_at,
+        )
 
     def scaled_score(self, belief: Belief) -> Decimal:
         return _scaled(float(belief.prediction))

@@ -54,15 +54,21 @@ def _ts(value: dt.datetime) -> str:
 def _parse(value: Optional[str]) -> Optional[dt.datetime]:
     if value is None:
         return None
-    return dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=dt.timezone.utc)
+    return dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+        tzinfo=dt.timezone.utc
+    )
 
 
 def _json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
 
 
 @contextmanager
-def open_sqlite(path: "str | Path", *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
+def open_sqlite(
+    path: "str | Path", *, immediate: bool = False
+) -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(str(path), timeout=30, isolation_level=None)
     try:
         conn.execute("PRAGMA journal_mode=WAL")
@@ -200,7 +206,13 @@ class ResearchQueue:
         return require_aware(self._clock(), "clock")
 
     @staticmethod
-    def _event(conn: sqlite3.Connection, job_id: str, event: str, at: dt.datetime, detail: Any = None) -> None:
+    def _event(
+        conn: sqlite3.Connection,
+        job_id: str,
+        event: str,
+        at: dt.datetime,
+        detail: Any = None,
+    ) -> None:
         conn.execute(
             "INSERT INTO job_events (job_id, event, at, detail_json) VALUES (?,?,?,?)",
             (job_id, event, _ts(at), _json(detail or {})),
@@ -225,15 +237,21 @@ class ResearchQueue:
         if not 1 <= max_attempts <= 10:
             raise QueueError("max_attempts must be in [1, 10]")
         variants = payload.get("variants")
-        if variants is not None and (not isinstance(variants, list) or len(variants) > self.max_variants):
-            raise QueueError(f"experiment variants are bounded at {self.max_variants}")
+        if variants is not None and (
+            not isinstance(variants, list) or len(variants) > self.max_variants
+        ):
+            raise QueueError(
+                f"experiment variants are bounded at {self.max_variants}"
+            )
         try:
             blob = _json(payload)
         except (TypeError, ValueError) as exc:
             raise QueueError(f"payload is not finite JSON: {exc}") from None
         if len(blob.encode("utf-8")) > MAX_PAYLOAD_BYTES:
             raise QueueError("payload too large")
-        payload_hash = canonical_digest({"namespace": namespace, "kind": kind, "payload": payload})
+        payload_hash = canonical_digest(
+            {"namespace": namespace, "kind": kind, "payload": payload}
+        )
         key = idempotency_key or payload_hash
         if not 1 <= len(key) <= 200:
             raise QueueError("idempotency key must be 1-200 characters")
@@ -254,16 +272,34 @@ class ResearchQueue:
             conn.execute(
                 "INSERT INTO jobs (job_id, namespace, kind, payload_json, payload_hash, idempotency_key, state, "
                 "attempts, max_attempts, not_before, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (job_id, namespace, kind, blob, payload_hash, key, "queued", 0, max_attempts, _ts(nb), _ts(now), _ts(now)),
+                (
+                    job_id,
+                    namespace,
+                    kind,
+                    blob,
+                    payload_hash,
+                    key,
+                    "queued",
+                    0,
+                    max_attempts,
+                    _ts(nb),
+                    _ts(now),
+                    _ts(now),
+                ),
             )
             self._event(conn, job_id, "submitted", now, {"kind": kind})
-            row = conn.execute(f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
         return _row_to_job(row)
 
     # -- claiming ----------------------------------------------------------
 
     def _recover_expired(
-        self, conn: sqlite3.Connection, now: dt.datetime, namespace: Optional[str] = None
+        self,
+        conn: sqlite3.Connection,
+        now: dt.datetime,
+        namespace: Optional[str] = None,
     ) -> list[str]:
         recovered: list[str] = []
         sql = (
@@ -271,13 +307,19 @@ class ResearchQueue:
             "WHERE state = 'running' AND lease_expires_at < ?"
         )
         args: list[Any] = [_ts(now)]
-        if namespace is not None:  # a namespace-scoped caller never touches another pod's jobs
+        if (
+            namespace is not None
+        ):  # a namespace-scoped caller never touches another pod's jobs
             sql += " AND namespace = ?"
             args.append(namespace)
         rows = conn.execute(sql, args).fetchall()
         for job_id, attempts, max_attempts, owner in rows:
             if attempts >= max_attempts:
-                err = {"message": "lease expired and attempts exhausted", "retryable": False, "lease_owner": owner}
+                err = {
+                    "message": "lease expired and attempts exhausted",
+                    "retryable": False,
+                    "lease_owner": owner,
+                }
                 conn.execute(
                     "UPDATE jobs SET state='failed', lease_owner=NULL, lease_token=NULL, lease_expires_at=NULL, "
                     "error_json=?, updated_at=? WHERE job_id=?",
@@ -291,7 +333,11 @@ class ResearchQueue:
                     (_ts(now), job_id),
                 )
                 self._event(
-                    conn, job_id, "lease_expired_requeued", now, {"lease_owner": owner, "attempts": attempts}
+                    conn,
+                    job_id,
+                    "lease_expired_requeued",
+                    now,
+                    {"lease_owner": owner, "attempts": attempts},
                 )
             recovered.append(job_id)
         return recovered
@@ -309,11 +355,13 @@ class ResearchQueue:
         kinds: Optional[Sequence[str]] = None,
     ) -> Optional[JobRecord]:
         if not worker_id or lease_seconds <= 0 or lease_seconds > 86400:
-            raise QueueError("worker_id required and lease_seconds must be in (0, 86400]")
+            raise QueueError(
+                "worker_id required and lease_seconds must be in (0, 86400]"
+            )
         now = self._now()
         with open_sqlite(self.path, immediate=True) as conn:
             self._recover_expired(conn, now, namespace)
-            where =["state = 'queued'", "not_before <= ?"]
+            where = ["state = 'queued'", "not_before <= ?"]
             args: list[Any] = [_ts(now)]
             if namespace is not None:
                 where.append("namespace = ?")
@@ -322,7 +370,8 @@ class ResearchQueue:
                 where.append("kind IN (%s)" % ",".join("?" * len(kinds)))
                 args.extend(kinds)
             row = conn.execute(
-                f"SELECT job_id FROM jobs WHERE {' AND '.join(where)} ORDER BY created_at, rowid LIMIT 1", args
+                f"SELECT job_id FROM jobs WHERE {' AND '.join(where)} ORDER BY created_at, rowid LIMIT 1",
+                args,
             ).fetchone()
             if row is None:
                 return None
@@ -334,21 +383,35 @@ class ResearchQueue:
                 (worker_id, token, _ts(expires), _ts(now), row[0]),
             )
             self._event(conn, row[0], "claimed", now, {"worker": worker_id})
-            full = conn.execute(f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (row[0],)).fetchone()
+            full = conn.execute(
+                f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (row[0],)
+            ).fetchone()
         return _row_to_job(full)
 
-    def _require_lease(self, conn: sqlite3.Connection, job_id: str, token: str, now: dt.datetime) -> JobRecord:
-        row = conn.execute(f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+    def _require_lease(
+        self,
+        conn: sqlite3.Connection,
+        job_id: str,
+        token: str,
+        now: dt.datetime,
+    ) -> JobRecord:
+        row = conn.execute(
+            f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
         if row is None:
             raise LeaseError(f"unknown job {job_id}")
         job = _row_to_job(row)
         if job.state != "running" or not token or job.lease_token != token:
-            raise LeaseError(f"job {job_id} is not leased to this token (state={job.state})")
+            raise LeaseError(
+                f"job {job_id} is not leased to this token (state={job.state})"
+            )
         if job.lease_expires_at is None or job.lease_expires_at < now:
             raise LeaseError(f"lease on {job_id} has expired")
         return job
 
-    def heartbeat(self, job_id: str, lease_token: str, lease_seconds: float = 300.0) -> dt.datetime:
+    def heartbeat(
+        self, job_id: str, lease_token: str, lease_seconds: float = 300.0
+    ) -> dt.datetime:
         if lease_seconds <= 0 or lease_seconds > 86400:
             raise QueueError("lease_seconds must be in (0, 86400]")
         now = self._now()
@@ -356,14 +419,17 @@ class ResearchQueue:
             self._require_lease(conn, job_id, lease_token, now)
             expires = now + dt.timedelta(seconds=lease_seconds)
             conn.execute(
-                "UPDATE jobs SET lease_expires_at=?, updated_at=? WHERE job_id=?", (_ts(expires), _ts(now), job_id)
+                "UPDATE jobs SET lease_expires_at=?, updated_at=? WHERE job_id=?",
+                (_ts(expires), _ts(now), job_id),
             )
             self._event(conn, job_id, "heartbeat", now)
         return expires
 
     # -- completion --------------------------------------------------------
 
-    def complete(self, job_id: str, lease_token: str, result: dict[str, Any]) -> None:
+    def complete(
+        self, job_id: str, lease_token: str, result: dict[str, Any]
+    ) -> None:
         now = self._now()
         try:
             blob = _json(result)
@@ -412,18 +478,26 @@ class ResearchQueue:
                     (_json(err), _ts(now), job_id),
                 )
                 self._event(conn, job_id, "failed", now, err)
-            row = conn.execute(f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
         return _row_to_job(row)
 
     # -- reads -------------------------------------------------------------
 
     def get(self, job_id: str) -> Optional[JobRecord]:
         with open_sqlite(self.path) as conn:
-            row = conn.execute(f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+            row = conn.execute(
+                f"SELECT {_COLUMNS} FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
         return _row_to_job(row) if row else None
 
     def list(
-        self, *, namespace: Optional[str] = None, state: Optional[str] = None, limit: int = 100
+        self,
+        *,
+        namespace: Optional[str] = None,
+        state: Optional[str] = None,
+        limit: int = 100,
     ) -> list[JobRecord]:
         if state is not None and state not in STATES:
             raise QueueError(f"unknown state {state!r}")
@@ -443,24 +517,34 @@ class ResearchQueue:
 
     def result(self, job_id: str) -> Optional[dict[str, Any]]:
         with open_sqlite(self.path) as conn:
-            row = conn.execute("SELECT result_json FROM job_results WHERE job_id = ?", (job_id,)).fetchone()
+            row = conn.execute(
+                "SELECT result_json FROM job_results WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
         return json.loads(row[0]) if row else None
 
     def events(self, job_id: str) -> list[dict[str, Any]]:
         with open_sqlite(self.path) as conn:
             rows = conn.execute(
-                "SELECT seq, event, at, detail_json FROM job_events WHERE job_id = ? ORDER BY seq", (job_id,)
+                "SELECT seq, event, at, detail_json FROM job_events WHERE job_id = ? ORDER BY seq",
+                (job_id,),
             ).fetchall()
-        return [{"seq": r[0], "event": r[1], "at": r[2], "detail": json.loads(r[3])} for r in rows]
+        return [
+            {"seq": r[0], "event": r[1], "at": r[2], "detail": json.loads(r[3])}
+            for r in rows
+        ]
 
     def counts(self, namespace: Optional[str] = None) -> dict[str, int]:
         out = {state: 0 for state in STATES}
         with open_sqlite(self.path) as conn:
             if namespace is None:
-                rows = conn.execute("SELECT state, COUNT(*) FROM jobs GROUP BY state").fetchall()
+                rows = conn.execute(
+                    "SELECT state, COUNT(*) FROM jobs GROUP BY state"
+                ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT state, COUNT(*) FROM jobs WHERE namespace = ? GROUP BY state", (namespace,)
+                    "SELECT state, COUNT(*) FROM jobs WHERE namespace = ? GROUP BY state",
+                    (namespace,),
                 ).fetchall()
         out.update({state: count for state, count in rows})
         return out

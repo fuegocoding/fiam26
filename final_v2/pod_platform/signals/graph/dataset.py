@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from . import earnings
 from .. import ibes_state as ibes
+from . import earnings
 
 FEATURES_FILE = "features.npy"
 PEERS_FILE = "peers.npz"
@@ -170,7 +170,9 @@ def _past_news(panel: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     """Last three EPS surprises reported strictly before each month-end."""
     right = events.sort_values(["permno", "anndats"]).copy()
     for lag in (1, 2):
-        right[f"eps_lag{lag}"] = right.groupby("permno").next_suescore.shift(lag)
+        right[f"eps_lag{lag}"] = right.groupby("permno").next_suescore.shift(
+            lag
+        )
     right = right.rename(
         columns={"next_suescore": "eps_last", "anndats": "past_report"}
     )
@@ -187,8 +189,12 @@ def _past_news(panel: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
         direction="backward",
         allow_exact_matches=False,
     ).sort_values("row")
-    joined["eps_age"] = (joined.eom - joined.past_report).dt.days.clip(upper=730)
-    return joined[["eps_last", "eps_lag1", "eps_lag2", "eps_age"]].set_axis(panel.index)
+    joined["eps_age"] = (joined.eom - joined.past_report).dt.days.clip(
+        upper=730
+    )
+    return joined[["eps_last", "eps_lag1", "eps_lag2", "eps_age"]].set_axis(
+        panel.index
+    )
 
 
 def _rank_features(values: pd.DataFrame, months: pd.Series) -> np.ndarray:
@@ -196,7 +202,9 @@ def _rank_features(values: pd.DataFrame, months: pd.Series) -> np.ndarray:
     values = values.replace([np.inf, -np.inf], np.nan)
     ranked = values.groupby(months).rank(pct=True).mul(2).sub(1)
     observed = values.notna().to_numpy(np.float32)
-    return np.concatenate([ranked.fillna(0).to_numpy(np.float32), observed], axis=1)
+    return np.concatenate(
+        [ranked.fillna(0).to_numpy(np.float32), observed], axis=1
+    )
 
 
 def _peer_arrays(

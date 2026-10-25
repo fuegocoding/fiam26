@@ -8,6 +8,12 @@ it never generates or paraphrases content.
 
 from __future__ import annotations
 
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
+
+
 import io
 import re
 from typing import Optional
@@ -24,10 +30,8 @@ class PdfUnavailable(PapersError):
 def extract_pdf_text(data: bytes) -> str:
     if not data.startswith(b"%PDF-"):
         raise PdfUnavailable("not_a_pdf")
-    try:
-        import pypdf  # optional dependency
-    except ImportError as exc:
-        raise PdfUnavailable("pypdf_unavailable") from exc
+    if pypdf is None:
+        raise PdfUnavailable("pypdf_unavailable")
     try:
         reader = pypdf.PdfReader(io.BytesIO(data))
         pages = []
@@ -50,28 +54,54 @@ def page_of(text: str, offset: int) -> int:
 _HEAD = re.compile(
     r"^[ \t\f]{0,3}(?:#{1,4}[ \t]+(?P<md>[^\n]{1,120})"
     r"|(?P<num>(?:\d+(?:\.\d+)*\.?|[A-Z]\.|Appendix(?:[ \t]+[A-Z0-9]+)?[.:]?)[ \t]+[A-Z][^\n]{0,100}))[ \t]*$",
-    re.M)
+    re.M,
+)
 
 
 def section_of(text: str, offset: int) -> Optional[str]:
     found = None
     for m in _HEAD.finditer(text, 0, offset):
         label = (m.group("md") or m.group("num")).strip()
-        if m.group("num") and label.endswith(".") and not label.startswith("Appendix"):
+        if (
+            m.group("num")
+            and label.endswith(".")
+            and not label.startswith("Appendix")
+        ):
             continue  # a numbered sentence, not a heading
         found = label[:120]
     return found
 
 
 _CUES = (
-    ("economic_claim", r"\bwe (?:find|show|document|report)\b|\bresults? (?:show|indicate|suggest)\b"),
+    (
+        "economic_claim",
+        r"\bwe (?:find|show|document|report)\b|\bresults? (?:show|indicate|suggest)\b",
+    ),
     ("mechanism", r"\b(?:mechanism|because|explanation|consistent with)\b"),
-    ("universe", r"\b(?:sample|universe)\b.{0,40}\b(?:consists?|includes?|comprises?|contains?)\b"),
-    ("period", r"\b(?:19|20)\d{2}\s*(?:to|-|–|through|until)\s*(?:19|20)\d{2}\b"),
-    ("horizon", r"\b(?:horizon|holding period|days? ahead|months? ahead|one-month|next[- ]month)\b"),
-    ("variable_definition", r"\bis defined as\b|\bwe define\b|\bis computed as\b"),
-    ("timing", r"\blagged\b|\bend of (?:the )?(?:month|quarter|year)\b|\bavailable at\b"),
-    ("statistical_design", r"\bregress|\bFama[- ]MacBeth\b|\bt-stat|\bstandard errors?\b|\bportfolio sort"),
+    (
+        "universe",
+        r"\b(?:sample|universe)\b.{0,40}\b(?:consists?|includes?|comprises?|contains?)\b",
+    ),
+    (
+        "period",
+        r"\b(?:19|20)\d{2}\s*(?:to|-|–|through|until)\s*(?:19|20)\d{2}\b",
+    ),
+    (
+        "horizon",
+        r"\b(?:horizon|holding period|days? ahead|months? ahead|one-month|next[- ]month)\b",
+    ),
+    (
+        "variable_definition",
+        r"\bis defined as\b|\bwe define\b|\bis computed as\b",
+    ),
+    (
+        "timing",
+        r"\blagged\b|\bend of (?:the )?(?:month|quarter|year)\b|\bavailable at\b",
+    ),
+    (
+        "statistical_design",
+        r"\bregress|\bFama[- ]MacBeth\b|\bt-stat|\bstandard errors?\b|\bportfolio sort",
+    ),
     ("baseline", r"\bbenchmark\b|\bbaseline\b|\bcompared (?:to|with)\b"),
     ("limitation", r"\blimitation|\bcaveat\b|\bdoes not hold\b"),
 )

@@ -34,7 +34,9 @@ class ScreenItem(StrictModel):
     @model_validator(mode="after")
     def _check_evidence(self) -> "ScreenItem":
         if self.status == AssessmentStatus.ESTABLISHED and not self.evidence_id:
-            raise ValueError("an established screen item must reference evidence")
+            raise ValueError(
+                "an established screen item must reference evidence"
+            )
         return self
 
 
@@ -48,7 +50,12 @@ class Screen(StrictModel):
     def all_established(self) -> bool:
         return all(
             item.status == AssessmentStatus.ESTABLISHED
-            for item in (self.history, self.metric_lag, self.vintage, self.coverage)
+            for item in (
+                self.history,
+                self.metric_lag,
+                self.vintage,
+                self.coverage,
+            )
         )
 
 

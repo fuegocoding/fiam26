@@ -25,17 +25,24 @@ def portfolio_return(inputs: ReturnInputs) -> float:
         if security_id not in ret_map:
             raise ValueError(f"missing return for {security_id}")
         total += weight * (ret_map[security_id] - inputs.risk_free)
-    return total - inputs.trading_cost - inputs.borrow_cost - inputs.funding_cost
+    return (
+        total - inputs.trading_cost - inputs.borrow_cost - inputs.funding_cost
+    )
 
 
-def one_way_turnover(pre_weights: Sequence[tuple[str, float]], post_weights: Sequence[tuple[str, float]]) -> float:
+def one_way_turnover(
+    pre_weights: Sequence[tuple[str, float]],
+    post_weights: Sequence[tuple[str, float]],
+) -> float:
     pre = dict(pre_weights)
     post = dict(post_weights)
     keys = set(pre) | set(post)
     return 0.5 * sum(abs(post.get(k, 0.0) - pre.get(k, 0.0)) for k in keys)
 
 
-def annualized_turnover(per_rebalance: float, rebalances_per_year: float) -> float:
+def annualized_turnover(
+    per_rebalance: float, rebalances_per_year: float
+) -> float:
     if rebalances_per_year <= 0:
         raise ValueError("rebalances_per_year must be positive")
     return per_rebalance * rebalances_per_year
@@ -55,9 +62,13 @@ def benchmark_daily(tb3ms_annual_percent: float) -> float:
     return tb3ms_annual_percent / 25200.0 + 0.04 / 252.0
 
 
-def active_returns(portfolio: Sequence[float], benchmark: Sequence[float]) -> list[float]:
+def active_returns(
+    portfolio: Sequence[float], benchmark: Sequence[float]
+) -> list[float]:
     if len(portfolio) != len(benchmark):
-        raise ValueError("portfolio and benchmark series must have equal length")
+        raise ValueError(
+            "portfolio and benchmark series must have equal length"
+        )
     return [p - b for p, b in zip(portfolio, benchmark)]
 
 
@@ -68,7 +79,9 @@ def information_ratio(active: Sequence[float], periods_per_year: int) -> float:
     var = sum((x - mean) ** 2 for x in active) / (len(active) - 1)
     sd = math.sqrt(var)
     if sd == 0:
-        raise ValueError("zero active-return dispersion; information ratio undefined")
+        raise ValueError(
+            "zero active-return dispersion; information ratio undefined"
+        )
     return math.sqrt(periods_per_year) * mean / sd
 
 
@@ -79,15 +92,21 @@ def sharpe_ratio(excess: Sequence[float], periods_per_year: int) -> float:
     var = sum((x - mean) ** 2 for x in excess) / (len(excess) - 1)
     sd = math.sqrt(var)
     if sd == 0:
-        raise ValueError("zero excess-return dispersion; Sharpe ratio undefined")
+        raise ValueError(
+            "zero excess-return dispersion; Sharpe ratio undefined"
+        )
     return math.sqrt(periods_per_year) * mean / sd
 
 
-def annualized_arithmetic(returns: Sequence[float], periods_per_year: int) -> float:
+def annualized_arithmetic(
+    returns: Sequence[float], periods_per_year: int
+) -> float:
     return periods_per_year * (sum(returns) / len(returns))
 
 
-def annualized_volatility(returns: Sequence[float], periods_per_year: int) -> float:
+def annualized_volatility(
+    returns: Sequence[float], periods_per_year: int
+) -> float:
     if len(returns) < 2:
         raise ValueError("volatility needs at least two observations")
     mean = sum(returns) / len(returns)
@@ -132,11 +151,17 @@ def summarize_periods(
         raise ValueError("all series must have equal length")
     excess = [p - r for p, r in zip(portfolio, risk_free)]
     active = active_returns(portfolio, benchmark)
-    ir = information_ratio(active, periods_per_year) if len(active) >= 2 else None
+    ir = (
+        information_ratio(active, periods_per_year)
+        if len(active) >= 2
+        else None
+    )
     sh = sharpe_ratio(excess, periods_per_year) if len(excess) >= 2 else None
     return PeriodStats(
         periods_per_year=periods_per_year,
-        arithmetic_annual_return=annualized_arithmetic(portfolio, periods_per_year),
+        arithmetic_annual_return=annualized_arithmetic(
+            portfolio, periods_per_year
+        ),
         annual_volatility=annualized_volatility(portfolio, periods_per_year),
         information_ratio=ir,
         sharpe=sh,

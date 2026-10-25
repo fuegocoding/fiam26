@@ -18,17 +18,30 @@ from ..accounting.evaluation import (
     ols_hac,
     position_returns,
 )
-from .arcana import make_bundle as make_arcana_bundle, write_bundle as write_arcana_bundle
+from .arcana import make_bundle as make_arcana_bundle
+from .arcana import write_bundle as write_arcana_bundle
 from .attribution import (
     PositionContribution,
     SizingPeriod,
-    hit_rate_win_loss as platform_hit_rate_win_loss,
     regression_factor_attribution,
     selection_vs_sizing,
 )
+from .attribution import (
+    hit_rate_win_loss as platform_hit_rate_win_loss,
+)
 
 MONTHLY_HORIZONS = (1, 2, 3, 6, 12)
-DELISTED_RETAIL_TICKERS = ("BBBY", "PRTY", "EXPR", "JOAN", "TUP", "BIG", "CONN", "LL", "RAD")
+DELISTED_RETAIL_TICKERS = (
+    "BBBY",
+    "PRTY",
+    "EXPR",
+    "JOAN",
+    "TUP",
+    "BIG",
+    "CONN",
+    "LL",
+    "RAD",
+)
 
 
 def build_panel_factors(universe: pd.DataFrame) -> pd.DataFrame:
@@ -41,10 +54,15 @@ def build_panel_factors(universe: pd.DataFrame) -> pd.DataFrame:
         lo = p[r <= 0.3].groupby("return_month")["ret_exc_lead1m"].mean()
         return hi - lo
 
-    g = p.groupby(["return_month", "size_grp"])["ret_exc_lead1m"].mean().unstack()
+    g = (
+        p.groupby(["return_month", "size_grp"])["ret_exc_lead1m"]
+        .mean()
+        .unstack()
+    )
     return pd.DataFrame(
         {
-            "smb": g[["micro", "small"]].mean(axis=1) - g[["large", "mega"]].mean(axis=1),
+            "smb": g[["micro", "small"]].mean(axis=1)
+            - g[["large", "mega"]].mean(axis=1),
             "hml": _spread("be_me"),
             "mom": _spread("ret_12_1"),
         }
@@ -74,9 +92,19 @@ def factor_vs_idiosyncratic_split(
     return {
         "months": int(len(f)),
         "factor_share_of_mean_return": float(factor_part.mean() / mean_val),
-        "idiosyncratic_share_of_mean_return": float(idio_part.mean() / mean_val),
-        "factor_share_of_variance": float(np.var(factor_part, ddof=1) / total_var) if total_var > 0 else 0.0,
-        "idiosyncratic_share_of_variance": float(np.var(idio_part, ddof=1) / total_var) if total_var > 0 else 0.0,
+        "idiosyncratic_share_of_mean_return": float(
+            idio_part.mean() / mean_val
+        ),
+        "factor_share_of_variance": float(
+            np.var(factor_part, ddof=1) / total_var
+        )
+        if total_var > 0
+        else 0.0,
+        "idiosyncratic_share_of_variance": float(
+            np.var(idio_part, ddof=1) / total_var
+        )
+        if total_var > 0
+        else 0.0,
         "factor_contribution_ann": float(factor_part.mean() * 12.0),
         "idiosyncratic_contribution_ann": float(idio_part.mean() * 12.0),
         "alpha_ann_from_decomposition": float(b[0] * 12.0),
@@ -88,7 +116,9 @@ def factor_vs_idiosyncratic_split(
         },
         "loading_t_hac": {
             name: float(v)
-            for name, v in zip(["mkt", "smb", "hml", "mom"], t_hac[1:], strict=True)
+            for name, v in zip(
+                ["mkt", "smb", "hml", "mom"], t_hac[1:], strict=True
+            )
         },
     }
 
@@ -97,12 +127,16 @@ def sizing_vs_selection_split(positions_df: pd.DataFrame) -> dict[str, float]:
     """Decomposes P&L into stock selection (equal-weight within side) vs position sizing (Arcana lens 2)."""
     q = positions_df.copy()
     q["side_w"] = q["target_weight"].abs()
-    q["equal_w"] = q.groupby(["return_month", "side"])["side_w"].transform("mean")
+    q["equal_w"] = q.groupby(["return_month", "side"])["side_w"].transform(
+        "mean"
+    )
     q["equal_w"] = np.where(q["side"] == "short", -q["equal_w"], q["equal_w"])
     q["actual_pnl"] = q["target_weight"] * q["ret"]
     q["select_pnl"] = q["equal_w"] * q["ret"]
     q["size_pnl"] = q["actual_pnl"] - q["select_pnl"]
-    monthly = q.groupby("return_month")[["actual_pnl", "select_pnl", "size_pnl"]].sum()
+    monthly = q.groupby("return_month")[
+        ["actual_pnl", "select_pnl", "size_pnl"]
+    ].sum()
     total_sum = float(monthly["actual_pnl"].sum())
     denom = total_sum if abs(total_sum) > 1e-12 else 1e-12
     out: dict[str, float] = {}
@@ -115,19 +149,29 @@ def sizing_vs_selection_split(positions_df: pd.DataFrame) -> dict[str, float]:
         out[f"{name}_pnl_ann"] = float(s.mean() * 12.0)
         out[f"{name}_share_of_pnl"] = float(s.sum() / denom)
     out["selection_t"] = (
-        float(monthly["select_pnl"].mean() / monthly["select_pnl"].std() * math.sqrt(len(monthly)))
+        float(
+            monthly["select_pnl"].mean()
+            / monthly["select_pnl"].std()
+            * math.sqrt(len(monthly))
+        )
         if monthly["select_pnl"].std() > 0
         else 0.0
     )
     out["sizing_t"] = (
-        float(monthly["size_pnl"].mean() / monthly["size_pnl"].std() * math.sqrt(len(monthly)))
+        float(
+            monthly["size_pnl"].mean()
+            / monthly["size_pnl"].std()
+            * math.sqrt(len(monthly))
+        )
         if monthly["size_pnl"].std() > 0
         else 0.0
     )
     return out
 
 
-def hit_rate_and_win_loss(positions_df: pd.DataFrame, r: pd.DataFrame) -> dict[str, object]:
+def hit_rate_and_win_loss(
+    positions_df: pd.DataFrame, r: pd.DataFrame
+) -> dict[str, object]:
     """Position and monthly hit rates, win/loss payoff ratios, and long vs short leg attribution (Arcana lens 3)."""
     q = positions_df.copy()
     q["win"] = q["target_weight"] * q["ret"]
@@ -139,14 +183,22 @@ def hit_rate_and_win_loss(positions_df: pd.DataFrame, r: pd.DataFrame) -> dict[s
     n_neg = int((active < 0).sum())
     return {
         "position_hit_rate": float((q["win"] > 0).mean()),
-        "position_win_loss_ratio": float(pos.mean() / abs(neg.mean())) if len(neg) else 0.0,
-        "long_position_hit_rate": float((long_q["win"] > 0).mean()) if len(long_q) else 0.0,
-        "short_position_hit_rate": float((short_q["win"] > 0).mean()) if len(short_q) else 0.0,
+        "position_win_loss_ratio": float(pos.mean() / abs(neg.mean()))
+        if len(neg)
+        else 0.0,
+        "long_position_hit_rate": float((long_q["win"] > 0).mean())
+        if len(long_q)
+        else 0.0,
+        "short_position_hit_rate": float((short_q["win"] > 0).mean())
+        if len(short_q)
+        else 0.0,
         "long_leg_pnl_ann": float(r["pnl_long"].mean() * 12.0),
         "short_leg_pnl_ann": float(r["pnl_short"].mean() * 12.0),
         "month_hit_rate": float((active > 0).mean()),
         "month_win_loss_ratio": (
-            float(active[active > 0].mean() / abs(active[active < 0].mean())) if n_neg else 0.0
+            float(active[active > 0].mean() / abs(active[active < 0].mean()))
+            if n_neg
+            else 0.0
         ),
         "winning_positions": int(len(pos)),
         "losing_positions": int(len(neg)),
@@ -161,14 +213,27 @@ def monthly_alpha_decay(
     ret["eom"] = pd.to_datetime(ret["eom"])
     ret = ret.dropna(subset=["ret_exc"]).drop_duplicates(["permno", "eom"])
     ret = ret.sort_values(["permno", "eom"]).reset_index(drop=True)
-    cum = ret.groupby("permno")["ret_exc"].transform(lambda s: (1.0 + s).cumprod())
+    cum = ret.groupby("permno")["ret_exc"].transform(
+        lambda s: (1.0 + s).cumprod()
+    )
     ret["cum"] = cum
     for h in MONTHLY_HORIZONS:
-        ret[f"fwd_{h}"] = ret.groupby("permno")["cum"].transform(lambda s, k=h: s.shift(-k) / s) - 1.0
+        ret[f"fwd_{h}"] = (
+            ret.groupby("permno")["cum"].transform(
+                lambda s, k=h: s.shift(-k) / s
+            )
+            - 1.0
+        )
     ret["formation"] = ret["eom"].dt.to_period("M")
-    d = predictions[["return_month", "permno", score_col]].rename(columns={score_col: "score"}).copy()
+    d = (
+        predictions[["return_month", "permno", score_col]]
+        .rename(columns={score_col: "score"})
+        .copy()
+    )
     d["formation"] = pd.to_datetime(d["return_month"]).dt.to_period("M") - 1
-    d = d.merge(ret.drop(columns=["eom", "cum"]), on=["permno", "formation"], how="left")
+    d = d.merge(
+        ret.drop(columns=["eom", "cum"]), on=["permno", "formation"], how="left"
+    )
     out: dict[str, float] = {}
     for h in MONTHLY_HORIZONS:
         col = f"fwd_{h}"
@@ -181,9 +246,13 @@ def monthly_alpha_decay(
         )
         g = g.assign(quintile=q)
         spread = (
-            g[g["quintile"] == 4].groupby("return_month")[col].mean()
-            - g[g["quintile"] == 0].groupby("return_month")[col].mean()
-        ).replace([np.inf, -np.inf], np.nan).dropna()
+            (
+                g[g["quintile"] == 4].groupby("return_month")[col].mean()
+                - g[g["quintile"] == 0].groupby("return_month")[col].mean()
+            )
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )
         out[f"quintile_spread_{h}m_ann"] = float(spread.mean() * 12.0 / h)
         out[f"quintile_spread_{h}m_t"] = (
             float(spread.mean() / spread.std() * math.sqrt(len(spread)))
@@ -197,11 +266,26 @@ def monthly_alpha_decay(
 def stress_regime_attribution(r: pd.DataFrame) -> dict[str, dict[str, float]]:
     """Evaluates strategy performance across distinct market and factor stress regimes."""
     regimes = {
-        "2021_meme_squeeze_window": (pd.Period("2021-01", "M"), pd.Period("2021-06", "M")),
-        "2022_rate_hike_bear_market": (pd.Period("2022-01", "M"), pd.Period("2022-12", "M")),
-        "2023_svb_and_ai_narrow_rally": (pd.Period("2023-01", "M"), pd.Period("2023-12", "M")),
-        "2024_momentum_expansion": (pd.Period("2024-01", "M"), pd.Period("2024-12", "M")),
-        "2025_2026_late_cycle": (pd.Period("2025-01", "M"), pd.Period("2026-08", "M")),
+        "2021_meme_squeeze_window": (
+            pd.Period("2021-01", "M"),
+            pd.Period("2021-06", "M"),
+        ),
+        "2022_rate_hike_bear_market": (
+            pd.Period("2022-01", "M"),
+            pd.Period("2022-12", "M"),
+        ),
+        "2023_svb_and_ai_narrow_rally": (
+            pd.Period("2023-01", "M"),
+            pd.Period("2023-12", "M"),
+        ),
+        "2024_momentum_expansion": (
+            pd.Period("2024-01", "M"),
+            pd.Period("2024-12", "M"),
+        ),
+        "2025_2026_late_cycle": (
+            pd.Period("2025-01", "M"),
+            pd.Period("2026-08", "M"),
+        ),
     }
     out: dict[str, dict[str, float]] = {}
     for name, (start_p, end_p) in regimes.items():
@@ -238,11 +322,19 @@ def delisted_and_coverage_bias_audit(
 ) -> dict[str, object]:
     """Final Guide Section 6.3 survivorship & coverage bias audit (delisted retailers + alt-data coverage)."""
     retail_delisted = positions_df[
-        positions_df["ticker"].astype(str).str.upper().isin(DELISTED_RETAIL_TICKERS)
+        positions_df["ticker"]
+        .astype(str)
+        .str.upper()
+        .isin(DELISTED_RETAIL_TICKERS)
     ]
     liq_count = len(liquidations_df) if liquidations_df is not None else 0
     liq_pnl = (
-        float((liquidations_df["opening_weight"] * liquidations_df["price_return"]).sum())
+        float(
+            (
+                liquidations_df["opening_weight"]
+                * liquidations_df["price_return"]
+            ).sum()
+        )
         if liquidations_df is not None and not liquidations_df.empty
         else 0.0
     )
@@ -251,27 +343,48 @@ def delisted_and_coverage_bias_audit(
     total_pnl = float(positions_df["pnl"].sum())
     ex_delisted_pnl = float(
         positions_df.loc[
-            ~positions_df["ticker"].astype(str).str.upper().isin(DELISTED_RETAIL_TICKERS), "pnl"
+            ~positions_df["ticker"]
+            .astype(str)
+            .str.upper()
+            .isin(DELISTED_RETAIL_TICKERS),
+            "pnl",
         ].sum()
     )
 
     coverage_audit: dict[str, object] = {}
     if demand_card_path is not None and demand_card_path.exists():
         card = pd.read_parquet(demand_card_path)
-        covered_tickers = set(card["ticker"].dropna().astype(str).str.upper().unique())
-        pos_covered = positions_df["ticker"].astype(str).str.upper().isin(covered_tickers)
+        covered_tickers = set(
+            card["ticker"].dropna().astype(str).str.upper().unique()
+        )
+        pos_covered = (
+            positions_df["ticker"].astype(str).str.upper().isin(covered_tickers)
+        )
         coverage_audit = {
             "distinct_covered_tickers": int(len(covered_tickers)),
             "holdings_share_in_alt_data": float(pos_covered.mean()),
-            "covered_holdings_avg_me_musd": float(positions_df.loc[pos_covered, "me"].mean()) if pos_covered.any() else 0.0,
-            "uncovered_holdings_avg_me_musd": float(positions_df.loc[~pos_covered, "me"].mean()) if (~pos_covered).any() else 0.0,
-            "covered_holdings_pnl_share": float(positions_df.loc[pos_covered, "pnl"].sum() / max(abs(total_pnl), 1e-12)),
+            "covered_holdings_avg_me_musd": float(
+                positions_df.loc[pos_covered, "me"].mean()
+            )
+            if pos_covered.any()
+            else 0.0,
+            "uncovered_holdings_avg_me_musd": float(
+                positions_df.loc[~pos_covered, "me"].mean()
+            )
+            if (~pos_covered).any()
+            else 0.0,
+            "covered_holdings_pnl_share": float(
+                positions_df.loc[pos_covered, "pnl"].sum()
+                / max(abs(total_pnl), 1e-12)
+            ),
         }
 
     return {
         "delisted_retailers_tested": list(DELISTED_RETAIL_TICKERS),
         "delisted_retailer_holding_months": int(len(retail_delisted)),
-        "delisted_retailer_pnl_contribution_pct_nav": float(retail_delisted["pnl"].sum() * 100.0),
+        "delisted_retailer_pnl_contribution_pct_nav": float(
+            retail_delisted["pnl"].sum() * 100.0
+        ),
         "portfolio_cum_pnl_with_delisted_retailers": total_pnl,
         "portfolio_cum_pnl_ex_delisted_retailers": ex_delisted_pnl,
         "missing_return_last_quote_liquidations_count": int(liq_count),
@@ -296,7 +409,11 @@ def compute_holding_period(positions_df: pd.DataFrame) -> dict[str, float]:
         .reset_index()
     )
     w_sum = float(spans["weight"].sum())
-    months = float((spans["months"] * spans["weight"]).sum() / w_sum) if w_sum > 0 else 1.0
+    months = (
+        float((spans["months"] * spans["weight"]).sum() / w_sum)
+        if w_sum > 0
+        else 1.0
+    )
     return {
         "avg_holding_period_months": months,
         "avg_holding_period_trading_days": months * 21.0,
@@ -316,9 +433,15 @@ def enrich_positions_with_returns(
         "permno",
         "ret_exc_lead1m",
         "me",
-        *[c for c in ("exit_price", "exit_price_date") if c in universe.columns],
+        *[
+            c
+            for c in ("exit_price", "exit_price_date")
+            if c in universe.columns
+        ],
     ]
-    p = p.merge(universe[outcome_cols], on=["return_month", "permno"], how="left")
+    p = p.merge(
+        universe[outcome_cols], on=["return_month", "permno"], how="left"
+    )
     rates = mkt["rf"]
     p["ret"] = p["ret_exc_lead1m"]
     for month, ids in p.groupby("return_month").groups.items():
@@ -365,7 +488,9 @@ def export_submission_and_exhibits(
     # 2. Required returns.csv (Date, RETURN)
     returns_csv = pd.DataFrame(
         {
-            "Date": monthly_eval_df.index.to_timestamp(how="start").strftime("%Y-%m-%d"),
+            "Date": monthly_eval_df.index.to_timestamp(how="start").strftime(
+                "%Y-%m-%d"
+            ),
             "RETURN": monthly_eval_df["total"].to_numpy(),
         }
     )
@@ -374,10 +499,24 @@ def export_submission_and_exhibits(
     # 3. Daily returns CSV
     if not daily_df.empty:
         daily_export = daily_df.copy()
-        daily_export["Date"] = pd.to_datetime(daily_export["day"]).dt.strftime("%Y-%m-%d")
+        daily_export["Date"] = pd.to_datetime(daily_export["day"]).dt.strftime(
+            "%Y-%m-%d"
+        )
         daily_export[
-            ["Date", "total", "gross_daily", "rf", "spx", "benchmark_daily", "active", "drawdown", "rolling_252d_beta"]
-        ].rename(columns={"total": "RETURN"}).to_csv(out_dir / "daily_returns.csv", index=False)
+            [
+                "Date",
+                "total",
+                "gross_daily",
+                "rf",
+                "spx",
+                "benchmark_daily",
+                "active",
+                "drawdown",
+                "rolling_252d_beta",
+            ]
+        ].rename(columns={"total": "RETURN"}).to_csv(
+            out_dir / "daily_returns.csv", index=False
+        )
 
     # 4. Liquidations & monthly detail
     liq_df = monthly_eval_df.attrs.get("liquidations", pd.DataFrame())
@@ -389,9 +528,15 @@ def export_submission_and_exhibits(
     by_yr = monthly_eval_df.groupby(monthly_eval_df.index.year)
     cal_years = pd.DataFrame(
         {
-            "strategy": by_yr["total"].apply(lambda s: float((1.0 + s).prod() - 1.0)),
-            "benchmark": by_yr["benchmark"].apply(lambda s: float((1.0 + s).prod() - 1.0)),
-            "sp500": by_yr["spx"].apply(lambda s: float((1.0 + s.fillna(0.0)).prod() - 1.0)),
+            "strategy": by_yr["total"].apply(
+                lambda s: float((1.0 + s).prod() - 1.0)
+            ),
+            "benchmark": by_yr["benchmark"].apply(
+                lambda s: float((1.0 + s).prod() - 1.0)
+            ),
+            "sp500": by_yr["spx"].apply(
+                lambda s: float((1.0 + s.fillna(0.0)).prod() - 1.0)
+            ),
             "active": by_yr["active"].sum(),
             "months": by_yr.size(),
         }
@@ -401,34 +546,66 @@ def export_submission_and_exhibits(
     # 6. Section 9.4 Exhibit 7 & 8: Top 10 long/short holdings & Top 10 positive/negative P&L contributors
     n_months = len(monthly_eval_df)
     held_sorted = p.sort_values("return_month")
-    last_labels = held_sorted.drop_duplicates("permno", keep="last").set_index("permno")[
-        ["ticker", "company_name"]
-    ]
+    last_labels = held_sorted.drop_duplicates("permno", keep="last").set_index(
+        "permno"
+    )[["ticker", "company_name"]]
     by_stock = p.groupby("permno")
     avg_weights = pd.DataFrame(
         {
-            "avg_weight_pct": by_stock["target_weight"].sum() / max(n_months, 1) * 100.0,
+            "avg_weight_pct": by_stock["target_weight"].sum()
+            / max(n_months, 1)
+            * 100.0,
             "months_held": by_stock.size(),
         }
     ).join(last_labels)
-    top_longs = avg_weights[avg_weights["avg_weight_pct"] > 0].nlargest(10, "avg_weight_pct").assign(side="long")
-    top_shorts = avg_weights[avg_weights["avg_weight_pct"] < 0].nsmallest(10, "avg_weight_pct").assign(side="short")
+    top_longs = (
+        avg_weights[avg_weights["avg_weight_pct"] > 0]
+        .nlargest(10, "avg_weight_pct")
+        .assign(side="long")
+    )
+    top_shorts = (
+        avg_weights[avg_weights["avg_weight_pct"] < 0]
+        .nsmallest(10, "avg_weight_pct")
+        .assign(side="short")
+    )
     top_hold_df = pd.concat([top_longs, top_shorts]).reset_index()
     top_hold_df.to_csv(out_dir / "top_average_holdings.csv", index=False)
 
-    pnl_by_stock = (by_stock["pnl"].sum() * 100.0).rename("pnl_pct_nav").to_frame().join(last_labels)
+    pnl_by_stock = (
+        (by_stock["pnl"].sum() * 100.0)
+        .rename("pnl_pct_nav")
+        .to_frame()
+        .join(last_labels)
+    )
     contrib_df = pd.concat(
         [
-            pnl_by_stock.nlargest(10, "pnl_pct_nav").assign(kind="top_positive"),
-            pnl_by_stock.nsmallest(10, "pnl_pct_nav").assign(kind="top_negative"),
+            pnl_by_stock.nlargest(10, "pnl_pct_nav").assign(
+                kind="top_positive"
+            ),
+            pnl_by_stock.nsmallest(10, "pnl_pct_nav").assign(
+                kind="top_negative"
+            ),
         ]
     ).reset_index()
     contrib_df.to_csv(out_dir / "contributors.csv", index=False)
 
     # 7. Position size vs 20-day/126-day ADV distribution (Long vs Short separately)
-    adv_df = p[["return_month", "permno", "side", "target_weight", "dolvol_126d", "capital"]].copy()
-    adv_df["position_dollars"] = adv_df["target_weight"].abs() * adv_df["capital"]
-    adv_df["adv_days"] = adv_df["position_dollars"] / adv_df["dolvol_126d"].replace(0.0, np.nan)
+    adv_df = p[
+        [
+            "return_month",
+            "permno",
+            "side",
+            "target_weight",
+            "dolvol_126d",
+            "capital",
+        ]
+    ].copy()
+    adv_df["position_dollars"] = (
+        adv_df["target_weight"].abs() * adv_df["capital"]
+    )
+    adv_df["adv_days"] = adv_df["position_dollars"] / adv_df[
+        "dolvol_126d"
+    ].replace(0.0, np.nan)
     adv_df = adv_df.dropna(subset=["adv_days"])
     adv_df.to_csv(out_dir / "position_adv_days.csv", index=False)
 
@@ -436,20 +613,34 @@ def export_submission_and_exhibits(
     short_adv = adv_df.loc[adv_df["side"] == "short", "adv_days"]
     adv_distribution = {
         "long": {
-            "median_adv_days": float(long_adv.median()) if len(long_adv) else 0.0,
-            "p90_adv_days": float(long_adv.quantile(0.90)) if len(long_adv) else 0.0,
+            "median_adv_days": float(long_adv.median())
+            if len(long_adv)
+            else 0.0,
+            "p90_adv_days": float(long_adv.quantile(0.90))
+            if len(long_adv)
+            else 0.0,
             "max_adv_days": float(long_adv.max()) if len(long_adv) else 0.0,
         },
         "short": {
-            "median_adv_days": float(short_adv.median()) if len(short_adv) else 0.0,
-            "p90_adv_days": float(short_adv.quantile(0.90)) if len(short_adv) else 0.0,
+            "median_adv_days": float(short_adv.median())
+            if len(short_adv)
+            else 0.0,
+            "p90_adv_days": float(short_adv.quantile(0.90))
+            if len(short_adv)
+            else 0.0,
             "max_adv_days": float(short_adv.max()) if len(short_adv) else 0.0,
         },
     }
 
     # 8. Build books dictionary for sensitivity & earnings window decomposition
     books = {
-        month: dict(zip(g["permno"].astype(int), g["target_weight"].astype(float), strict=True))
+        month: dict(
+            zip(
+                g["permno"].astype(int),
+                g["target_weight"].astype(float),
+                strict=True,
+            )
+        )
         for month, g in p.groupby("return_month")
     }
     cost_sens = evaluate_cost_borrow_sensitivity(books, universe, mkt)
@@ -471,10 +662,16 @@ def export_submission_and_exhibits(
 
     # 8b. Integrate Franck's pod_platform.reporting.attribution & pod_platform.reporting.arcana controls
     panel_factors = build_panel_factors(universe)
-    f_joined = monthly_eval_df[["total", "rf", "spx"]].join(panel_factors, how="inner").dropna()
+    f_joined = (
+        monthly_eval_df[["total", "rf", "spx"]]
+        .join(panel_factors, how="inner")
+        .dropna()
+    )
     reg_attr = regression_factor_attribution(
         labels=[str(idx) for idx in f_joined.index],
-        portfolio_excess=(f_joined["total"] - f_joined["rf"]).astype(float).tolist(),
+        portfolio_excess=(f_joined["total"] - f_joined["rf"])
+        .astype(float)
+        .tolist(),
         factors={
             "mkt": (f_joined["spx"] - f_joined["rf"]).astype(float).tolist(),
             "smb": f_joined["smb"].astype(float).tolist(),
@@ -486,8 +683,20 @@ def export_submission_and_exhibits(
     sizing_periods = [
         SizingPeriod(
             label=str(month),
-            weights=dict(zip(g["permno"].astype(int).astype(str), g["target_weight"].astype(float), strict=True)),
-            returns=dict(zip(g["permno"].astype(int).astype(str), g["ret"].fillna(0.0).astype(float), strict=True)),
+            weights=dict(
+                zip(
+                    g["permno"].astype(int).astype(str),
+                    g["target_weight"].astype(float),
+                    strict=True,
+                )
+            ),
+            returns=dict(
+                zip(
+                    g["permno"].astype(int).astype(str),
+                    g["ret"].fillna(0.0).astype(float),
+                    strict=True,
+                )
+            ),
         )
         for month, g in p.groupby("return_month")
     ]
@@ -501,7 +710,9 @@ def export_submission_and_exhibits(
         )
         for r in p.itertuples()
     ]
-    hit_wl_ctrl = platform_hit_rate_win_loss(pos_contribs, unit="return_contribution")
+    hit_wl_ctrl = platform_hit_rate_win_loss(
+        pos_contribs, unit="return_contribution"
+    )
     platform_attribution_controls = {
         "regression_factor_vs_idiosyncratic": reg_attr["aggregate"],
         "regression_alpha_per_period": reg_attr["alpha_per_period"],
@@ -538,10 +749,14 @@ def export_submission_and_exhibits(
     arcana_bundle = make_arcana_bundle(
         arcana_records,
         weight_unit="decimal",
-        source_files=[f for f in (panel_path, external_path) if Path(f).exists()],
+        source_files=[
+            f for f in (panel_path, external_path) if Path(f).exists()
+        ],
         descriptive=False,
     )
-    write_arcana_bundle(arcana_bundle, out_dir / "arcana_bundle", overwrite=True)
+    write_arcana_bundle(
+        arcana_bundle, out_dir / "arcana_bundle", overwrite=True
+    )
 
     arcana_payload = {
         "score_column": score_col,
@@ -564,7 +779,8 @@ def export_submission_and_exhibits(
         "adv_days_distribution": adv_distribution,
     }
     (out_dir / "arcana_audit.json").write_text(
-        json.dumps(arcana_payload, indent=2, default=str) + "\n", encoding="utf-8"
+        json.dumps(arcana_payload, indent=2, default=str) + "\n",
+        encoding="utf-8",
     )
 
     # 9. Section 9.4 Exhibits bundle JSON
@@ -590,7 +806,9 @@ def export_submission_and_exhibits(
                 "strategy_wealth": float(wealth_strat.loc[idx]),
                 "benchmark_wealth": float(wealth_bench.loc[idx]),
                 "sp500_wealth": float(wealth_spx.loc[idx]),
-                "relative_wealth_vs_benchmark": float(wealth_strat.loc[idx] / wealth_bench.loc[idx]),
+                "relative_wealth_vs_benchmark": float(
+                    wealth_strat.loc[idx] / wealth_bench.loc[idx]
+                ),
             }
             for idx in monthly_eval_df.index
         ],
@@ -605,8 +823,12 @@ def export_submission_and_exhibits(
         "exhibit_3_rolling_12m_active_and_ir": [
             {
                 "month": str(idx),
-                "rolling_12m_active_return": None if pd.isna(roll_act_12m.loc[idx]) else float(roll_act_12m.loc[idx]),
-                "rolling_12m_ir": None if pd.isna(roll_ir_12m.loc[idx]) else float(roll_ir_12m.loc[idx]),
+                "rolling_12m_active_return": None
+                if pd.isna(roll_act_12m.loc[idx])
+                else float(roll_act_12m.loc[idx]),
+                "rolling_12m_ir": None
+                if pd.isna(roll_ir_12m.loc[idx])
+                else float(roll_ir_12m.loc[idx]),
             }
             for idx in monthly_eval_df.index
         ],
@@ -614,20 +836,39 @@ def export_submission_and_exhibits(
             "monthly_12m_rolling": [
                 {
                     "month": str(idx),
-                    "rolling_12m_beta": None if pd.isna(roll_beta_12m.loc[idx]) else float(roll_beta_12m.loc[idx]),
+                    "rolling_12m_beta": None
+                    if pd.isna(roll_beta_12m.loc[idx])
+                    else float(roll_beta_12m.loc[idx]),
                 }
                 for idx in monthly_eval_df.index
             ],
             "daily_252d_rolling_summary": {
-                "min": float(daily_df["rolling_252d_beta"].min()) if not daily_df.empty and daily_df["rolling_252d_beta"].notna().any() else None,
-                "median": float(daily_df["rolling_252d_beta"].median()) if not daily_df.empty and daily_df["rolling_252d_beta"].notna().any() else None,
-                "max": float(daily_df["rolling_252d_beta"].max()) if not daily_df.empty and daily_df["rolling_252d_beta"].notna().any() else None,
+                "min": float(daily_df["rolling_252d_beta"].min())
+                if not daily_df.empty
+                and daily_df["rolling_252d_beta"].notna().any()
+                else None,
+                "median": float(daily_df["rolling_252d_beta"].median())
+                if not daily_df.empty
+                and daily_df["rolling_252d_beta"].notna().any()
+                else None,
+                "max": float(daily_df["rolling_252d_beta"].max())
+                if not daily_df.empty
+                and daily_df["rolling_252d_beta"].notna().any()
+                else None,
             },
         },
-        "exhibit_5_calendar_year_returns": cal_years.reset_index().rename(columns={"month": "year"}).to_dict(orient="records"),
+        "exhibit_5_calendar_year_returns": cal_years.reset_index()
+        .rename(columns={"month": "year"})
+        .to_dict(orient="records"),
         "exhibit_6_return_distribution": {
             "monthly_returns": [
-                {"month": str(idx), "total_return": float(monthly_eval_df.loc[idx, "total"]), "benchmark_return": float(monthly_eval_df.loc[idx, "benchmark"])}
+                {
+                    "month": str(idx),
+                    "total_return": float(monthly_eval_df.loc[idx, "total"]),
+                    "benchmark_return": float(
+                        monthly_eval_df.loc[idx, "benchmark"]
+                    ),
+                }
                 for idx in monthly_eval_df.index
             ],
             "daily_quantiles": (
@@ -642,8 +883,12 @@ def export_submission_and_exhibits(
                 else {}
             ),
         },
-        "exhibit_7_top_10_long_and_short_holdings": top_hold_df.to_dict(orient="records"),
-        "exhibit_8_top_10_positive_and_negative_contributors": contrib_df.to_dict(orient="records"),
+        "exhibit_7_top_10_long_and_short_holdings": top_hold_df.to_dict(
+            orient="records"
+        ),
+        "exhibit_8_top_10_positive_and_negative_contributors": contrib_df.to_dict(
+            orient="records"
+        ),
         "adv_days_distribution": adv_distribution,
     }
     (out_dir / "exhibits_9_4.json").write_text(

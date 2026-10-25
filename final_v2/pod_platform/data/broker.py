@@ -92,8 +92,12 @@ class DataBroker:
                     summary=f"source {source_id} is not approved for historical formation",
                     code=ErrorCode.SOURCE_NOT_FORMATION_ELIGIBLE,
                     provenance={"source_id": source_id},
-                    limitations=["Historical vintage reconstruction is unresolved."],
-                    next_actions=["Request the source assessment or use an approved source."],
+                    limitations=[
+                        "Historical vintage reconstruction is unresolved."
+                    ],
+                    next_actions=[
+                        "Request the source assessment or use an approved source."
+                    ],
                     stop_condition="No formation query until an approved source-card version exists.",
                 )
             )
@@ -122,7 +126,9 @@ class DataBroker:
                 report.record("late_start_source_absent_before_start", "pass")
                 report.record("feature_availability_precedes_cutoff", "pass")
                 report.record("identity_links_valid_at_event_time", "pass")
-                report.record("aggregation_windows_end_before_availability", "pass")
+                report.record(
+                    "aggregation_windows_end_before_availability", "pass"
+                )
                 report.record("training_labels_resolved_before_cutoff", "pass")
                 return [], report
         report.record("late_start_source_absent_before_start", "pass")

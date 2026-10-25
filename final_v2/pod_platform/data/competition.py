@@ -43,9 +43,15 @@ class MaterializationReport:
 class CharsPanelLoader:
     SOURCE_ID = "comp_chars_panel"
 
-    def __init__(self, panel_path: str | Path, factor_list_path: Optional[str | Path] = None):
+    def __init__(
+        self,
+        panel_path: str | Path,
+        factor_list_path: Optional[str | Path] = None,
+    ):
         self._path = Path(panel_path)
-        self._factor_list_path = Path(factor_list_path) if factor_list_path else None
+        self._factor_list_path = (
+            Path(factor_list_path) if factor_list_path else None
+        )
         self._panel: Optional[pd.DataFrame] = None
 
     @property
@@ -67,7 +73,9 @@ class CharsPanelLoader:
                 "company_name",
             ]
             if self._factor_list_path is not None:
-                factors = pd.read_csv(self._factor_list_path)["variable"].tolist()
+                factors = pd.read_csv(self._factor_list_path)[
+                    "variable"
+                ].tolist()
                 columns.extend(c for c in factors if c not in columns)
             panel = pd.read_parquet(self._path, columns=columns)
             panel["eom"] = pd.to_datetime(panel["eom"])
@@ -77,7 +85,11 @@ class CharsPanelLoader:
         return self._panel
 
     def formation_month(
-        self, eom: dt.datetime, *, max_price: float = 5.0, min_dolvol: float = 0.0
+        self,
+        eom: dt.datetime,
+        *,
+        max_price: float = 5.0,
+        min_dolvol: float = 0.0,
     ) -> tuple[pd.DataFrame, MaterializationReport]:
         eom = pd.Timestamp(require_aware(eom, "eom").date())
         panel = self.load()
@@ -108,7 +120,10 @@ class CharsPanelLoader:
         else:
             report.record("labels_present_for_evaluation", "pass")
 
-        if tradable["ticker"].isna().any() or tradable["company_name"].isna().any():
+        if (
+            tradable["ticker"].isna().any()
+            or tradable["company_name"].isna().any()
+        ):
             report.record("identity_labels_present", "warn")
         else:
             report.record("identity_labels_present", "pass")
@@ -127,7 +142,9 @@ class FilingCorpusLoader:
     def __init__(self, corpus_path: str | Path):
         self._path = Path(corpus_path)
 
-    def load_counts(self, month_start: dt.datetime, month_end: dt.datetime) -> pd.DataFrame:
+    def load_counts(
+        self, month_start: dt.datetime, month_end: dt.datetime
+    ) -> pd.DataFrame:
         month_start = require_aware(month_start, "month_start")
         month_end = require_aware(month_end, "month_end")
         filings = pd.read_parquet(
@@ -142,15 +159,15 @@ class FilingCorpusLoader:
                 "characteristics_link_date",
             ],
         )
-        filings["accepted"] = pd.to_datetime(filings["sec_accepted_at_utc"], utc=True)
+        filings["accepted"] = pd.to_datetime(
+            filings["sec_accepted_at_utc"], utc=True
+        )
         window = filings[
-            (filings["accepted"] >= month_start) & (filings["accepted"] <= month_end)
+            (filings["accepted"] >= month_start)
+            & (filings["accepted"] <= month_end)
         ].copy()
         window = window[window["is_amendment"] == False]  # noqa: E712
         counts = (
-            window.groupby("permno")
-            .size()
-            .rename("filing_count")
-            .reset_index()
+            window.groupby("permno").size().rename("filing_count").reset_index()
         )
         return counts

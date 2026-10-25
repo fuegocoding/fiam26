@@ -8,7 +8,13 @@ from typing import Optional
 
 from pydantic import Field, model_validator
 
-from ..contracts.base import DIGEST_FIELD, DurableModel, StrictModel, canonical_digest, require_aware
+from ..contracts.base import (
+    DIGEST_FIELD,
+    DurableModel,
+    StrictModel,
+    canonical_digest,
+    require_aware,
+)
 from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
 from .certificates import CertificateScope
 
@@ -32,17 +38,43 @@ class ModelState(str, enum.Enum):
 
 ALLOWED_TRANSITIONS: dict[ModelState, frozenset[ModelState]] = {
     ModelState.IDEA: frozenset({ModelState.REGISTERED, ModelState.REJECTED}),
-    ModelState.REGISTERED: frozenset({ModelState.DATA_READY, ModelState.REJECTED}),
-    ModelState.DATA_READY: frozenset({ModelState.DEVELOPMENT, ModelState.REJECTED}),
-    ModelState.DEVELOPMENT: frozenset({ModelState.CHALLENGED, ModelState.REJECTED, ModelState.DESCRIPTIVE_ONLY}),
-    ModelState.CHALLENGED: frozenset(
-        {ModelState.CHECK_ELIGIBLE, ModelState.REJECTED, ModelState.DESCRIPTIVE_ONLY, ModelState.DEVELOPMENT}
+    ModelState.REGISTERED: frozenset(
+        {ModelState.DATA_READY, ModelState.REJECTED}
     ),
-    ModelState.CHECK_ELIGIBLE: frozenset({ModelState.SHADOW, ModelState.REJECTED, ModelState.DESCRIPTIVE_ONLY}),
-    ModelState.SHADOW: frozenset({ModelState.ADMITTED, ModelState.REJECTED, ModelState.DESCRIPTIVE_ONLY}),
-    ModelState.ADMITTED: frozenset({ModelState.MONITORED, ModelState.SUSPENDED, ModelState.RETIRED}),
+    ModelState.DATA_READY: frozenset(
+        {ModelState.DEVELOPMENT, ModelState.REJECTED}
+    ),
+    ModelState.DEVELOPMENT: frozenset(
+        {
+            ModelState.CHALLENGED,
+            ModelState.REJECTED,
+            ModelState.DESCRIPTIVE_ONLY,
+        }
+    ),
+    ModelState.CHALLENGED: frozenset(
+        {
+            ModelState.CHECK_ELIGIBLE,
+            ModelState.REJECTED,
+            ModelState.DESCRIPTIVE_ONLY,
+            ModelState.DEVELOPMENT,
+        }
+    ),
+    ModelState.CHECK_ELIGIBLE: frozenset(
+        {ModelState.SHADOW, ModelState.REJECTED, ModelState.DESCRIPTIVE_ONLY}
+    ),
+    ModelState.SHADOW: frozenset(
+        {ModelState.ADMITTED, ModelState.REJECTED, ModelState.DESCRIPTIVE_ONLY}
+    ),
+    ModelState.ADMITTED: frozenset(
+        {ModelState.MONITORED, ModelState.SUSPENDED, ModelState.RETIRED}
+    ),
     ModelState.MONITORED: frozenset(
-        {ModelState.REVISED, ModelState.SUSPENDED, ModelState.RETIRED, ModelState.ADMITTED}
+        {
+            ModelState.REVISED,
+            ModelState.SUSPENDED,
+            ModelState.RETIRED,
+            ModelState.ADMITTED,
+        }
     ),
     ModelState.REVISED: frozenset({ModelState.DEVELOPMENT, ModelState.RETIRED}),
     ModelState.SUSPENDED: frozenset({ModelState.MONITORED, ModelState.RETIRED}),
@@ -100,7 +132,9 @@ class AdmissionCertificate(DurableModel):
         require_aware(self.effective_start, "effective_start")
         if self.scope is not None and self.scope.valid_until is not None:
             if self.scope.valid_until <= self.effective_start:
-                raise ValueError("scope.valid_until must lie after effective_start")
+                raise ValueError(
+                    "scope.valid_until must lie after effective_start"
+                )
         return self
 
     def digest(self) -> str:
@@ -116,9 +150,15 @@ class AdmissionCertificate(DurableModel):
         if when < self.effective_start:
             return False
         if self.scope is not None:
-            if self.scope.valid_from is not None and when < self.scope.valid_from:
+            if (
+                self.scope.valid_from is not None
+                and when < self.scope.valid_from
+            ):
                 return False
-            if self.scope.valid_until is not None and when >= self.scope.valid_until:
+            if (
+                self.scope.valid_until is not None
+                and when >= self.scope.valid_until
+            ):
                 return False
         return True
 
@@ -165,7 +205,9 @@ class PromotionOutcome(StrictModel):
             )
         )
 
-    def certificate_or_raise(self, model_id: str, model_hash: str, **kwargs) -> AdmissionCertificate:
+    def certificate_or_raise(
+        self, model_id: str, model_hash: str, **kwargs
+    ) -> AdmissionCertificate:
         if not self.admitted:
             missing = [
                 name
@@ -225,4 +267,7 @@ class ModelLifecycle:
         return [t for t in self._transitions if t.model_id == model_id]
 
     def admitted(self, model_id: str) -> bool:
-        return self.state(model_id) in (ModelState.ADMITTED, ModelState.MONITORED)
+        return self.state(model_id) in (
+            ModelState.ADMITTED,
+            ModelState.MONITORED,
+        )

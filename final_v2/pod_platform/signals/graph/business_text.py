@@ -157,12 +157,18 @@ def build_profiles(
                         "permco": filing["permco"],
                         "document_id": filing["document_id"],
                         "available_at": (
-                            pd.Timestamp(filing["filing_date"], tz="UTC") + end_of_day
+                            pd.Timestamp(filing["filing_date"], tz="UTC")
+                            + end_of_day
                         ),
                         "business_description": description
-                        or extract_durable_business_language(filing["text"], name),
+                        or extract_durable_business_language(
+                            filing["text"], name
+                        ),
                         "event_text": event_text(
-                            filing["title"], filing["items"], filing["text"], name
+                            filing["title"],
+                            filing["items"],
+                            filing["text"],
+                            name,
                         ),
                     }
                 )
@@ -195,7 +201,8 @@ def extract_business_description(
     name_tokens = [
         token.lower()
         for token in re.findall(r"[A-Za-z]{4,}", company_name or "")
-        if token.lower() not in {"corporation", "company", "incorporated", "holdings"}
+        if token.lower()
+        not in {"corporation", "company", "incorporated", "holdings"}
     ]
     for match in reversed(list(_SUMMARY.finditer(tail))):
         start = max(0, match.start() - 180)

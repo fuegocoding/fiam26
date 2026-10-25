@@ -1,0 +1,3032 @@
+{
+  "application": {
+    "mode": "research",
+    "state_dir": "${project_root}/final_v2/.pod_state/platform",
+    "output_dir": "${project_root}/final_v2/.pod_state/platform/output",
+    "run_id": "strategy_pods_v1",
+    "online_papers": false,
+    "paper_queries": [],
+    "papers_per_query": 5,
+    "paper_ids": [],
+    "manifest": "${project_root}/final_v2/.pod_state/datasets/competition_design.json",
+    "dataset_id": "comp_chars_design",
+    "papers_db": "${project_root}/final_v2/.pod_state/year_trial_2025/papers.sqlite",
+    "research_asof": "2026-10-25T20:00:00+00:00",
+    "max_iterations": 4
+  },
+  "models": {
+    "online": false,
+    "roles": {
+      "lead": {
+        "provider": "openai",
+        "model": "",
+        "base_url": "",
+        "api_key_env": "RESEARCH_LEAD_API_KEY",
+        "max_calls": 4,
+        "max_tokens": 60000
+      },
+      "challenger": {
+        "provider": "openai",
+        "model": "",
+        "base_url": "",
+        "api_key_env": "RESEARCH_CHALLENGER_API_KEY",
+        "max_calls": 4,
+        "max_tokens": 60000
+      },
+      "extractor": {
+        "provider": "openai",
+        "model": "",
+        "base_url": "",
+        "api_key_env": "RESEARCH_EXTRACTOR_API_KEY",
+        "max_calls": 4,
+        "max_tokens": 60000
+      }
+    }
+  },
+  "carbon": {
+    "allow_remote": true,
+    "max_analytical_calls": 4,
+    "max_metadata_calls": 40,
+    "max_calls_per_pod": 3,
+    "max_requests": 100,
+    "max_rows": 5000,
+    "max_days": 366,
+    "max_response_bytes": 2000000,
+    "capabilities": [],
+    "requests": []
+  },
+  "research": {
+    "measurement_grants": [],
+    "compositions": [],
+    "observation_sources": [],
+    "financial_reviews": [],
+    "proposals": []
+  },
+  "portfolio": {
+    "input_dir": null,
+    "certificate_policy": "production"
+  },
+  "mcp": {
+    "role": "strategy",
+    "pod": "fundamentals",
+    "online": false
+  },
+  "carbonarc_check_access": {
+    "env_file": "${project_root}/local/carbonarc-api.env",
+    "output": "${project_root}/data/carbonarc/catalog"
+  },
+  "carbonarc_download": {
+    "command": null,
+    "output": null,
+    "seed": null,
+    "config": "/home/francklin99/.codex/config.toml",
+    "server": "carbonarc",
+    "url": null,
+    "auth_dir": "${project_root}/local/carbonarc-auth",
+    "callback_port": 8765,
+    "wait_for_login": false,
+    "discovery_only": false,
+    "start": null,
+    "fallback_start": "1900-01-01",
+    "end": "2026-10-25",
+    "max_requests": 0,
+    "max_paid_requests": 0
+  },
+  "check_daily_reporting": {
+    "file": null,
+    "security_id": [],
+    "start": null,
+    "end": null,
+    "out": null,
+    "inputs_json": null,
+    "descriptive": false,
+    "overwrite": false
+  },
+  "discover_alt_sources": {
+    "query": null,
+    "online": false,
+    "namespace": "pod_fundamentals",
+    "state_dir": "${project_root}/final_v2/.pod_state/source_discovery",
+    "limit": 5
+  },
+  "export_arcana": {
+    "input": null,
+    "out": null,
+    "mapping": null,
+    "schema": null,
+    "weight_unit": "decimal",
+    "source_file": [],
+    "descriptive": false,
+    "overwrite": false
+  },
+  "replay_component_research": {
+    "from_research": null,
+    "state_dir": null,
+    "manifest": null,
+    "papers_db": null
+  },
+  "research_papers": {
+    "db": "${project_root}/final_v2/artifacts/papers/papers.sqlite",
+    "online": false,
+    "timeout": 20.0,
+    "as_of": null,
+    "query": null,
+    "limit": 10,
+    "paper_id": null,
+    "refresh": false,
+    "text_chars": 0,
+    "file": null,
+    "title": null,
+    "first_public": null,
+    "version_date": null,
+    "doi": null,
+    "author": [],
+    "kind": null,
+    "quote": null,
+    "text": null,
+    "source": "full_text",
+    "label": null,
+    "deviation": [],
+    "comparison_plan": null,
+    "method_id": null,
+    "version": null,
+    "target": [],
+    "baseline": [],
+    "assumption": [],
+    "min_history": null,
+    "failure_mode": [],
+    "reference_impl": null,
+    "cmd": null
+  },
+  "research_scheduler": {
+    "state_dir": null,
+    "pod": null,
+    "executor_id": [],
+    "weekly_quota": null,
+    "monthly_quota": null,
+    "cohort_maturity_days": 5,
+    "max_failures_per_line": 2,
+    "kind": null,
+    "subject": null,
+    "question": null,
+    "scores": null,
+    "payload_file": null,
+    "line_id": null,
+    "depends_on": [],
+    "cohort_month": null,
+    "redundancy_key": null,
+    "reason": null,
+    "command": null
+  },
+  "research_watch": {
+    "state_dir": null,
+    "pod": null,
+    "watch_id": null,
+    "topic": null,
+    "question": null,
+    "cadence_hours": null,
+    "executor_id": [],
+    "search_limit": 10,
+    "papers_per_job": 3,
+    "max_jobs": 1,
+    "online": false,
+    "papers_db": null,
+    "timeout": 20.0,
+    "command": null
+  },
+  "run_autonomous_pods": {
+    "state_dir": null,
+    "fixture": false,
+    "online": false,
+    "serving_profiles": null,
+    "manifest": null,
+    "run_id": "research_v1",
+    "max_jobs": 16,
+    "max_iterations": 4
+  },
+  "run_candidate_challenge": {
+    "manifest": null,
+    "state_dir": null,
+    "registration_id": null,
+    "variant": null,
+    "registered_at": null,
+    "policy_frozen_at": null,
+    "evaluation_asof": null,
+    "check_start": null,
+    "check_end": null,
+    "family_budget": 1,
+    "multiplicity": null,
+    "authority_key": null
+  },
+  "run_complete_platform": {
+    "mode": "demo",
+    "state_dir": null,
+    "output_dir": null,
+    "run_id": "complete_fixture_v1",
+    "coordination_policy": null,
+    "max_jobs": 16,
+    "max_iterations": 4,
+    "manifest": null,
+    "dataset_id": null,
+    "research_asof": null,
+    "fixture_year": null
+  },
+  "run_component_probe": {
+    "manifest": null,
+    "state_dir": null,
+    "spec": null,
+    "run": false
+  },
+  "run_controlled_replay": {
+    "fixture": null,
+    "out": null,
+    "research_only": false,
+    "overwrite": false
+  },
+  "run_coordinated_replay": {
+    "fixture": null,
+    "out": null,
+    "coordination_policy": null,
+    "risk_inputs": null,
+    "research_only": false,
+    "overwrite": false
+  },
+  "run_paper_adaptation": {
+    "command": null,
+    "state_dir": null,
+    "manifest": null,
+    "review": null,
+    "adaptation_id": null,
+    "submit": false,
+    "papers_db": null
+  },
+  "run_pod_research": {
+    "state_dir": null,
+    "pod": null,
+    "question": null,
+    "paper_cards": null,
+    "dataset_cards": null,
+    "source_cards": null,
+    "mode": "contemporary",
+    "research_asof": null,
+    "checkpoint_id": null,
+    "policy": "release_gated",
+    "executor_id": [],
+    "idempotency_key": null,
+    "max_attempts": 2,
+    "state": null,
+    "limit": 50,
+    "job_id": null,
+    "kind": null,
+    "demo": false,
+    "online": false,
+    "provider": null,
+    "base_url": null,
+    "model": null,
+    "api_key_env": null,
+    "timeout": 180.0,
+    "registry_file": null,
+    "executors_module": null,
+    "dataset_manifest": null,
+    "max_jobs": 5,
+    "max_calls": 10,
+    "max_tokens": 100000,
+    "budget_id": null,
+    "budget_cycle": "default",
+    "budget_scope": "shared",
+    "raise_budget_limits": false,
+    "worker_id": "cli-worker",
+    "lease_seconds": 600.0,
+    "command": null
+  },
+  "run_reference": {
+    "mode": null,
+    "state_dir": null,
+    "output_dir": null,
+    "run_id": "reference_v1",
+    "manifest": null,
+    "dataset_id": null,
+    "research_asof": null,
+    "data": [],
+    "fixture": null,
+    "label": "test"
+  },
+  "run_reviewed_year_controls": {
+    "from_run": null,
+    "state_dir": null,
+    "manifest": null,
+    "papers_db": null
+  },
+  "run_strategy_research": {
+    "manifest": null,
+    "dataset_id": null,
+    "state_dir": null,
+    "research_asof": null,
+    "campaign_config": null,
+    "charter": [],
+    "variant_budget": null,
+    "output": null,
+    "summary": false,
+    "fixture_demo": null
+  },
+  "run_year_research_trial": {
+    "state_dir": null,
+    "manifest": null,
+    "dataset_id": null,
+    "papers_db": null,
+    "prepared_papers": null,
+    "source_discovery": null,
+    "daily_csv": null,
+    "year": 2025,
+    "max_calls": 40,
+    "online": false,
+    "budget_dir": null,
+    "active_months": null,
+    "predecessor": null,
+    "min_call_interval": 45
+  },
+  "summarize_year_trial": {
+    "state_root": null,
+    "output": null
+  },
+  "try_strategy_models": {
+    "command": "plan",
+    "endpoints": "${project_root}/final_v2/configs/models/serving.example.json",
+    "provenance": "${project_root}/final_v2/configs/models/upstream_metadata.json",
+    "tasks": "${project_root}/final_v2/configs/models/benchmark_v1.json",
+    "packet": "${project_root}/final_v2/configs/models/trial_packet.example.json",
+    "state_dir": "${project_root}/final_v2/.pod_state/strategy_model_trials",
+    "trial_id": "initial",
+    "cycle": "initial",
+    "role": "extractor",
+    "stage": "challenger",
+    "limit": 3,
+    "repeats": 1,
+    "max_calls": 3,
+    "max_tokens": 40000,
+    "online": false
+  },
+  "_utility_schemas": {
+    "research_papers": {
+      "fields": {
+        "db": {
+          "default": "/home/francklin99/Desktop/Coding/fiam26/final_v2/artifacts/papers/papers.sqlite",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "online": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "timeout": {
+          "default": 20.0,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "float",
+          "choices": null
+        }
+      },
+      "command_field": "cmd",
+      "commands": {
+        "search": {
+          "fields": {
+            "as_of": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "query": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "limit": {
+              "default": 10,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "show": {
+          "fields": {
+            "as_of": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "paper_id": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "refresh": {
+              "default": false,
+              "action": "store_true",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "text_chars": {
+              "default": 0,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "ingest": {
+          "fields": {
+            "as_of": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "paper_id": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "ingest-local": {
+          "fields": {
+            "file": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "title": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "first_public": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "version_date": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "doi": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "author": {
+              "default": [],
+              "action": "append",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "claim": {
+          "fields": {
+            "as_of": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "paper_id": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "kind": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "quote": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "text": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "source": {
+              "default": "full_text",
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "full_text",
+                "abstract"
+              ]
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "extract-claims": {
+          "fields": {
+            "as_of": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "paper_id": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "replicate": {
+          "fields": {
+            "as_of": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "paper_id": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "label": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "EXACT_REPLICATION",
+                "CLOSE_REPLICATION",
+                "MECHANISM_TRANSFER",
+                "METHOD_TRANSFER",
+                "INCOMPLETE"
+              ]
+            },
+            "deviation": {
+              "default": [],
+              "action": "append",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "comparison_plan": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "method": {
+          "fields": {
+            "method_id": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "version": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "paper_id": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "target": {
+              "default": [],
+              "action": "append",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "baseline": {
+              "default": [],
+              "action": "append",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "assumption": {
+              "default": [],
+              "action": "append",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "min_history": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "failure_mode": {
+              "default": [],
+              "action": "append",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "reference_impl": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        }
+      },
+      "defaults": {}
+    },
+    "run_pod_research": {
+      "fields": {},
+      "command_field": "command",
+      "commands": {
+        "submit": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            },
+            "question": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "paper_cards": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "dataset_cards": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "source_cards": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "mode": {
+              "default": "contemporary",
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "historical",
+                "contemporary"
+              ]
+            },
+            "research_asof": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "checkpoint_id": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "policy": {
+              "default": "release_gated",
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "release_gated",
+                "cutoff_qualified_backcast"
+              ]
+            },
+            "executor_id": {
+              "default": [],
+              "action": "append",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "idempotency_key": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "max_attempts": {
+              "default": 2,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {
+            "func": "cmd_submit"
+          }
+        },
+        "list": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            },
+            "state": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed"
+              ]
+            },
+            "limit": {
+              "default": 50,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {
+            "func": "cmd_list"
+          }
+        },
+        "show": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "job_id": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {
+            "func": "cmd_show"
+          }
+        },
+        "memory": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            },
+            "kind": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "limit": {
+              "default": 50,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {
+            "func": "cmd_memory"
+          }
+        },
+        "run": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "demo": {
+              "default": false,
+              "action": "store_true",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "online": {
+              "default": false,
+              "action": "store_true",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "provider": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "openai",
+                "claude-code"
+              ]
+            },
+            "base_url": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "model": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "api_key_env": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "timeout": {
+              "default": 180.0,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "float",
+              "choices": null
+            },
+            "registry_file": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "executors_module": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "dataset_manifest": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "max_jobs": {
+              "default": 5,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            },
+            "max_calls": {
+              "default": 10,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            },
+            "max_tokens": {
+              "default": 100000,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            },
+            "budget_id": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "budget_cycle": {
+              "default": "default",
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "budget_scope": {
+              "default": "shared",
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "shared",
+                "per-pod"
+              ]
+            },
+            "raise_budget_limits": {
+              "default": false,
+              "action": "store_true",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "worker_id": {
+              "default": "cli-worker",
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "lease_seconds": {
+              "default": 600.0,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "float",
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {
+            "func": "cmd_run"
+          }
+        }
+      },
+      "defaults": {}
+    },
+    "run_controlled_replay": {
+      "fields": {
+        "fixture": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "out": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "research_only": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "overwrite": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "research_watch": {
+      "fields": {},
+      "command_field": "command",
+      "commands": {
+        "add": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            },
+            "watch_id": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "topic": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "question": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "cadence_hours": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": "float",
+              "choices": null
+            },
+            "executor_id": {
+              "default": [],
+              "action": "append",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "search_limit": {
+              "default": 10,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            },
+            "papers_per_job": {
+              "default": 3,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            },
+            "max_jobs": {
+              "default": 1,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "list": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "tick": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            },
+            "watch_id": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "online": {
+              "default": false,
+              "action": "store_true",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "papers_db": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "timeout": {
+              "default": 20.0,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "float",
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        }
+      },
+      "defaults": {}
+    },
+    "check_daily_reporting": {
+      "fields": {
+        "file": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "security_id": {
+          "default": [],
+          "action": "append",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "start": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "end": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "out": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "inputs_json": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "descriptive": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "overwrite": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "export_arcana": {
+      "fields": {
+        "input": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "out": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "mapping": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "schema": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "weight_unit": {
+          "default": "decimal",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": [
+            "decimal",
+            "percent"
+          ]
+        },
+        "source_file": {
+          "default": [],
+          "action": "append",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "descriptive": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "overwrite": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "run_reference": {
+      "fields": {
+        "mode": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": [
+            "demo",
+            "research",
+            "replay"
+          ]
+        },
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "output_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "run_id": {
+          "default": "reference_v1",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "dataset_id": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "research_asof": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "data": {
+          "default": [],
+          "action": "append",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "fixture": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "label": {
+          "default": "test",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": [
+            "test",
+            "formation"
+          ]
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "run_strategy_research": {
+      "fields": {
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "dataset_id": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "research_asof": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "campaign_config": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "charter": {
+          "default": [],
+          "action": "append",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "variant_budget": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "output": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "summary": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "fixture_demo": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "try_strategy_models": {
+      "fields": {
+        "command": {
+          "default": "plan",
+          "action": "store",
+          "required": false,
+          "nargs": "?",
+          "converter": null,
+          "choices": [
+            "plan",
+            "workflow",
+            "benchmark"
+          ]
+        },
+        "endpoints": {
+          "default": "${project_root}/final_v2/configs/models/serving.example.json",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "provenance": {
+          "default": "${project_root}/final_v2/configs/models/upstream_metadata.json",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "tasks": {
+          "default": "${project_root}/final_v2/configs/models/benchmark_v1.json",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "packet": {
+          "default": "${project_root}/final_v2/configs/models/trial_packet.example.json",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "state_dir": {
+          "default": "${project_root}/final_v2/.pod_state/strategy_model_trials",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "trial_id": {
+          "default": "initial",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "cycle": {
+          "default": "initial",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "role": {
+          "default": "extractor",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": [
+            "lead",
+            "challenger",
+            "extractor",
+            "lead_upgrade"
+          ]
+        },
+        "stage": {
+          "default": "challenger",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": [
+            "extractor",
+            "lead",
+            "challenger"
+          ]
+        },
+        "limit": {
+          "default": 3,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "repeats": {
+          "default": 1,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "max_calls": {
+          "default": 3,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "max_tokens": {
+          "default": 40000,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "online": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "discover_alt_sources": {
+      "fields": {
+        "query": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "online": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "namespace": {
+          "default": "pod_fundamentals",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": [
+            "pod_fundamentals",
+            "pod_events",
+            "pod_valuation",
+            "pod_dynamics"
+          ]
+        },
+        "state_dir": {
+          "default": "${project_root}/final_v2/.pod_state/source_discovery",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "limit": {
+          "default": 5,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "research_scheduler": {
+      "fields": {},
+      "command_field": "command",
+      "commands": {
+        "configure": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            },
+            "executor_id": {
+              "default": [],
+              "action": "append",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "weekly_quota": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "monthly_quota": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "cohort_maturity_days": {
+              "default": 5,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            },
+            "max_failures_per_line": {
+              "default": 2,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": "int",
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "add-trigger": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            },
+            "kind": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "calibration",
+                "cost",
+                "coverage",
+                "paper",
+                "replication",
+                "source"
+              ]
+            },
+            "subject": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "question": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "scores": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "payload_file": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "line_id": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "depends_on": {
+              "default": [],
+              "action": "append",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "cohort_month": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "redundancy_key": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "tick": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "status": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        },
+        "pause": {
+          "fields": {
+            "state_dir": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "pod": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": [
+                "dynamics",
+                "events",
+                "fundamentals",
+                "valuation"
+              ]
+            },
+            "reason": {
+              "default": null,
+              "action": "store",
+              "required": true,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            },
+            "line_id": {
+              "default": null,
+              "action": "store",
+              "required": false,
+              "nargs": null,
+              "converter": null,
+              "choices": null
+            }
+          },
+          "command_field": null,
+          "commands": {},
+          "defaults": {}
+        }
+      },
+      "defaults": {}
+    },
+    "run_autonomous_pods": {
+      "fields": {
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "fixture": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "online": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "serving_profiles": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "run_id": {
+          "default": "research_v1",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "max_jobs": {
+          "default": 16,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "max_iterations": {
+          "default": 4,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "run_candidate_challenge": {
+      "fields": {
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "registration_id": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "variant": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "registered_at": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "_dt",
+          "choices": null
+        },
+        "policy_frozen_at": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "_dt",
+          "choices": null
+        },
+        "evaluation_asof": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "_dt",
+          "choices": null
+        },
+        "check_start": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "dt.date.fromisoformat",
+          "choices": null
+        },
+        "check_end": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "dt.date.fromisoformat",
+          "choices": null
+        },
+        "family_budget": {
+          "default": 1,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "multiplicity": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "authority_key": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "run_complete_platform": {
+      "fields": {
+        "mode": {
+          "default": "demo",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": [
+            "demo",
+            "research"
+          ]
+        },
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "output_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "run_id": {
+          "default": "complete_fixture_v1",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "coordination_policy": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "max_jobs": {
+          "default": 16,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "max_iterations": {
+          "default": 4,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "dataset_id": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "research_asof": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "fixture_year": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "run_coordinated_replay": {
+      "fields": {
+        "fixture": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "out": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "coordination_policy": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "risk_inputs": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "research_only": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "overwrite": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "run_paper_adaptation": {
+      "fields": {
+        "command": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": [
+            "adapt",
+            "submit",
+            "execute",
+            "lineage"
+          ]
+        },
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "review": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "adaptation_id": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "submit": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "papers_db": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "run_year_research_trial": {
+      "fields": {
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "dataset_id": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "papers_db": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "prepared_papers": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "source_discovery": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "daily_csv": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "year": {
+          "default": 2025,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "max_calls": {
+          "default": 40,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "online": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "budget_dir": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "active_months": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": "+",
+          "converter": "int",
+          "choices": null
+        },
+        "predecessor": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "min_call_interval": {
+          "default": 45,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "float",
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "summarize_year_trial": {
+      "fields": {
+        "state_root": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "output": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "run_reviewed_year_controls": {
+      "fields": {
+        "from_run": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "papers_db": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "replay_component_research": {
+      "fields": {
+        "from_research": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "papers_db": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "run_component_probe": {
+      "fields": {
+        "manifest": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "state_dir": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "spec": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "run": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "carbonarc_check_access": {
+      "fields": {
+        "env_file": {
+          "default": "${project_root}/local/carbonarc-api.env",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "output": {
+          "default": "${project_root}/data/carbonarc/catalog",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    },
+    "carbonarc_download": {
+      "fields": {
+        "command": {
+          "default": null,
+          "action": "store",
+          "required": true,
+          "nargs": null,
+          "converter": null,
+          "choices": [
+            "prepare",
+            "login",
+            "inspect",
+            "run",
+            "start",
+            "status",
+            "catalog-prepare",
+            "catalog-run",
+            "catalog-status"
+          ]
+        },
+        "output": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "seed": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "config": {
+          "default": "/home/francklin99/.codex/config.toml",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "server": {
+          "default": "carbonarc",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "url": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "auth_dir": {
+          "default": "${project_root}/local/carbonarc-auth",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "config_path",
+          "choices": null
+        },
+        "callback_port": {
+          "default": 8765,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "wait_for_login": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "discovery_only": {
+          "default": false,
+          "action": "store_true",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "start": {
+          "default": null,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "fallback_start": {
+          "default": "1900-01-01",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "end": {
+          "default": "2026-10-25",
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": null,
+          "choices": null
+        },
+        "max_requests": {
+          "default": 0,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        },
+        "max_paid_requests": {
+          "default": 0,
+          "action": "store",
+          "required": false,
+          "nargs": null,
+          "converter": "int",
+          "choices": null
+        }
+      },
+      "command_field": null,
+      "commands": {},
+      "defaults": {}
+    }
+  }
+}

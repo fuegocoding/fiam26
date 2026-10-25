@@ -22,12 +22,28 @@ from ...strategies.base import Charter
 from .errors import BuiltinConfigError
 
 LABEL = "@label"  # symbolic: the dataset's declared label column
-FEATURE_OPS = ("rank", "lag_rank", "change_rank", "growth_rank", "sector_rank", "rank_product")
+FEATURE_OPS = (
+    "rank",
+    "lag_rank",
+    "change_rank",
+    "growth_rank",
+    "sector_rank",
+    "rank_product",
+)
 TARGET_KINDS = ("lead", "cum_lead")
 METHODS = ("ridge", "rank_blend")
 RIDGE_LAMBDAS = (0.01, 0.05, 0.25, 1.0)
 DEFAULT_RIDGE_LAMBDA = 0.05
-ALLOWED_PARAMS = frozenset({"dataset_id", "recipe_id", "method_id", "feature_set", "ridge_lambda", "partition"})
+ALLOWED_PARAMS = frozenset(
+    {
+        "dataset_id",
+        "recipe_id",
+        "method_id",
+        "feature_set",
+        "ridge_lambda",
+        "partition",
+    }
+)
 _IDENT = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
@@ -38,7 +54,9 @@ class FeatureSpec:
     column: str
     column2: Optional[str] = None
     months: int = 0
-    sign: int = 1  # ex-ante direction used by rank_blend; ridge learns its own signs
+    sign: int = (
+        1  # ex-ante direction used by rank_blend; ridge learns its own signs
+    )
 
 
 @dataclass(frozen=True)
@@ -70,7 +88,9 @@ class Recipe:
         for name, feats in self.feature_sets:
             if name == feature_set:
                 return feats
-        raise BuiltinConfigError(f"recipe {self.recipe_id} has no feature_set {feature_set!r}; known: {[n for n, _ in self.feature_sets]}")
+        raise BuiltinConfigError(
+            f"recipe {self.recipe_id} has no feature_set {feature_set!r}; known: {[n for n, _ in self.feature_sets]}"
+        )
 
     def feature_set_names(self) -> tuple[str, ...]:
         return tuple(n for n, _ in self.feature_sets)
@@ -79,23 +99,44 @@ class Recipe:
         return canonical_digest(dataclasses.asdict(self))
 
     def uses_sector(self) -> bool:
-        used = [f.op for _, feats in self.feature_sets for f in feats] + [self.baseline.op]
+        used = [f.op for _, feats in self.feature_sets for f in feats] + [
+            self.baseline.op
+        ]
         return "sector_rank" in used or self.target.demean == "sector"
 
     def logical_columns(self, label_column: str) -> set[str]:
         """Every column the recipe reads, before operator aliases are applied (label included for the bridge)."""
         cols = {label_column}
-        specs = [self.baseline] + [f for _, feats in self.feature_sets for f in feats]
+        specs = [self.baseline] + [
+            f for _, feats in self.feature_sets for f in feats
+        ]
         for spec in specs:
             cols.add(spec.column)
             if spec.column2:
                 cols.add(spec.column2)
-        cols.add(label_column if self.target.column == LABEL else self.target.column)
+        cols.add(
+            label_column if self.target.column == LABEL else self.target.column
+        )
         return cols
 
 
-def _fs(name: str, op: str, column: str, sign: int = 1, *, column2: Optional[str] = None, months: int = 0) -> FeatureSpec:
-    return FeatureSpec(name=name, op=op, column=column, column2=column2, months=months, sign=sign)
+def _fs(
+    name: str,
+    op: str,
+    column: str,
+    sign: int = 1,
+    *,
+    column2: Optional[str] = None,
+    months: int = 0,
+) -> FeatureSpec:
+    return FeatureSpec(
+        name=name,
+        op=op,
+        column=column,
+        column2=column2,
+        months=months,
+        sign=sign,
+    )
 
 
 def _issuance_recipe(column: str) -> Recipe:
@@ -105,17 +146,34 @@ def _issuance_recipe(column: str) -> Recipe:
         mechanism_family="net_issuance",
         summary=f"Does {column} plus valuation and run-up context forecast issuance intensity six months ahead better than current intensity alone?",
         target=TargetSpec(
-            f"{column}_lead_6m", "lead", column, 6, "none",
+            f"{column}_lead_6m",
+            "lead",
+            column,
+            6,
+            "none",
             f"panel {column} six monthly rows ahead (future financing/dilution intensity)",
         ),
         baseline=_fs(f"{column}_magnitude_only", "rank", column),
         baseline_description="size-normalized event magnitude alone (current net-issuance intensity rank)",
         feature_sets=(
-            ("core", (_fs(f"{column}_rank", "rank", column, 1), _fs("be_me_rank", "rank", "be_me", -1), _fs("ret_12_1_rank", "rank", "ret_12_1", 1))),
-            ("extended", (
-                _fs(f"{column}_rank", "rank", column, 1), _fs("be_me_rank", "rank", "be_me", -1), _fs("ret_12_1_rank", "rank", "ret_12_1", 1),
-                _fs("ni_me_rank", "rank", "ni_me", -1), _fs(f"{column}_chg6", "change_rank", column, 1, months=6),
-            )),
+            (
+                "core",
+                (
+                    _fs(f"{column}_rank", "rank", column, 1),
+                    _fs("be_me_rank", "rank", "be_me", -1),
+                    _fs("ret_12_1_rank", "rank", "ret_12_1", 1),
+                ),
+            ),
+            (
+                "extended",
+                (
+                    _fs(f"{column}_rank", "rank", column, 1),
+                    _fs("be_me_rank", "rank", "be_me", -1),
+                    _fs("ret_12_1_rank", "rank", "ret_12_1", 1),
+                    _fs("ni_me_rank", "rank", "ni_me", -1),
+                    _fs(f"{column}_chg6", "change_rank", column, 1, months=6),
+                ),
+            ),
         ),
         bridge_sign=-1,
         declared_direction="higher predicted issuance intensity implies LOWER next-month excess return (dilution underappreciated); bridge sign -1",
@@ -136,15 +194,35 @@ RECIPES_LIST: tuple[Recipe, ...] = (
         charter=Charter.FUNDAMENTALS_EXPECTATIONS.value,
         mechanism_family="earnings_surprise",
         summary="Do sales growth and earnings yield add to surprise persistence when forecasting the next earnings innovation?",
-        target=TargetSpec("niq_su_lead_3m", "lead", "niq_su", 3, "none", "panel niq_su three monthly rows ahead (next reported earnings innovation proxy)"),
+        target=TargetSpec(
+            "niq_su_lead_3m",
+            "lead",
+            "niq_su",
+            3,
+            "none",
+            "panel niq_su three monthly rows ahead (next reported earnings innovation proxy)",
+        ),
         baseline=_fs("niq_su_persistence", "rank", "niq_su"),
         baseline_description="seasonal-random-walk surprise persistence (current niq_su rank)",
         feature_sets=(
-            ("core", (_fs("niq_su_rank", "rank", "niq_su", 1), _fs("sale_gr1_rank", "rank", "sale_gr1", 1), _fs("ni_me_rank", "rank", "ni_me", 1))),
-            ("extended", (
-                _fs("niq_su_rank", "rank", "niq_su", 1), _fs("sale_gr1_rank", "rank", "sale_gr1", 1), _fs("ni_me_rank", "rank", "ni_me", 1),
-                _fs("niq_su_chg3", "change_rank", "niq_su", 1, months=3), _fs("ret_12_1_rank", "rank", "ret_12_1", 1),
-            )),
+            (
+                "core",
+                (
+                    _fs("niq_su_rank", "rank", "niq_su", 1),
+                    _fs("sale_gr1_rank", "rank", "sale_gr1", 1),
+                    _fs("ni_me_rank", "rank", "ni_me", 1),
+                ),
+            ),
+            (
+                "extended",
+                (
+                    _fs("niq_su_rank", "rank", "niq_su", 1),
+                    _fs("sale_gr1_rank", "rank", "sale_gr1", 1),
+                    _fs("ni_me_rank", "rank", "ni_me", 1),
+                    _fs("niq_su_chg3", "change_rank", "niq_su", 1, months=3),
+                    _fs("ret_12_1_rank", "rank", "ret_12_1", 1),
+                ),
+            ),
         ),
         bridge_sign=1,
         declared_direction="higher predicted next earnings innovation implies higher next-month excess return; bridge sign +1",
@@ -164,15 +242,35 @@ RECIPES_LIST: tuple[Recipe, ...] = (
         charter=Charter.VALUATION_RELATIVE_VALUE.value,
         mechanism_family="value_spread",
         summary="Does valuation plus earnings yield forecast three-month sector-residual returns beyond sector-relative value alone?",
-        target=TargetSpec("sector_residual_excess_return_3m", "cum_lead", LABEL, 3, "sector", "sum of three monthly excess returns after the formation month, demeaned within sector"),
+        target=TargetSpec(
+            "sector_residual_excess_return_3m",
+            "cum_lead",
+            LABEL,
+            3,
+            "sector",
+            "sum of three monthly excess returns after the formation month, demeaned within sector",
+        ),
         baseline=_fs("sector_relative_value", "sector_rank", "be_me"),
         baseline_description="sector-relative book-to-market rank (cheapest common valuation control)",
         feature_sets=(
-            ("core", (_fs("be_me_rank", "rank", "be_me", 1), _fs("ni_me_rank", "rank", "ni_me", 1), _fs("be_me_sector_rank", "sector_rank", "be_me", 1))),
-            ("extended", (
-                _fs("be_me_rank", "rank", "be_me", 1), _fs("ni_me_rank", "rank", "ni_me", 1), _fs("be_me_sector_rank", "sector_rank", "be_me", 1),
-                _fs("niq_su_rank", "rank", "niq_su", 1), _fs("sale_gr1_rank", "rank", "sale_gr1", 1),
-            )),
+            (
+                "core",
+                (
+                    _fs("be_me_rank", "rank", "be_me", 1),
+                    _fs("ni_me_rank", "rank", "ni_me", 1),
+                    _fs("be_me_sector_rank", "sector_rank", "be_me", 1),
+                ),
+            ),
+            (
+                "extended",
+                (
+                    _fs("be_me_rank", "rank", "be_me", 1),
+                    _fs("ni_me_rank", "rank", "ni_me", 1),
+                    _fs("be_me_sector_rank", "sector_rank", "be_me", 1),
+                    _fs("niq_su_rank", "rank", "niq_su", 1),
+                    _fs("sale_gr1_rank", "rank", "sale_gr1", 1),
+                ),
+            ),
         ),
         bridge_sign=1,
         declared_direction="higher predicted residual return implies higher next-month excess return; bridge sign +1",
@@ -190,35 +288,84 @@ RECIPES_LIST: tuple[Recipe, ...] = (
         charter=Charter.VALUATION_RELATIVE_VALUE.value,
         mechanism_family="intrinsic_value",
         summary="Do cash-flow level, earnings yield and book-to-market forecast six-month-ahead operating cash flow better than persistence?",
-        target=TargetSpec("ocf_at_lead_6m", "lead", "ocf_at", 6, "none", "panel ocf_at six monthly rows ahead (cash-conversion persistence)"),
+        target=TargetSpec(
+            "ocf_at_lead_6m",
+            "lead",
+            "ocf_at",
+            6,
+            "none",
+            "panel ocf_at six monthly rows ahead (cash-conversion persistence)",
+        ),
         baseline=_fs("ocf_at_persistence", "rank", "ocf_at"),
         baseline_description="current operating cash flow to assets rank",
         feature_sets=(
-            ("core", (_fs("ocf_at_rank", "rank", "ocf_at", 1), _fs("ni_me_rank", "rank", "ni_me", 1), _fs("be_me_rank", "rank", "be_me", 1))),
-            ("extended", (
-                _fs("ocf_at_rank", "rank", "ocf_at", 1), _fs("ni_me_rank", "rank", "ni_me", 1), _fs("be_me_rank", "rank", "be_me", 1),
-                _fs("ocf_at_chg6", "change_rank", "ocf_at", 1, months=6), _fs("sale_gr1_rank", "rank", "sale_gr1", 1),
-            )),
+            (
+                "core",
+                (
+                    _fs("ocf_at_rank", "rank", "ocf_at", 1),
+                    _fs("ni_me_rank", "rank", "ni_me", 1),
+                    _fs("be_me_rank", "rank", "be_me", 1),
+                ),
+            ),
+            (
+                "extended",
+                (
+                    _fs("ocf_at_rank", "rank", "ocf_at", 1),
+                    _fs("ni_me_rank", "rank", "ni_me", 1),
+                    _fs("be_me_rank", "rank", "be_me", 1),
+                    _fs("ocf_at_chg6", "change_rank", "ocf_at", 1, months=6),
+                    _fs("sale_gr1_rank", "rank", "sale_gr1", 1),
+                ),
+            ),
         ),
         bridge_sign=1,
         declared_direction="higher predicted cash conversion implies higher next-month excess return; bridge sign +1",
-        proxy_labels=("PROXY: ocf_at is a trailing accounting ratio carried monthly; its panel date is not the filing timestamp",),
-        limitations=("A good company is not necessarily an underpriced stock; the bridge tests that translation separately.",),
+        proxy_labels=(
+            "PROXY: ocf_at is a trailing accounting ratio carried monthly; its panel date is not the filing timestamp",
+        ),
+        limitations=(
+            "A good company is not necessarily an underpriced stock; the bridge tests that translation separately.",
+        ),
     ),
     Recipe(
         recipe_id="dynamics_reversal_liquidity_v1",
         charter=Charter.MARKET_DYNAMICS.value,
         mechanism_family="short_interest_liquidity",
         summary="Do prior-month return, 12-1 momentum and dollar volume forecast next-month sector-residual returns beyond simple reversal?",
-        target=TargetSpec("sector_residual_excess_return_1m", "cum_lead", LABEL, 1, "sector", "next-month excess return demeaned within sector"),
+        target=TargetSpec(
+            "sector_residual_excess_return_1m",
+            "cum_lead",
+            LABEL,
+            1,
+            "sector",
+            "next-month excess return demeaned within sector",
+        ),
         baseline=_fs("short_term_reversal", "rank", "ret_1_0", -1),
         baseline_description="simple short-term reversal (negative prior-month return rank)",
         feature_sets=(
-            ("core", (_fs("ret_1_0_rank", "rank", "ret_1_0", -1), _fs("ret_12_1_rank", "rank", "ret_12_1", 1), _fs("dolvol_126d_rank", "rank", "dolvol_126d", -1))),
-            ("extended", (
-                _fs("ret_1_0_rank", "rank", "ret_1_0", -1), _fs("ret_12_1_rank", "rank", "ret_12_1", 1), _fs("dolvol_126d_rank", "rank", "dolvol_126d", -1),
-                _fs("reversal_x_volume", "rank_product", "ret_1_0", -1, column2="dolvol_126d"),
-            )),
+            (
+                "core",
+                (
+                    _fs("ret_1_0_rank", "rank", "ret_1_0", -1),
+                    _fs("ret_12_1_rank", "rank", "ret_12_1", 1),
+                    _fs("dolvol_126d_rank", "rank", "dolvol_126d", -1),
+                ),
+            ),
+            (
+                "extended",
+                (
+                    _fs("ret_1_0_rank", "rank", "ret_1_0", -1),
+                    _fs("ret_12_1_rank", "rank", "ret_12_1", 1),
+                    _fs("dolvol_126d_rank", "rank", "dolvol_126d", -1),
+                    _fs(
+                        "reversal_x_volume",
+                        "rank_product",
+                        "ret_1_0",
+                        -1,
+                        column2="dolvol_126d",
+                    ),
+                ),
+            ),
         ),
         bridge_sign=1,
         declared_direction="higher predicted residual return implies higher next-month excess return; bridge sign +1",
@@ -235,7 +382,8 @@ RECIPES_LIST: tuple[Recipe, ...] = (
 
 RECIPES: dict[str, Recipe] = {r.recipe_id: r for r in RECIPES_LIST}
 RECIPES_BY_CHARTER: dict[str, tuple[Recipe, ...]] = {
-    c.value: tuple(r for r in RECIPES_LIST if r.charter == c.value) for c in Charter
+    c.value: tuple(r for r in RECIPES_LIST if r.charter == c.value)
+    for c in Charter
 }
 DEFAULT_RECIPE: dict[str, str] = {
     Charter.FUNDAMENTALS_EXPECTATIONS.value: "fund_earnings_innovation_v1",
@@ -258,19 +406,35 @@ class VariantConfig:
         return dataclasses.asdict(self)
 
 
-def parse_variant_params(params: Mapping[str, Any], charter: str) -> VariantConfig:
+def parse_variant_params(
+    params: Mapping[str, Any], charter: str
+) -> VariantConfig:
     """Whitelist-parse LLM/campaign scalars. Unknown keys, paths and out-of-grid values are rejected."""
     unknown = sorted(set(params) - ALLOWED_PARAMS)
     if unknown:
-        raise BuiltinConfigError(f"unsupported variant parameter(s) {unknown}; allowed: {sorted(ALLOWED_PARAMS)}")
-    for key in ("dataset_id", "recipe_id", "method_id", "feature_set", "partition"):
+        raise BuiltinConfigError(
+            f"unsupported variant parameter(s) {unknown}; allowed: {sorted(ALLOWED_PARAMS)}"
+        )
+    for key in (
+        "dataset_id",
+        "recipe_id",
+        "method_id",
+        "feature_set",
+        "partition",
+    ):
         value = params.get(key)
-        if value is not None and (not isinstance(value, str) or not _IDENT.match(value)):
-            raise BuiltinConfigError(f"parameter {key} must be a plain identifier (paths and code are never accepted)")
+        if value is not None and (
+            not isinstance(value, str) or not _IDENT.match(value)
+        ):
+            raise BuiltinConfigError(
+                f"parameter {key} must be a plain identifier (paths and code are never accepted)"
+            )
     recipe_id = params.get("recipe_id") or DEFAULT_RECIPE[charter]
     recipe = RECIPES.get(recipe_id)
     if recipe is None or recipe.charter != charter:
-        raise BuiltinConfigError(f"recipe {recipe_id!r} is not a reviewed recipe of this executor's charter")
+        raise BuiltinConfigError(
+            f"recipe {recipe_id!r} is not a reviewed recipe of this executor's charter"
+        )
     method = params.get("method_id", "ridge")
     if method not in METHODS:
         raise BuiltinConfigError(f"method_id must be one of {METHODS}")
@@ -279,14 +443,24 @@ def parse_variant_params(params: Mapping[str, Any], charter: str) -> VariantConf
     lam: Optional[float] = None
     if method == "ridge":
         raw = params.get("ridge_lambda", DEFAULT_RIDGE_LAMBDA)
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
-            raise BuiltinConfigError("ridge_lambda must be a finite number from the reviewed grid")
+        if (
+            isinstance(raw, bool)
+            or not isinstance(raw, (int, float))
+            or not math.isfinite(raw)
+        ):
+            raise BuiltinConfigError(
+                "ridge_lambda must be a finite number from the reviewed grid"
+            )
         match = [g for g in RIDGE_LAMBDAS if abs(g - float(raw)) < 1e-12]
         if not match:
-            raise BuiltinConfigError(f"ridge_lambda must be one of {RIDGE_LAMBDAS}")
+            raise BuiltinConfigError(
+                f"ridge_lambda must be one of {RIDGE_LAMBDAS}"
+            )
         lam = match[0]
     elif "ridge_lambda" in params:
-        raise BuiltinConfigError("ridge_lambda is only valid with method_id=ridge")
+        raise BuiltinConfigError(
+            "ridge_lambda is only valid with method_id=ridge"
+        )
     return VariantConfig(
         dataset_id=params.get("dataset_id"),
         recipe_id=recipe_id,

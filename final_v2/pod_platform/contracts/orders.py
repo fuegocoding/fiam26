@@ -45,7 +45,9 @@ class Order(DurableModel):
             if value is not None:
                 finite_decimal(value, name)
         if (self.quantity_intent is None) == (self.dollar_intent is None):
-            raise ValueError("an order carries exactly one of quantity_intent or dollar_intent")
+            raise ValueError(
+                "an order carries exactly one of quantity_intent or dollar_intent"
+            )
         if self.quantity_intent is not None and self.quantity_intent == 0:
             raise ValueError("order quantity intent cannot be zero")
         if self.dollar_intent is not None and self.dollar_intent == 0:
@@ -60,7 +62,9 @@ class Order(DurableModel):
         if self.allowed_interval_end <= self.allowed_interval_start:
             raise ValueError("allowed execution interval must be non-empty")
         if self.expiry_at > self.allowed_interval_end:
-            raise ValueError("expiry cannot lie beyond the allowed execution interval")
+            raise ValueError(
+                "expiry cannot lie beyond the allowed execution interval"
+            )
         return self
 
 

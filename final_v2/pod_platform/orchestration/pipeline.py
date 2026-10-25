@@ -13,16 +13,15 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional, Sequence
 
-from ..accounting.ledger import AccountingLedger, BorrowSchedule
+from ..accounting.ledger import AccountingLedger
 from ..accounting.returns import benchmark_monthly
 from ..allocation.construction import (
     Candidate,
     ConstructionEngine,
-    InternalPolicy,
-    OfficialLimits,
 )
 from ..allocation.integration import FamilyEstimate, FamilyIntegrator
 from ..contracts.base import require_aware
+from ..contracts.decisions import ActorKind, DecisionEvent
 from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
 from ..contracts.orders import OrderSide
 from ..contracts.portfolio import RiskReview, TargetBook
@@ -35,11 +34,10 @@ from ..execution.planner import (
     LiquiditySnapshot,
     PlannedOrder,
 )
-from ..reporting.dossier import DossierBuilder, PositionDossier
+from ..reporting.dossier import DossierBuilder
 from ..reporting.tables import RequiredTable
 from ..research.registration import RegisteredExperiment, ResearchLedger
 from ..strategies.base import SecurityFeatures, StrategyCandidate
-from .run_manifest import RunManifest
 
 ZERO = Decimal("0")
 
@@ -164,7 +162,9 @@ class VerticalSlicePipeline:
         )
         artifacts.target_book = book
 
-        review = risk_engine.review(book, risk_exposures, effective_at=decision_at)
+        review = risk_engine.review(
+            book, risk_exposures, effective_at=decision_at
+        )
         artifacts.risk_review = review
         if review.decision.value == "BLOCK":
             artifacts.incidents.append(f"risk_block:{review.risk_review_id}")
@@ -172,7 +172,10 @@ class VerticalSlicePipeline:
 
         desires = self._desires_from_book(book, liquidity, starting_nav)
         orders = self._planner.plan(
-            desires, liquidity, decision_at=decision_at, target_book_id=book.target_book_id
+            desires,
+            liquidity,
+            decision_at=decision_at,
+            target_book_id=book.target_book_id,
         )
         artifacts.planned_orders = orders
 
@@ -199,8 +202,12 @@ class VerticalSlicePipeline:
             name_count=len(book.positions),
         )
 
-        sample_security = book.positions[0].security_id if book.positions else "none"
-        artifacts.dossier = self._build_dossier(sample_security, decision_at, book)
+        sample_security = (
+            book.positions[0].security_id if book.positions else "none"
+        )
+        artifacts.dossier = self._build_dossier(
+            sample_security, decision_at, book
+        )
         return artifacts
 
     def _desires_from_book(
@@ -220,7 +227,11 @@ class VerticalSlicePipeline:
                         stop_condition="No order may be planned without dated liquidity evidence.",
                     )
                 )
-            side = OrderSide.BUY if position.target_weight > ZERO else OrderSide.SHORT
+            side = (
+                OrderSide.BUY
+                if position.target_weight > ZERO
+                else OrderSide.SHORT
+            )
             desires.append(
                 DesiredTrade(
                     security_id=position.security_id,
@@ -251,7 +262,9 @@ class VerticalSlicePipeline:
                 fees=fees,
                 executed_at=decision_at,
             )
-            self._accounting.mark(order.security_id, snapshot.price, decision_at)
+            self._accounting.mark(
+                order.security_id, snapshot.price, decision_at
+            )
 
     def _reconcile_nav(self) -> Decimal:
         self._accounting.assert_nav_identity()
@@ -287,8 +300,9 @@ class VerticalSlicePipeline:
         )
         return table.as_table()
 
-    def _build_dossier(self, security_id: str, decision_at: dt.datetime, book: TargetBook) -> dict:
-        from ..contracts.decisions import ActorKind, DecisionEvent
+    def _build_dossier(
+        self, security_id: str, decision_at: dt.datetime, book: TargetBook
+    ) -> dict:
 
         event = DecisionEvent(
             owner="allocation",

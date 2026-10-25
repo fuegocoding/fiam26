@@ -24,22 +24,71 @@ ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:\-]{0,127}$"
 _ID_RE = re.compile(ID_PATTERN)
 _IDENT = r"^[a-z][a-z0-9_]{0,63}$"
 
-ID_KEYS = ("evidence_id", "card_id", "paper_id", "source_card_id", "source_id", "dataset_id", "id")
+ID_KEYS = (
+    "evidence_id",
+    "card_id",
+    "paper_id",
+    "source_card_id",
+    "source_id",
+    "dataset_id",
+    "id",
+)
 TITLE_KEYS = ("title", "name")
-TEXT_KEYS = ("summary", "abstract", "description", "key_claims", "claims", "mechanism", "notes", "limitations")
-DATE_KEYS = ("available_at", "first_public_at", "first_public_date", "published_at", "published", "as_of", "created_at")
+TEXT_KEYS = (
+    "summary",
+    "abstract",
+    "description",
+    "key_claims",
+    "claims",
+    "mechanism",
+    "notes",
+    "limitations",
+)
+DATE_KEYS = (
+    "available_at",
+    "first_public_at",
+    "first_public_date",
+    "published_at",
+    "published",
+    "as_of",
+    "created_at",
+)
 # A later revision of the text is not the text that was public on the original date:
 # the card is only available once its latest revision is.
-REVISION_KEYS = ("updated_at", "updated", "revised_at", "last_revised_at", "version_date")
+REVISION_KEYS = (
+    "updated_at",
+    "updated",
+    "revised_at",
+    "last_revised_at",
+    "version_date",
+)
 
 _INJECTION_PATTERNS = {
-    "ignore_instructions": re.compile(r"ignore\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier)", re.I),
-    "disregard": re.compile(r"disregard\s+(the\s+|all\s+)?(system|previous|instructions|rules)", re.I),
-    "role_override": re.compile(r"(you are now|act as|new instructions|system prompt|developer message)", re.I),
-    "execute_code": re.compile(r"(execute|run|eval)\s+(the\s+following\s+)?(shell|bash|python|command|code|script)", re.I),
-    "chat_markup": re.compile(r"(<\|im_start\|>|<\|system\|>|\[INST\]|###\s*system)", re.I),
-    "citation_forgery": re.compile(r"(cite|reference)\s+(only\s+)?[A-Za-z0-9_\-]+\s+(as|instead)", re.I),
-    "admission_attempt": re.compile(r"(admit|approve|deploy)\s+(this|the)?\s*(strategy|model|signal|portfolio)", re.I),
+    "ignore_instructions": re.compile(
+        r"ignore\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier)", re.I
+    ),
+    "disregard": re.compile(
+        r"disregard\s+(the\s+|all\s+)?(system|previous|instructions|rules)",
+        re.I,
+    ),
+    "role_override": re.compile(
+        r"(you are now|act as|new instructions|system prompt|developer message)",
+        re.I,
+    ),
+    "execute_code": re.compile(
+        r"(execute|run|eval)\s+(the\s+following\s+)?(shell|bash|python|command|code|script)",
+        re.I,
+    ),
+    "chat_markup": re.compile(
+        r"(<\|im_start\|>|<\|system\|>|\[INST\]|###\s*system)", re.I
+    ),
+    "citation_forgery": re.compile(
+        r"(cite|reference)\s+(only\s+)?[A-Za-z0-9_\-]+\s+(as|instead)", re.I
+    ),
+    "admission_attempt": re.compile(
+        r"(admit|approve|deploy)\s+(this|the)?\s*(strategy|model|signal|portfolio)",
+        re.I,
+    ),
 }
 
 
@@ -72,7 +121,9 @@ class EvidenceItem(StrictModel):
             "kind": self.kind,
             "title": self.title,
             "text": self.text,
-            "available_at": self.available_at.isoformat() if self.available_at else None,
+            "available_at": self.available_at.isoformat()
+            if self.available_at
+            else None,
             "scanner_flags": list(self.injection_flags),
         }
 
@@ -88,7 +139,9 @@ def _stringify(value: Any) -> str:
     if isinstance(value, (list, tuple)):
         return "; ".join(_stringify(v) for v in value)
     if isinstance(value, dict):
-        return "; ".join(f"{k}: {_stringify(v)}" for k, v in sorted(value.items()))
+        return "; ".join(
+            f"{k}: {_stringify(v)}" for k, v in sorted(value.items())
+        )
     return str(value)
 
 
@@ -103,28 +156,42 @@ def _parse_available(value: Any, card_id: str) -> dt.datetime:
     if isinstance(value, dt.datetime):
         parsed = value
     elif isinstance(value, dt.date):
-        parsed = dt.datetime.combine(value, dt.time(23, 59, 59, 999999), tzinfo=dt.timezone.utc)
+        parsed = dt.datetime.combine(
+            value, dt.time(23, 59, 59, 999999), tzinfo=dt.timezone.utc
+        )
     elif isinstance(value, str):
         text = value.strip()
         try:
             if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
                 # date-only: available no earlier than the end of that UTC day
                 parsed = dt.datetime.combine(
-                    dt.date.fromisoformat(text), dt.time(23, 59, 59, 999999), tzinfo=dt.timezone.utc
+                    dt.date.fromisoformat(text),
+                    dt.time(23, 59, 59, 999999),
+                    tzinfo=dt.timezone.utc,
                 )
             else:
                 parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:
-            raise EvidenceError(f"evidence {card_id}: unparseable availability timestamp") from None
+            raise EvidenceError(
+                f"evidence {card_id}: unparseable availability timestamp"
+            ) from None
     else:
-        raise EvidenceError(f"evidence {card_id}: availability must be a timestamp")
+        raise EvidenceError(
+            f"evidence {card_id}: availability must be a timestamp"
+        )
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise EvidenceError(f"evidence {card_id}: availability timestamp must be timezone-aware")
+        raise EvidenceError(
+            f"evidence {card_id}: availability timestamp must be timezone-aware"
+        )
     return parsed.astimezone(dt.timezone.utc)
 
 
 def scan_injection(text: str) -> list[str]:
-    return sorted(name for name, pattern in _INJECTION_PATTERNS.items() if pattern.search(text))
+    return sorted(
+        name
+        for name, pattern in _INJECTION_PATTERNS.items()
+        if pattern.search(text)
+    )
 
 
 def normalise_evidence(
@@ -139,18 +206,33 @@ def normalise_evidence(
             raise EvidenceError(f"{kind} #{index} is not an object")
         raw_id = _first(card, ID_KEYS)
         if raw_id is None or not _ID_RE.match(str(raw_id)):
-            raise EvidenceError(f"{kind} #{index} has no valid stable identifier")
+            raise EvidenceError(
+                f"{kind} #{index} has no valid stable identifier"
+            )
         card_id = str(raw_id)
-        title = _clean(_stringify(_first(card, TITLE_KEYS) or card_id), 300) or card_id
-        parts = [f"{key}: {_stringify(card[key])}" for key in TEXT_KEYS if card.get(key) not in (None, "", [], {})]
+        title = (
+            _clean(_stringify(_first(card, TITLE_KEYS) or card_id), 300)
+            or card_id
+        )
+        parts = [
+            f"{key}: {_stringify(card[key])}"
+            for key in TEXT_KEYS
+            if card.get(key) not in (None, "", [], {})
+        ]
         full_text = "\n".join(parts)
         raw_date = _first(card, DATE_KEYS)
-        available = _parse_available(raw_date, card_id) if raw_date is not None else None
+        available = (
+            _parse_available(raw_date, card_id)
+            if raw_date is not None
+            else None
+        )
         for key in REVISION_KEYS:
             revised = card.get(key)
             if revised not in (None, "", [], {}):
                 parsed = _parse_available(revised, card_id)
-                available = parsed if available is None else max(available, parsed)
+                available = (
+                    parsed if available is None else max(available, parsed)
+                )
         flags = scan_injection(title + "\n" + full_text)
         items.append(
             EvidenceItem(
@@ -195,7 +277,9 @@ def filter_eligible(
         elif item.available_at is not None and item.available_at > now:
             bad.append(item.evidence_id)
     if bad:
-        raise EvidenceError(f"evidence not available at the research date (or undated in historical mode): {bad}")
+        raise EvidenceError(
+            f"evidence not available at the research date (or undated in historical mode): {bad}"
+        )
     return items
 
 
@@ -208,7 +292,9 @@ Scalar = Union[str, int, float, bool]
 class FeatureDefinition(StrictModel):
     name: str = Field(pattern=_IDENT)
     definition: str = Field(min_length=10, max_length=600)
-    timing: str = Field(min_length=5, max_length=400)  # when each input becomes known vs signal date
+    timing: str = Field(
+        min_length=5, max_length=400
+    )  # when each input becomes known vs signal date
     source_ids: list[str] = Field(min_length=1, max_length=6)
 
 
@@ -232,10 +318,16 @@ class ExperimentVariant(StrictModel):
 
 
 class ExperimentPlan(StrictModel):
-    executor_id: str = Field(pattern=_IDENT)  # a registered executor, never code
+    executor_id: str = Field(
+        pattern=_IDENT
+    )  # a registered executor, never code
     primary_metric: str = Field(min_length=2, max_length=100)
-    data_partition: Literal["design"]  # proposals never request check/final data
-    variants: list[ExperimentVariant] = Field(min_length=1, max_length=MAX_VARIANTS)
+    data_partition: Literal[
+        "design"
+    ]  # proposals never request check/final data
+    variants: list[ExperimentVariant] = Field(
+        min_length=1, max_length=MAX_VARIANTS
+    )
     description: str = Field(min_length=10, max_length=800)
 
     @model_validator(mode="after")
@@ -277,7 +369,9 @@ class ResearchProposal(StrictModel):
 
 
 def validate_citations(
-    proposal: ResearchProposal, allowed_ids: Iterable[str], allowed_executors: Iterable[str]
+    proposal: ResearchProposal,
+    allowed_ids: Iterable[str],
+    allowed_executors: Iterable[str],
 ) -> None:
     """Every cited source id and the executor must be one we supplied."""
     allowed = set(allowed_ids)
@@ -286,7 +380,9 @@ def validate_citations(
         cited.update(feature.source_ids)
     unknown = sorted(cited - allowed)
     if unknown:
-        raise CitationError(f"proposal cites evidence that was not provided: {unknown}")
+        raise CitationError(
+            f"proposal cites evidence that was not provided: {unknown}"
+        )
     executors = set(allowed_executors)
     if proposal.experiment_plan.executor_id not in executors:
         raise CitationError(

@@ -117,7 +117,9 @@ class ExperimentSpec(DurableModel):
     @model_validator(mode="after")
     def _check_consistency(self) -> "ExperimentSpec":
         if self.identity.parent_experiment_id == self.experiment_spec_id:
-            raise ValueError("parent_experiment_id cannot reference the experiment itself")
+            raise ValueError(
+                "parent_experiment_id cannot reference the experiment itself"
+            )
         if self.experiment_spec_id in self.comparisons.baseline_experiment_ids:
             raise ValueError("an experiment cannot be its own baseline")
         if len(set(self.comparisons.baseline_experiment_ids)) != len(

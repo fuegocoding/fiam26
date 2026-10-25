@@ -14,7 +14,9 @@ def stdev(values: Sequence[float]) -> Optional[float]:
     if len(values) < 2:
         return None
     mu = math.fsum(values) / len(values)
-    return math.sqrt(math.fsum((v - mu) ** 2 for v in values) / (len(values) - 1))
+    return math.sqrt(
+        math.fsum((v - mu) ** 2 for v in values) / (len(values) - 1)
+    )
 
 
 def average_ranks(values: Sequence[float]) -> list[float]:
@@ -60,7 +62,9 @@ def spearman(x: Sequence[float], y: Sequence[float]) -> Optional[float]:
     return pearson(average_ranks(x), average_ranks(y))
 
 
-def solve_linear(matrix: list[list[float]], rhs: list[float]) -> Optional[list[float]]:
+def solve_linear(
+    matrix: list[list[float]], rhs: list[float]
+) -> Optional[list[float]]:
     """Gaussian elimination with partial pivoting; ``None`` if (numerically) singular."""
     n = len(rhs)
     a = [list(row) + [rhs[i]] for i, row in enumerate(matrix)]
@@ -76,7 +80,9 @@ def solve_linear(matrix: list[list[float]], rhs: list[float]) -> Optional[list[f
                     a[row][k] -= factor * a[col][k]
     out = [0.0] * n
     for row in range(n - 1, -1, -1):
-        out[row] = (a[row][n] - math.fsum(a[row][k] * out[k] for k in range(row + 1, n))) / a[row][row]
+        out[row] = (
+            a[row][n] - math.fsum(a[row][k] * out[k] for k in range(row + 1, n))
+        ) / a[row][row]
     return out
 
 

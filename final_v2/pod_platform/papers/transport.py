@@ -13,11 +13,16 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Callable, Mapping, Optional, Protocol
-from urllib.parse import urlsplit
+from typing import Callable, Mapping, Protocol
+from urllib.parse import urljoin, urlsplit
 
-from .models import (AuthError, ProviderError, RateLimitError, ResponseTooLarge,
-                     UrlNotAllowed)
+from .models import (
+    AuthError,
+    ProviderError,
+    RateLimitError,
+    ResponseTooLarge,
+    UrlNotAllowed,
+)
 
 ALLOWED_HOSTS = frozenset({"export.arxiv.org", "arxiv.org", "api.openalex.org"})
 DEFAULT_TIMEOUT = 20.0
@@ -33,19 +38,33 @@ class TransportResponse:
 
 
 class Transport(Protocol):
-    def get(self, url: str, *, headers: Mapping[str, str], timeout: float,
-            max_bytes: int) -> TransportResponse: ...
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+        max_bytes: int,
+    ) -> TransportResponse: ...
 
 
 def validate_url(url: str, allowed_hosts: frozenset = ALLOWED_HOSTS) -> str:
     """Return ``url`` if it is https, on an allowlisted host, without userinfo/odd port."""
-    if not isinstance(url, str) or len(url) > 2000 or any(c in url for c in "\r\n\t \x00"):
+    if (
+        not isinstance(url, str)
+        or len(url) > 2000
+        or any(c in url for c in "\r\n\t \x00")
+    ):
         raise UrlNotAllowed("malformed URL")
     parts = urlsplit(url)
     if parts.scheme != "https":
         raise UrlNotAllowed("only https URLs are allowed")
     host = (parts.hostname or "").lower()
-    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+    if (
+        parts.username is not None
+        or parts.password is not None
+        or "@" in parts.netloc
+    ):
         raise UrlNotAllowed("userinfo in URL is not allowed")
     try:
         ipaddress.ip_address(host)
@@ -53,7 +72,9 @@ def validate_url(url: str, allowed_hosts: frozenset = ALLOWED_HOSTS) -> str:
     except ValueError:
         pass
     if host not in allowed_hosts:
-        raise UrlNotAllowed(f"host {host!r} is not an allowlisted provider host")
+        raise UrlNotAllowed(
+            f"host {host!r} is not an allowlisted provider host"
+        )
     try:
         port = parts.port
     except ValueError as exc:
@@ -70,16 +91,23 @@ def redact_url(url: str) -> str:
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):  # handled manually so each hop is validated
+    def redirect_request(
+        self, *a, **k
+    ):  # handled manually so each hop is validated
         return None
 
 
 class UrllibTransport:
     """Real transport. Only constructed when the caller explicitly goes online."""
 
-    def __init__(self, *, user_agent: str = "fiam-papers/1.0 (research; contact via repo)",
-                 min_interval: float = 3.0, sleep: Callable[[float], None] = time.sleep,
-                 monotonic: Callable[[], float] = time.monotonic):
+    def __init__(
+        self,
+        *,
+        user_agent: str = "fiam-papers/1.0 (research; contact via repo)",
+        min_interval: float = 3.0,
+        sleep: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+    ):
         self.user_agent = user_agent
         self.min_interval = min_interval
         self._sleep, self._mono = sleep, monotonic
@@ -103,13 +131,16 @@ class UrllibTransport:
             try:
                 resp = self._opener.open(req, timeout=timeout)
             except urllib.error.HTTPError as e:
-                if e.code in (301, 302, 303, 307, 308) and e.headers.get("Location"):
-                    from urllib.parse import urljoin
+                if e.code in (301, 302, 303, 307, 308) and e.headers.get(
+                    "Location"
+                ):
                     url = urljoin(url, e.headers["Location"])
                     continue
                 return TransportResponse(e.code, b"", dict(e.headers or {}))
             except (urllib.error.URLError, TimeoutError, OSError) as e:
-                raise ProviderError(f"network error for {redact_url(url)}: {type(e).__name__}") from e
+                raise ProviderError(
+                    f"network error for {redact_url(url)}: {type(e).__name__}"
+                ) from e
             with resp:
                 chunks, total = [], 0
                 while True:
@@ -118,9 +149,13 @@ class UrllibTransport:
                         break
                     total += len(chunk)
                     if total > max_bytes:
-                        raise ResponseTooLarge(f"response exceeds {max_bytes} bytes")
+                        raise ResponseTooLarge(
+                            f"response exceeds {max_bytes} bytes"
+                        )
                     chunks.append(chunk)
-                return TransportResponse(resp.status, b"".join(chunks), dict(resp.headers))
+                return TransportResponse(
+                    resp.status, b"".join(chunks), dict(resp.headers)
+                )
         raise ProviderError("too many redirects")
 
 
@@ -130,9 +165,19 @@ def check_status(resp: TransportResponse, url: str, provider: str) -> None:
         return
     where = redact_url(url)
     if resp.status in (401, 403):
-        hint = (" Set OPENALEX_API_KEY (and optionally OPENALEX_MAILTO)." if provider == "openalex"
-                else "")
-        raise AuthError(f"{provider} rejected the request ({resp.status}) at {where}.{hint}", resp.status)
+        hint = (
+            " Set OPENALEX_API_KEY (and optionally OPENALEX_MAILTO)."
+            if provider == "openalex"
+            else ""
+        )
+        raise AuthError(
+            f"{provider} rejected the request ({resp.status}) at {where}.{hint}",
+            resp.status,
+        )
     if resp.status == 429:
-        raise RateLimitError(f"{provider} rate limit hit at {where}; retry later", 429)
-    raise ProviderError(f"{provider} returned HTTP {resp.status} at {where}", resp.status)
+        raise RateLimitError(
+            f"{provider} rate limit hit at {where}; retry later", 429
+        )
+    raise ProviderError(
+        f"{provider} returned HTTP {resp.status} at {where}", resp.status
+    )

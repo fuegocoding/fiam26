@@ -71,7 +71,9 @@ class Reservation(int):
     reservation_id: str
     account_key: str
 
-    def __new__(cls, tokens: int, reservation_id: str, account_key: str) -> "Reservation":
+    def __new__(
+        cls, tokens: int, reservation_id: str, account_key: str
+    ) -> "Reservation":
         obj = super().__new__(cls, tokens)
         obj.reservation_id = reservation_id
         obj.account_key = account_key
@@ -116,7 +118,9 @@ BEGIN SELECT RAISE(ABORT, 'budget accounts are immutable'); END;
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
 
 
 def _sha(text: str) -> str:
@@ -189,7 +193,9 @@ class PersistentCallBudget(CallBudget):
         self.account_key = f"{self.budget_id}|{self.pod}|{self.cycle}"
         self._clock = clock
         want_calls = _strict_int(max_calls, "max_calls", upper=MAX_CALLS_BOUND)
-        want_tokens = _strict_int(max_tokens, "max_tokens", upper=MAX_TOKENS_BOUND)
+        want_tokens = _strict_int(
+            max_tokens, "max_tokens", upper=MAX_TOKENS_BOUND
+        )
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = self._connect()
         try:
@@ -231,12 +237,31 @@ class PersistentCallBudget(CallBudget):
         payload_json = _canonical(payload or {})
         created = self._now()
         digest = _event_hash(
-            self.account_key, seq, kind, reservation_id, calls_delta, tokens_delta, payload_json, created, prev
+            self.account_key,
+            seq,
+            kind,
+            reservation_id,
+            calls_delta,
+            tokens_delta,
+            payload_json,
+            created,
+            prev,
         )
         conn.execute(
             "INSERT INTO budget_events (account_key, account_seq, kind, reservation_id, calls_delta, "
             "tokens_delta, payload_json, created_at, prev_hash, event_hash) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (self.account_key, seq, kind, reservation_id, calls_delta, tokens_delta, payload_json, created, prev, digest),
+            (
+                self.account_key,
+                seq,
+                kind,
+                reservation_id,
+                calls_delta,
+                tokens_delta,
+                payload_json,
+                created,
+                prev,
+                digest,
+            ),
         )
         return seq
 
@@ -268,19 +293,33 @@ class PersistentCallBudget(CallBudget):
         ).fetchone()
         return int(calls), int(tokens)
 
-    def _open_account(self, want_calls: int, want_tokens: int, raise_limits: bool) -> None:
+    def _open_account(
+        self, want_calls: int, want_tokens: int, raise_limits: bool
+    ) -> None:
         conn = self._begin()
         try:
             exists = conn.execute(
-                "SELECT 1 FROM budget_accounts WHERE account_key = ?", (self.account_key,)
+                "SELECT 1 FROM budget_accounts WHERE account_key = ?",
+                (self.account_key,),
             ).fetchone()
             if not exists:
                 conn.execute(
                     "INSERT INTO budget_accounts VALUES (?,?,?,?,?)",
-                    (self.account_key, self.budget_id, self.pod, self.cycle, self._now()),
+                    (
+                        self.account_key,
+                        self.budget_id,
+                        self.pod,
+                        self.cycle,
+                        self._now(),
+                    ),
                 )
                 self._append(
-                    conn, "account_created", payload={"max_calls": want_calls, "max_tokens": want_tokens}
+                    conn,
+                    "account_created",
+                    payload={
+                        "max_calls": want_calls,
+                        "max_tokens": want_tokens,
+                    },
                 )
             else:
                 cur_calls, cur_tokens = self._limits(conn)
@@ -293,8 +332,16 @@ class PersistentCallBudget(CallBudget):
                     )
                 if (want_calls, want_tokens) != (cur_calls, cur_tokens):
                     # without an explicit raise the cap can only shrink; counters are never touched
-                    new_calls = want_calls if raise_limits else min(want_calls, cur_calls)
-                    new_tokens = want_tokens if raise_limits else min(want_tokens, cur_tokens)
+                    new_calls = (
+                        want_calls
+                        if raise_limits
+                        else min(want_calls, cur_calls)
+                    )
+                    new_tokens = (
+                        want_tokens
+                        if raise_limits
+                        else min(want_tokens, cur_tokens)
+                    )
                     self._append(
                         conn,
                         "limit_raised" if raising else "limit_lowered",
@@ -353,13 +400,24 @@ class PersistentCallBudget(CallBudget):
             elif calls + 1 > max_calls:
                 denial = f"LLM call budget exhausted ({calls}/{max_calls})"
             elif tokens + est > max_tokens:
-                denial = f"LLM token budget exhausted ({tokens}+{est}>{max_tokens})"
+                denial = (
+                    f"LLM token budget exhausted ({tokens}+{est}>{max_tokens})"
+                )
             if denial is not None:
-                self._append(conn, "reserve_denied", payload={"est_tokens": est, "reason": denial})
+                self._append(
+                    conn,
+                    "reserve_denied",
+                    payload={"est_tokens": est, "reason": denial},
+                )
             else:
                 rid = uuid.uuid4().hex
                 self._append(
-                    conn, "reserve", reservation_id=rid, calls_delta=1, tokens_delta=est, payload={"est_tokens": est}
+                    conn,
+                    "reserve",
+                    reservation_id=rid,
+                    calls_delta=1,
+                    tokens_delta=est,
+                    payload={"est_tokens": est},
                 )
                 reservation = Reservation(est, rid, self.account_key)
             conn.execute("COMMIT")
@@ -377,7 +435,11 @@ class PersistentCallBudget(CallBudget):
         return reservation
 
     def settle(  # type: ignore[override]
-        self, reserved: int, actual: Optional[int], *, reservation_id: Optional[str] = None
+        self,
+        reserved: int,
+        actual: Optional[int],
+        *,
+        reservation_id: Optional[str] = None,
     ) -> None:
         rid = reservation_id or getattr(reserved, "reservation_id", None)
         if actual is not None:
@@ -406,7 +468,9 @@ class PersistentCallBudget(CallBudget):
         finally:
             conn.close()
 
-    def _settle_locked(self, conn: sqlite3.Connection, rid: str, actual: Optional[int]) -> None:
+    def _settle_locked(
+        self, conn: sqlite3.Connection, rid: str, actual: Optional[int]
+    ) -> None:
         res = conn.execute(
             "SELECT tokens_delta FROM budget_events WHERE account_key = ? AND reservation_id = ? AND kind = 'reserve'",
             (self.account_key, rid),
@@ -421,12 +485,18 @@ class PersistentCallBudget(CallBudget):
         ).fetchone()
         if final is not None:
             first = json.loads(final[1])
-            if first.get("actual") != actual:  # same report again is a silent no-op
+            if (
+                first.get("actual") != actual
+            ):  # same report again is a silent no-op
                 self._append(
                     conn,
                     "settle_conflict",
                     reservation_id=rid,
-                    payload={"first_actual": first.get("actual"), "attempted_actual": actual, "applied": False},
+                    payload={
+                        "first_actual": first.get("actual"),
+                        "attempted_actual": actual,
+                        "applied": False,
+                    },
                 )
             return
         if actual is None:
@@ -434,7 +504,11 @@ class PersistentCallBudget(CallBudget):
                 conn,
                 "settle_unknown",
                 reservation_id=rid,
-                payload={"reserved": reserved, "actual": None, "note": "usage unknown; reservation kept"},
+                payload={
+                    "reserved": reserved,
+                    "actual": None,
+                    "note": "usage unknown; reservation kept",
+                },
             )
             return
         self._append(
@@ -494,8 +568,15 @@ class PersistentCallBudget(CallBudget):
                 sql += " LIMIT ?"
                 args += (int(limit),)
             keys = (
-                "seq", "kind", "reservation_id", "calls_delta", "tokens_delta", "payload", "created_at",
-                "prev_hash", "event_hash",
+                "seq",
+                "kind",
+                "reservation_id",
+                "calls_delta",
+                "tokens_delta",
+                "payload",
+                "created_at",
+                "prev_hash",
+                "event_hash",
             )
             out = []
             for row in conn.execute(sql, args):
@@ -515,7 +596,12 @@ class PersistentCallBudget(CallBudget):
         if row is None:
             raise BudgetIntegrityError("budget account has no events")
         seq, kind, rid, cd, td, payload, created, prev, digest = row
-        if _event_hash(self.account_key, seq, kind, rid, cd, td, payload, created, prev) != digest:
+        if (
+            _event_hash(
+                self.account_key, seq, kind, rid, cd, td, payload, created, prev
+            )
+            != digest
+        ):
             raise BudgetIntegrityError(f"budget event {seq} fails its hash")
 
     def verify(self) -> int:
@@ -533,30 +619,83 @@ class PersistentCallBudget(CallBudget):
             ).fetchall()
             for seq, kind, rid, cd, td, payload, created, prev, digest in rows:
                 if seq != expected_seq or prev != prev_hash:
-                    raise BudgetIntegrityError(f"budget chain broken at event {expected_seq}")
-                if _event_hash(self.account_key, seq, kind, rid, cd, td, payload, created, prev) != digest:
-                    raise BudgetIntegrityError(f"budget event {seq} fails its hash")
+                    raise BudgetIntegrityError(
+                        f"budget chain broken at event {expected_seq}"
+                    )
+                if (
+                    _event_hash(
+                        self.account_key,
+                        seq,
+                        kind,
+                        rid,
+                        cd,
+                        td,
+                        payload,
+                        created,
+                        prev,
+                    )
+                    != digest
+                ):
+                    raise BudgetIntegrityError(
+                        f"budget event {seq} fails its hash"
+                    )
                 doc = json.loads(payload)
                 if kind == "reserve":
-                    if cd != 1 or td != doc.get("est_tokens") or td < 0 or rid in reserved:
-                        raise BudgetIntegrityError(f"budget reserve event {seq} is inconsistent")
+                    if (
+                        cd != 1
+                        or td != doc.get("est_tokens")
+                        or td < 0
+                        or rid in reserved
+                    ):
+                        raise BudgetIntegrityError(
+                            f"budget reserve event {seq} is inconsistent"
+                        )
                     reserved[rid] = td
                 elif kind == "settle":
-                    if rid not in reserved or rid in finals or td != doc.get("actual", -1) - reserved[rid] or cd != 0:
-                        raise BudgetIntegrityError(f"budget settle event {seq} is inconsistent")
+                    if (
+                        rid not in reserved
+                        or rid in finals
+                        or td != doc.get("actual", -1) - reserved[rid]
+                        or cd != 0
+                    ):
+                        raise BudgetIntegrityError(
+                            f"budget settle event {seq} is inconsistent"
+                        )
                     finals.add(rid)
                 elif kind == "settle_unknown":
-                    if rid not in reserved or rid in finals or td != 0 or cd != 0:
-                        raise BudgetIntegrityError(f"budget settle_unknown event {seq} is inconsistent")
+                    if (
+                        rid not in reserved
+                        or rid in finals
+                        or td != 0
+                        or cd != 0
+                    ):
+                        raise BudgetIntegrityError(
+                            f"budget settle_unknown event {seq} is inconsistent"
+                        )
                     finals.add(rid)
-                elif kind in ("account_created", "limit_lowered", "limit_raised"):
-                    if cd != 0 or td != 0 or "max_calls" not in doc or "max_tokens" not in doc:
-                        raise BudgetIntegrityError(f"budget limit event {seq} is inconsistent")
+                elif kind in (
+                    "account_created",
+                    "limit_lowered",
+                    "limit_raised",
+                ):
+                    if (
+                        cd != 0
+                        or td != 0
+                        or "max_calls" not in doc
+                        or "max_tokens" not in doc
+                    ):
+                        raise BudgetIntegrityError(
+                            f"budget limit event {seq} is inconsistent"
+                        )
                 elif kind in ("reserve_denied", "settle_conflict"):
                     if cd != 0 or td != 0:
-                        raise BudgetIntegrityError(f"budget audit event {seq} must not change counters")
+                        raise BudgetIntegrityError(
+                            f"budget audit event {seq} must not change counters"
+                        )
                 elif kind != "unattributed_settlement":
-                    raise BudgetIntegrityError(f"unknown budget event kind {kind!r}")
+                    raise BudgetIntegrityError(
+                        f"unknown budget event kind {kind!r}"
+                    )
                 prev_hash = digest
                 expected_seq += 1
             if not rows:

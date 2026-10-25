@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
 from typing import Optional, Sequence
 
@@ -20,7 +20,7 @@ from pydantic import Field, model_validator
 
 from ..contracts.base import StrictModel, require_aware
 from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
-from ..contracts.orders import Order, OrderSide
+from ..contracts.orders import OrderSide
 
 ZERO = Decimal("0")
 
@@ -102,16 +102,32 @@ class CostModel:
     def model_id(self) -> str:
         return self._config.model_id
 
-    def cost_rate(self, liquidity: LiquiditySnapshot, order_dollars: Decimal) -> Decimal:
+    def cost_rate(
+        self, liquidity: LiquiditySnapshot, order_dollars: Decimal
+    ) -> Decimal:
         if order_dollars < ZERO:
             raise ValueError("order dollars must be non-negative")
-        half_spread = Decimal(str(self._config.half_spread_by_size_bp.get(liquidity.size_tier, 0.0)))
+        half_spread = Decimal(
+            str(
+                self._config.half_spread_by_size_bp.get(
+                    liquidity.size_tier, 0.0
+                )
+            )
+        )
         participation = float(order_dollars / liquidity.adv_dollars)
-        impact = self._config.eta * liquidity.daily_volatility * math.sqrt(participation)
-        total_bp = float(half_spread) + impact * 10000.0 + self._config.explicit_fee_bp
+        impact = (
+            self._config.eta
+            * liquidity.daily_volatility
+            * math.sqrt(participation)
+        )
+        total_bp = (
+            float(half_spread) + impact * 10000.0 + self._config.explicit_fee_bp
+        )
         return Decimal(str(total_bp)) / Decimal("10000")
 
-    def expected_cost(self, liquidity: LiquiditySnapshot, order_dollars: Decimal) -> Decimal:
+    def expected_cost(
+        self, liquidity: LiquiditySnapshot, order_dollars: Decimal
+    ) -> Decimal:
         return abs(order_dollars) * self.cost_rate(liquidity, order_dollars)
 
 
@@ -145,17 +161,20 @@ class ExecutionPlanner:
                 continue
             abs_delta = abs(delta)
             weight_delta = abs(desire.target_weight - desire.current_weight)
-            if (
-                not desire.is_entry()
-                and weight_delta <= Decimal(str(self._policy.no_trade_band))
+            if not desire.is_entry() and weight_delta <= Decimal(
+                str(self._policy.no_trade_band)
             ):
                 continue
             expected = self._costs.expected_cost(snapshot, abs_delta)
             if desire.is_entry():
-                round_trip_bp = self._costs.cost_rate(snapshot, abs_delta) * Decimal("20000")
+                round_trip_bp = self._costs.cost_rate(
+                    snapshot, abs_delta
+                ) * Decimal("20000")
                 if desire.declared_edge_bp <= round_trip_bp:
                     continue
-            max_daily = snapshot.adv_dollars * Decimal(str(self._policy.max_daily_participation))
+            max_daily = snapshot.adv_dollars * Decimal(
+                str(self._policy.max_daily_participation)
+            )
             if max_daily <= ZERO:
                 raise PodPlatformError(
                     ToolResponse.failure(
@@ -164,7 +183,14 @@ class ExecutionPlanner:
                         stop_condition="Feasible participation must be positive.",
                     )
                 )
-            days = max(1, int((abs_delta / max_daily).to_integral_value(rounding=ROUND_CEILING)))
+            days = max(
+                1,
+                int(
+                    (abs_delta / max_daily).to_integral_value(
+                        rounding=ROUND_CEILING
+                    )
+                ),
+            )
             planned.append(
                 PlannedOrder(
                     order_id=f"{target_book_id}_{desire.security_id}_{index}",
@@ -220,7 +246,11 @@ class FillEngine:
             raise ValueError("cannot fill an expired order")
         if state.remaining_dollars <= ZERO:
             return ZERO
-        attempt = fill_dollars if fill_dollars is not None else state.remaining_dollars
+        attempt = (
+            fill_dollars
+            if fill_dollars is not None
+            else state.remaining_dollars
+        )
         if attempt < ZERO:
             raise ValueError("fill dollars cannot be negative")
         filled = min(attempt, state.remaining_dollars)
@@ -238,4 +268,6 @@ class FillEngine:
     def assert_no_assumed_holdings(self, states: Sequence[FillState]) -> None:
         for state in states:
             if state.remaining_dollars < ZERO:
-                raise ValueError("unfilled quantity never becomes an assumed holding")
+                raise ValueError(
+                    "unfilled quantity never becomes an assumed holding"
+                )

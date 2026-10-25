@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from pydantic import Field, model_validator
 
 from ..contracts.base import StrictModel
 
-_FORBIDDEN_VERSION_TOKENS = re.compile(r"(^|[/\\])latest($|[/\\.])", re.IGNORECASE)
+_FORBIDDEN_VERSION_TOKENS = re.compile(
+    r"(^|[/\\])latest($|[/\\.])", re.IGNORECASE
+)
 
 
 class RunManifest(StrictModel):
@@ -47,7 +48,9 @@ class RunManifest(StrictModel):
         versioned.update(self.bridge_versions)
         for name, value in versioned.items():
             if _FORBIDDEN_VERSION_TOKENS.search(value):
-                raise ValueError(f"{name} must not rely on a floating reference such as 'latest'")
+                raise ValueError(
+                    f"{name} must not rely on a floating reference such as 'latest'"
+                )
         return self
 
     @model_validator(mode="after")
@@ -56,7 +59,11 @@ class RunManifest(StrictModel):
             value = getattr(self, name)
             if len(value) < 7:
                 raise ValueError(f"{name} is too short to identify an artifact")
-        for map_name in ("config_hashes", "source_snapshot_ids", "expected_outputs"):
+        for map_name in (
+            "config_hashes",
+            "source_snapshot_ids",
+            "expected_outputs",
+        ):
             for key, value in getattr(self, map_name).items():
                 if not value:
                     raise ValueError(f"{map_name}[{key!r}] must not be empty")

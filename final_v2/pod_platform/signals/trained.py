@@ -12,6 +12,11 @@ that month (acceptance time).
 
 from __future__ import annotations
 
+try:
+    import xgboost as xgb
+except ImportError:
+    xgb = None
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,14 +91,19 @@ def _split(table: pd.DataFrame, year: int, last_target: pd.Timestamp):
     train_end = pd.Timestamp(f"{year - 3}-12-31")
     train = table.loc[months.between(FIRST_TRAIN_TARGET, train_end)]
     validation = table.loc[
-        months.between(pd.Timestamp(f"{year - 2}-01-01"), pd.Timestamp(f"{year - 1}-12-31"))
+        months.between(
+            pd.Timestamp(f"{year - 2}-01-01"), pd.Timestamp(f"{year - 1}-12-31")
+        )
     ]
     test = table.loc[
         months.between(
-            pd.Timestamp(f"{year}-01-01"), min(pd.Timestamp(f"{year}-12-31"), last_target)
+            pd.Timestamp(f"{year}-01-01"),
+            min(pd.Timestamp(f"{year}-12-31"), last_target),
         )
     ]
-    assert train["target_month"].max() <= train_end, "training labels leak past the cutoff"
+    assert train["target_month"].max() <= train_end, (
+        "training labels leak past the cutoff"
+    )
     return (
         train.dropna(subset=["target"]),
         validation.dropna(subset=["target"]),
@@ -112,7 +122,8 @@ def train_forecasts(
     device: str = "cpu",
     on_fold=None,
 ) -> tuple[pd.DataFrame, list[FoldAudit]]:
-    import xgboost as xgb
+    if xgb is None:
+        raise ImportError("Training charter models requires xgboost")
 
     audits: list[FoldAudit] = []
     parts = []
@@ -121,11 +132,18 @@ def train_forecasts(
         predictions = []
         best_iterations = []
         for seed in SEEDS:
-            model = xgb.XGBRegressor(random_state=seed, device=device, **XGB_PARAMS)
+            model = xgb.XGBRegressor(
+                random_state=seed, device=device, **XGB_PARAMS
+            )
             model.fit(
                 train[features].values,
                 train[target_column].values,
-                eval_set=[(validation[features].values, validation[target_column].values)],
+                eval_set=[
+                    (
+                        validation[features].values,
+                        validation[target_column].values,
+                    )
+                ],
                 verbose=False,
             )
             best_iterations.append(int(model.best_iteration))
@@ -133,7 +151,9 @@ def train_forecasts(
         audits.append(
             FoldAudit(
                 year=year,
-                train_end=str(train["target_month"].max().date()) if len(train) else "empty",
+                train_end=str(train["target_month"].max().date())
+                if len(train)
+                else "empty",
                 validation_window=f"{year - 2}..{year - 1}",
                 test_window=str(year),
                 train_rows=len(train),
@@ -163,8 +183,12 @@ def build_xgb_rank(
     table = panel[columns].copy()
     table["eom"] = pd.to_datetime(table["eom"])
     table["target_month"] = table["eom"] + pd.offsets.MonthEnd(1)
-    table[feature_columns] = _rank_transform(table, feature_columns).astype("float32")
-    table["target"] = table.groupby("eom")["ret_exc_lead1m"].rank(pct=True) - 0.5
+    table[feature_columns] = _rank_transform(table, feature_columns).astype(
+        "float32"
+    )
+    table["target"] = (
+        table.groupby("eom")["ret_exc_lead1m"].rank(pct=True) - 0.5
+    )
     return train_forecasts(
         table,
         feature_columns,
@@ -209,7 +233,11 @@ def build_filing_event_features(
         merged = merged[merged["link_date"] <= cutoff]
         counts_frames = {}
         for window, months_back in WINDOWS.items():
-            start = cutoff - pd.offsets.DateOffset(months=months_back) + pd.offsets.Day(1)
+            start = (
+                cutoff
+                - pd.offsets.DateOffset(months=months_back)
+                + pd.offsets.Day(1)
+            )
             windowed = merged[merged["date_filed"] >= start]
             wcounts = (
                 windowed.groupby(["permno", "family"])
@@ -217,11 +245,16 @@ def build_filing_event_features(
                 .unstack(fill_value=0)
                 .reindex(columns=list(FILING_FAMILIES), fill_value=0)
             )
-            wcounts.columns = [f"{family}_{window}" for family in wcounts.columns]
+            wcounts.columns = [
+                f"{family}_{window}" for family in wcounts.columns
+            ]
             counts_frames[window] = wcounts
-        counts = counts_frames["1m"].join(counts_frames["3m"], how="outer").join(
-            counts_frames["12m"], how="outer"
-        ).fillna(0)
+        counts = (
+            counts_frames["1m"]
+            .join(counts_frames["3m"], how="outer")
+            .join(counts_frames["12m"], how="outer")
+            .fillna(0)
+        )
         counts["permno"] = counts.index
         counts["target_month"] = month_end
         rows.append(counts.reset_index(drop=True))
@@ -241,8 +274,12 @@ def build_filing_events(
     table = panel[columns].copy()
     table["eom"] = pd.to_datetime(table["eom"])
     table["target_month"] = table["eom"] + pd.offsets.MonthEnd(1)
-    features = [c for c in event_features.columns if c not in ("permno", "target_month")]
-    table = table.merge(event_features, on=["permno", "target_month"], how="left")
+    features = [
+        c for c in event_features.columns if c not in ("permno", "target_month")
+    ]
+    table = table.merge(
+        event_features, on=["permno", "target_month"], how="left"
+    )
     table[features] = table[features].fillna(0.0)
     table[features] = _rank_transform(table, features).astype("float32")
     peers = [
@@ -250,7 +287,9 @@ def build_filing_events(
         table["size_grp"].astype(str),
         table["gics"].astype("string").str[:2].fillna("na"),
     ]
-    table["target"] = table.groupby(peers)["ret_exc_lead1m"].rank(pct=True) - 0.5
+    table["target"] = (
+        table.groupby(peers)["ret_exc_lead1m"].rank(pct=True) - 0.5
+    )
     return train_forecasts(
         table,
         features,
@@ -264,15 +303,26 @@ def build_filing_events(
 
 
 _NAME_FORMS = (
-    "10-K", "10-Q", "8-K", "10-K/A", "10-Q/A", "S-1", "S-1/A",
-    "424B4", "424B5", "S-3", "10-KT", "DEF 14A", "8-A12B", "10-12B",
+    "10-K",
+    "10-Q",
+    "8-K",
+    "10-K/A",
+    "10-Q/A",
+    "S-1",
+    "S-1/A",
+    "424B4",
+    "424B5",
+    "S-3",
+    "10-KT",
+    "DEF 14A",
+    "8-A12B",
+    "10-12B",
 )
 _LOCKUP_DAYS = 180
 _FIRST_FEATURE_MONTH = pd.Period("2015-02", "M")
 
 
 def _normalise_company_name(name: str | None) -> str:
-    import re
     if not isinstance(name, str):
         return ""
     suffix = re.compile(
@@ -309,7 +359,14 @@ def build_edgar_crosswalk_features(
 
     ext = pd.read_parquet(
         external_path,
-        columns=["table", "form_type", "date_filed", "cik", "company_name", "accession"],
+        columns=[
+            "table",
+            "form_type",
+            "date_filed",
+            "cik",
+            "company_name",
+            "accession",
+        ],
     )
     index = ext[ext["table"] == "edgar"].drop(columns=["table"]).copy()
     index["date_filed"] = pd.to_datetime(index["date_filed"])
@@ -320,11 +377,19 @@ def build_edgar_crosswalk_features(
     linked["filing_date"] = pd.to_datetime(linked["filing_date"])
     linked["permno"] = linked["permno"].astype(int)
     linked["cik"] = pd.to_numeric(linked["cik"], errors="coerce")
-    linked = linked.dropna(subset=["cik"]).astype({"cik": "int64"}).drop_duplicates()
+    linked = (
+        linked.dropna(subset=["cik"]).astype({"cik": "int64"}).drop_duplicates()
+    )
 
     panel = pd.read_parquet(
         panel_path,
-        columns=["permno", "permco", "company_name", "eom", "ticker_name_reference_date"],
+        columns=[
+            "permno",
+            "permco",
+            "company_name",
+            "eom",
+            "ticker_name_reference_date",
+        ],
     ).dropna(subset=["company_name"])
     panel["eom"] = pd.to_datetime(panel["eom"])
     ref = pd.to_datetime(panel["ticker_name_reference_date"])
@@ -332,71 +397,129 @@ def build_edgar_crosswalk_features(
     panel["key"] = panel["company_name"].map(_normalise_company_name)
     panel = panel[panel["key"].str.len() >= 4]
 
-    columns = [f"{family}_{window}" for family in FILING_FAMILIES for window in WINDOWS] + ["lockup_m"]
-    family_of = {form: family for family, forms in FILING_FAMILIES.items() for form in forms}
+    columns = [
+        f"{family}_{window}" for family in FILING_FAMILIES for window in WINDOWS
+    ] + ["lockup_m"]
+    family_of = {
+        form: family
+        for family, forms in FILING_FAMILIES.items()
+        for form in forms
+    }
 
     parts = []
-    for month in pd.period_range(_FIRST_FEATURE_MONTH, last_target.to_period("M"), freq="M"):
+    for month in pd.period_range(
+        _FIRST_FEATURE_MONTH, last_target.to_period("M"), freq="M"
+    ):
         cutoff = (month - 1).to_timestamp("M")
         known = index.loc[index["date_filed"] <= cutoff]
-        p_cut = panel.loc[panel["eom"] <= cutoff].drop_duplicates(["permno", "company_name"])
-        l_cut = linked.loc[linked["filing_date"] <= cutoff, ["permno", "permco", "cik"]].drop_duplicates()
+        p_cut = panel.loc[panel["eom"] <= cutoff].drop_duplicates(
+            ["permno", "company_name"]
+        )
+        l_cut = linked.loc[
+            linked["filing_date"] <= cutoff, ["permno", "permco", "cik"]
+        ].drop_duplicates()
         filers = known[known["form_type"].isin(_NAME_FORMS)]
         names = filers.groupby(["cik", "company_name"]).size().reset_index()
         names["key"] = names["company_name"].map(_normalise_company_name)
         names = names[names["key"].str.len() >= 4]
         one_company = p_cut.groupby("key")["permco"].nunique()
         one_filer = names.groupby("key")["cik"].nunique()
-        matched = p_cut[p_cut["key"].isin(one_company[one_company == 1].index)].merge(
-            names[names["key"].isin(one_filer[one_filer == 1].index)], on="key"
-        ).drop_duplicates(["permno", "cik"])
+        matched = (
+            p_cut[p_cut["key"].isin(one_company[one_company == 1].index)]
+            .merge(
+                names[names["key"].isin(one_filer[one_filer == 1].index)],
+                on="key",
+            )
+            .drop_duplicates(["permno", "cik"])
+        )
         matched = matched[~matched["permno"].isin(l_cut["permno"])]
         matched["cik"] = matched["cik"].astype("int64")
-        crosswalk = pd.concat([l_cut, matched[["permno", "permco", "cik"]]], ignore_index=True)
+        crosswalk = pd.concat(
+            [l_cut, matched[["permno", "permco", "cik"]]], ignore_index=True
+        )
 
         recent = known.loc[known["date_filed"] >= (month - 12).start_time]
         ev = recent[recent["form_type"].isin(family_of)].copy()
         ev["family"] = ev["form_type"].map(family_of)
         ev["cik"] = pd.to_numeric(ev["cik"], errors="coerce")
-        ev = ev.dropna(subset=["cik"]).astype({"cik": "int64"}).merge(crosswalk, on="cik")
+        ev = (
+            ev.dropna(subset=["cik"])
+            .astype({"cik": "int64"})
+            .merge(crosswalk, on="cik")
+        )
         companies = ev.groupby(["accession", "family"])["permco"].nunique()
         ambiguous = companies[companies > 1].index
         ev = ev.set_index(["accession", "family"])
         ev = ev.loc[~ev.index.isin(ambiguous)].reset_index()
         ev["month"] = ev["date_filed"].dt.to_period("M")
-        ev = ev.drop_duplicates(["permno", "accession", "family"])[["permno", "family", "month"]]
+        ev = ev.drop_duplicates(["permno", "accession", "family"])[
+            ["permno", "family", "month"]
+        ]
 
         periodic = known[known["form_type"].isin(["10-K", "10-Q", "8-K"])]
-        first_report = periodic.groupby("cik")["date_filed"].min().rename("first")
+        first_report = (
+            periodic.groupby("cik")["date_filed"].min().rename("first")
+        )
         offering = known[known["form_type"] == "424B4"]
         ipo = offering.groupby("cik")["date_filed"].min().rename("ipo")
         both = pd.concat([ipo, first_report], axis=1).dropna(subset=["ipo"])
-        new_issuer = both["first"].isna() | (both["first"] >= both["ipo"] - pd.Timedelta(days=5))
+        new_issuer = both["first"].isna() | (
+            both["first"] >= both["ipo"] - pd.Timedelta(days=5)
+        )
         both = both[new_issuer & (both["ipo"] >= pd.Timestamp("2014-06-01"))]
         both = both.rename_axis("cik").reset_index()
         both["cik"] = pd.to_numeric(both["cik"], errors="coerce")
-        both = both.dropna(subset=["cik"]).astype({"cik": "int64"}).merge(crosswalk[["permno", "cik"]], on="cik")
+        both = (
+            both.dropna(subset=["cik"])
+            .astype({"cik": "int64"})
+            .merge(crosswalk[["permno", "cik"]], on="cik")
+        )
         both = both.drop_duplicates("permno")
-        both["return_month"] = (both["ipo"] + pd.Timedelta(days=_LOCKUP_DAYS)).dt.to_period("M")
-        lockups = both.assign(lockup_m=1)[["permno", "return_month", "lockup_m"]]
+        both["return_month"] = (
+            both["ipo"] + pd.Timedelta(days=_LOCKUP_DAYS)
+        ).dt.to_period("M")
+        lockups = both.assign(lockup_m=1)[
+            ["permno", "return_month", "lockup_m"]
+        ]
 
         wide = None
         for family, group in ev.groupby("family"):
-            counts = group.groupby(["permno", "month"]).size().rename("n").reset_index()
+            counts = (
+                group.groupby(["permno", "month"])
+                .size()
+                .rename("n")
+                .reset_index()
+            )
             for label, m_back in WINDOWS.items():
                 sub = []
                 for shift in range(m_back):
                     part = counts.copy()
                     part["return_month"] = part["month"] + 1 + shift
                     sub.append(part[["permno", "return_month", "n"]])
-                col = pd.concat(sub).groupby(["permno", "return_month"])["n"].sum().rename(f"{family}_{label}")
-                wide = col.to_frame() if wide is None else wide.join(col, how="outer")
+                col = (
+                    pd.concat(sub)
+                    .groupby(["permno", "return_month"])["n"]
+                    .sum()
+                    .rename(f"{family}_{label}")
+                )
+                wide = (
+                    col.to_frame()
+                    if wide is None
+                    else wide.join(col, how="outer")
+                )
         if wide is None:
-            wide = pd.DataFrame({"permno": pd.Series(dtype="int64"), "return_month": pd.Series(dtype="period[M]")})
+            wide = pd.DataFrame(
+                {
+                    "permno": pd.Series(dtype="int64"),
+                    "return_month": pd.Series(dtype="period[M]"),
+                }
+            )
         else:
             wide = wide.reset_index()
         wide = wide.merge(lockups, on=["permno", "return_month"], how="outer")
-        wide = wide.reindex(columns=["permno", "return_month", *columns], fill_value=0).fillna(0)
+        wide = wide.reindex(
+            columns=["permno", "return_month", *columns], fill_value=0
+        ).fillna(0)
         parts.append(wide.loc[wide["return_month"] == month])
 
     out = pd.concat(parts, ignore_index=True)
@@ -405,4 +528,3 @@ def build_edgar_crosswalk_features(
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         out.to_parquet(cache_path, index=False)
     return out
-

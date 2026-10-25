@@ -63,12 +63,19 @@ class ScopeLimits(StrictModel):
     max_gross_exposure: Optional[Decimal] = None  # sum |w|, fraction of NAV
     max_abs_net_exposure: Optional[Decimal] = None  # |sum w|
     max_name_weight: Optional[Decimal] = None  # max |w|
-    max_nav_usd: Optional[Decimal] = None  # capacity: NAV the model is certified for
+    max_nav_usd: Optional[Decimal] = (
+        None  # capacity: NAV the model is certified for
+    )
     max_position_count: Optional[int] = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _check(self) -> "ScopeLimits":
-        for name in ("max_gross_exposure", "max_abs_net_exposure", "max_name_weight", "max_nav_usd"):
+        for name in (
+            "max_gross_exposure",
+            "max_abs_net_exposure",
+            "max_name_weight",
+            "max_nav_usd",
+        ):
             value = getattr(self, name)
             if value is not None:
                 finite_decimal(value, name)
@@ -80,11 +87,17 @@ class ScopeLimits(StrictModel):
         return {k: v for k, v in self.model_dump().items() if v is not None}
 
 
-def _nonempty_unique(values: Optional[list[str]], name: str) -> Optional[list[str]]:
+def _nonempty_unique(
+    values: Optional[list[str]], name: str
+) -> Optional[list[str]]:
     if values is None:
         return None
-    if not values or any(not isinstance(v, str) or not v.strip() for v in values):
-        raise ValueError(f"{name} must be a non-empty list of non-empty strings when given")
+    if not values or any(
+        not isinstance(v, str) or not v.strip() for v in values
+    ):
+        raise ValueError(
+            f"{name} must be a non-empty list of non-empty strings when given"
+        )
     if len(set(values)) != len(values):
         raise ValueError(f"{name} must not repeat entries")
     return values
@@ -108,7 +121,9 @@ class CertificateScope(StrictModel):
     @field_validator("issued_at", "valid_from", "valid_until")
     @classmethod
     def _aware(cls, value: Optional[dt.datetime]) -> Optional[dt.datetime]:
-        return None if value is None else require_aware(value, "scope timestamp")
+        return (
+            None if value is None else require_aware(value, "scope timestamp")
+        )
 
     @field_validator("allowed_source_ids", "universe_ids", "namespaces")
     @classmethod
@@ -117,17 +132,28 @@ class CertificateScope(StrictModel):
 
     @model_validator(mode="after")
     def _check(self) -> "CertificateScope":
-        if self.valid_from and self.valid_until and self.valid_until <= self.valid_from:
+        if (
+            self.valid_from
+            and self.valid_until
+            and self.valid_until <= self.valid_from
+        ):
             raise ValueError("valid_until must lie after valid_from")
         if self.allowed_source_snapshots is not None:
             if not self.allowed_source_snapshots:
-                raise ValueError("allowed_source_snapshots must not be empty when given")
+                raise ValueError(
+                    "allowed_source_snapshots must not be empty when given"
+                )
             for source_id, snapshots in self.allowed_source_snapshots.items():
                 _nonempty_unique(snapshots, f"snapshots of {source_id}")
                 if not source_id.strip():
                     raise ValueError("snapshot pins need a source id")
-                if self.allowed_source_ids is not None and source_id not in self.allowed_source_ids:
-                    raise ValueError(f"snapshot pin for {source_id} is outside allowed_source_ids")
+                if (
+                    self.allowed_source_ids is not None
+                    and source_id not in self.allowed_source_ids
+                ):
+                    raise ValueError(
+                        f"snapshot pin for {source_id} is outside allowed_source_ids"
+                    )
         return self
 
 
@@ -135,7 +161,9 @@ class CertificateRevocation(StrictModel):
     """Post-issuance fact; certificates are sealed, so revocation is a separate record."""
 
     certificate_id: str = Field(min_length=1)
-    revoked_at: dt.datetime  # effective time: decisions at/after it are not authorized
+    revoked_at: (
+        dt.datetime
+    )  # effective time: decisions at/after it are not authorized
     recorded_at: dt.datetime
     reason: str = Field(min_length=1)
     authority: str = Field(min_length=1)
@@ -149,19 +177,34 @@ class CertificateRevocation(StrictModel):
 class RevocationLedger:
     """Append-only set of revocations (earliest effective time wins)."""
 
-    def __init__(self, revocations: Iterable["CertificateRevocation | Mapping[str, Any]"] = ()):
+    def __init__(
+        self,
+        revocations: Iterable["CertificateRevocation | Mapping[str, Any]"] = (),
+    ):
         self._by_id: dict[str, list[CertificateRevocation]] = {}
         for item in revocations:
             self.add(item)
 
-    def add(self, item: "CertificateRevocation | Mapping[str, Any]") -> CertificateRevocation:
-        revocation = item if isinstance(item, CertificateRevocation) else CertificateRevocation.model_validate(item)
+    def add(
+        self, item: "CertificateRevocation | Mapping[str, Any]"
+    ) -> CertificateRevocation:
+        revocation = (
+            item
+            if isinstance(item, CertificateRevocation)
+            else CertificateRevocation.model_validate(item)
+        )
         self._by_id.setdefault(revocation.certificate_id, []).append(revocation)
         return revocation
 
-    def effective(self, certificate_id: str, when: dt.datetime) -> Optional[CertificateRevocation]:
+    def effective(
+        self, certificate_id: str, when: dt.datetime
+    ) -> Optional[CertificateRevocation]:
         when = require_aware(when, "when")
-        hits = [r for r in self._by_id.get(certificate_id, []) if r.revoked_at <= when]
+        hits = [
+            r
+            for r in self._by_id.get(certificate_id, [])
+            if r.revoked_at <= when
+        ]
         return min(hits, key=lambda r: r.revoked_at) if hits else None
 
     def __len__(self) -> int:
@@ -228,7 +271,9 @@ class CertificatePolicy:
         return dataclasses.replace(self, **changes)
 
 
-def resolve_policy(value: "None | str | CertificatePolicy", default: str = "fixture_compat") -> CertificatePolicy:
+def resolve_policy(
+    value: "None | str | CertificatePolicy", default: str = "fixture_compat"
+) -> CertificatePolicy:
     if isinstance(value, CertificatePolicy):
         return value
     name = value or default
@@ -262,7 +307,11 @@ class CertificateCheck:
     def authoritative(self) -> bool:
         """True only for a scoped formation-environment certificate that passed a policy
         requiring scope; never true for legacy or test/shadow certificates."""
-        return self.scoped and not self.legacy_unverified and self.environment == CertificateEnvironment.FORMATION.value
+        return (
+            self.scoped
+            and not self.legacy_unverified
+            and self.environment == CertificateEnvironment.FORMATION.value
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -278,7 +327,11 @@ class CertificateCheck:
 
 def _fail(summary: str, stop: str) -> None:
     raise PodPlatformError(
-        ToolResponse.failure(summary=summary, code=ErrorCode.ADMISSION_CERTIFICATE_INVALID, stop_condition=stop)
+        ToolResponse.failure(
+            summary=summary,
+            code=ErrorCode.ADMISSION_CERTIFICATE_INVALID,
+            stop_condition=stop,
+        )
     )
 
 
@@ -286,16 +339,24 @@ def _to_decimal(value: Any, name: str) -> Decimal:
     try:
         out = value if isinstance(value, Decimal) else Decimal(str(value))
     except Exception:
-        _fail(f"exposure {name} is not a number", "Exposure checks need measured numeric values.")
+        _fail(
+            f"exposure {name} is not a number",
+            "Exposure checks need measured numeric values.",
+        )
     if not out.is_finite():
-        _fail(f"exposure {name} is not finite", "Exposure checks need measured numeric values.")
+        _fail(
+            f"exposure {name} is not finite",
+            "Exposure checks need measured numeric values.",
+        )
     return out
 
 
 EXPOSURE_KEYS = ("gross", "net", "max_name_weight", "nav_usd", "position_count")
 
 
-def check_scope_limits(certificate: "AdmissionCertificate", exposures: Mapping[str, Any]) -> None:
+def check_scope_limits(
+    certificate: "AdmissionCertificate", exposures: Mapping[str, Any]
+) -> None:
     """Reject when measured exposures break a declared limit.
 
     ``exposures`` keys: gross, net (signed), max_name_weight, nav_usd,
@@ -357,7 +418,10 @@ def validate_certificate(
     try:
         decision_at = require_aware(decision_at, "decision_at")
     except (ValueError, AttributeError):
-        _fail("decision_at must be timezone-aware", "All clocks are timezone-aware.")
+        _fail(
+            "decision_at must be timezone-aware",
+            "All clocks are timezone-aware.",
+        )
     fid = forecast.forecast_id
     if certificate is None:
         _fail(
@@ -367,7 +431,10 @@ def validate_certificate(
     cert = certificate
     cid = cert.certificate_id
     if cid != forecast.admission_certificate_id:
-        _fail(f"certificate {cid} is not the one cited by {fid}", "The cited certificate must be the one validated.")
+        _fail(
+            f"certificate {cid} is not the one cited by {fid}",
+            "The cited certificate must be the one validated.",
+        )
     if cert.model_id != forecast.model_id or decision_at < cert.effective_start:
         _fail(
             f"certificate {cid} does not cover {fid} at {decision_at.isoformat()}",
@@ -378,14 +445,21 @@ def validate_certificate(
             f"certificate {cid} was created {cert.created_at.isoformat()}, after the decision {decision_at.isoformat()}",
             "A certificate issued after the decision (even if back-dated via effective_start) cannot authorize it.",
         )
-    if cert.target_id != forecast.target.target_id or cert.horizon_trading_days != forecast.return_forecast.horizon_trading_days:
+    if (
+        cert.target_id != forecast.target.target_id
+        or cert.horizon_trading_days
+        != forecast.return_forecast.horizon_trading_days
+    ):
         _fail(
             f"certificate {cid} covers target {cert.target_id!r}/{cert.horizon_trading_days}d, not "
             f"{forecast.target.target_id!r}/{forecast.return_forecast.horizon_trading_days}d of {fid}",
             "Certificate target and horizon must match the deployed forecast.",
         )
     if pol.require_seal and not cert.verify_seal():
-        _fail(f"certificate {cid} is unsealed or its seal fails", "Only sealed certificates are accepted here.")
+        _fail(
+            f"certificate {cid} is unsealed or its seal fails",
+            "Only sealed certificates are accepted here.",
+        )
     if pol.forbid_backdated:
         if cert.effective_start < cert.created_at:
             _fail(
@@ -420,10 +494,21 @@ def validate_certificate(
                 f"legacy certificate {cid} approved_mode {cert.approved_mode!r} is not accepted by policy {pol.name}",
                 "Legacy certificates are only accepted for explicitly allowed modes.",
             )
-        warnings.append("legacy_unverified: free-text restrictions are not machine-checked")
-        if exposures is not None or source_ids is not None or universe is not None or namespace is not None:
-            warnings.append("legacy certificate has no scope: source/universe/namespace/limits not evaluated")
-        return CertificateCheck(cid, pol.name, None, False, True, tuple(warnings))
+        warnings.append(
+            "legacy_unverified: free-text restrictions are not machine-checked"
+        )
+        if (
+            exposures is not None
+            or source_ids is not None
+            or universe is not None
+            or namespace is not None
+        ):
+            warnings.append(
+                "legacy certificate has no scope: source/universe/namespace/limits not evaluated"
+            )
+        return CertificateCheck(
+            cid, pol.name, None, False, True, tuple(warnings)
+        )
 
     required = environment or pol.environment
     if _RANK[scope.environment] < _RANK[required]:
@@ -434,21 +519,38 @@ def validate_certificate(
         )
     start = scope.valid_from or cert.effective_start
     if decision_at < start:
-        _fail(f"certificate {cid} is not yet valid at {decision_at.isoformat()}", "Decision precedes certificate validity.")
+        _fail(
+            f"certificate {cid} is not yet valid at {decision_at.isoformat()}",
+            "Decision precedes certificate validity.",
+        )
     if scope.valid_until is None:
         if pol.require_expiry:
-            _fail(f"certificate {cid} has no valid_until", "Production certificates must carry a machine-readable expiry.")
+            _fail(
+                f"certificate {cid} has no valid_until",
+                "Production certificates must carry a machine-readable expiry.",
+            )
         warnings.append("no valid_until: certificate does not expire")
     elif decision_at >= scope.valid_until:
-        _fail(f"certificate {cid} expired at {scope.valid_until.isoformat()}", "An expired certificate authorizes nothing.")
+        _fail(
+            f"certificate {cid} expired at {scope.valid_until.isoformat()}",
+            "An expired certificate authorizes nothing.",
+        )
     if scope.issued_at is not None and scope.issued_at > decision_at:
-        _fail(f"certificate {cid} was issued after the decision", "A certificate issued after the decision cannot authorize it.")
+        _fail(
+            f"certificate {cid} was issued after the decision",
+            "A certificate issued after the decision cannot authorize it.",
+        )
 
     used = set(forecast.source_family_ids) | set(source_ids or ())
     if scope.allowed_source_ids is None:
         if pol.require_source_scope:
-            _fail(f"certificate {cid} does not restrict source ids", "Production certificates must pin allowed_source_ids.")
-        warnings.append("no allowed_source_ids: certificate does not restrict sources")
+            _fail(
+                f"certificate {cid} does not restrict source ids",
+                "Production certificates must pin allowed_source_ids.",
+            )
+        warnings.append(
+            "no allowed_source_ids: certificate does not restrict sources"
+        )
     else:
         extra = sorted(used - set(scope.allowed_source_ids))
         if extra:
@@ -459,29 +561,58 @@ def validate_certificate(
     pins = scope.allowed_source_snapshots
     if pins is None:
         if pol.require_snapshot_pins:
-            _fail(f"certificate {cid} does not pin source snapshots", "Production certificates must pin allowed_source_snapshots.")
+            _fail(
+                f"certificate {cid} does not pin source snapshots",
+                "Production certificates must pin allowed_source_snapshots.",
+            )
     else:
         supplied = dict(source_snapshots or {})
         for sid in sorted(used):
             if sid not in pins:
                 if pol.require_snapshot_pins:
-                    _fail(f"certificate {cid} has no snapshot pin for source {sid}", "Every consumed source needs a pinned snapshot.")
+                    _fail(
+                        f"certificate {cid} has no snapshot pin for source {sid}",
+                        "Every consumed source needs a pinned snapshot.",
+                    )
                 continue
             got = supplied.get(sid)
             if got is None:
-                _fail(f"snapshot of source {sid} was not supplied for certificate {cid}", "A pinned snapshot must be checked against the one used.")
+                _fail(
+                    f"snapshot of source {sid} was not supplied for certificate {cid}",
+                    "A pinned snapshot must be checked against the one used.",
+                )
             if got not in pins[sid]:
-                _fail(f"source {sid} snapshot {got!r} is not pinned by certificate {cid}", "Only the certified snapshots may be used.")
+                _fail(
+                    f"source {sid} snapshot {got!r} is not pinned by certificate {cid}",
+                    "Only the certified snapshots may be used.",
+                )
     if scope.universe_ids is not None:
         if universe is None or universe not in scope.universe_ids:
-            _fail(f"universe {universe!r} is outside certificate {cid} scope", "Certificates are universe-specific.")
-    elif universe is not None and universe != cert.approved_universe and pol.require_scope:
-        _fail(f"universe {universe!r} differs from approved_universe {cert.approved_universe!r} of {cid}", "Certificates are universe-specific.")
+            _fail(
+                f"universe {universe!r} is outside certificate {cid} scope",
+                "Certificates are universe-specific.",
+            )
+    elif (
+        universe is not None
+        and universe != cert.approved_universe
+        and pol.require_scope
+    ):
+        _fail(
+            f"universe {universe!r} differs from approved_universe {cert.approved_universe!r} of {cid}",
+            "Certificates are universe-specific.",
+        )
     if scope.namespaces is not None:
         if namespace is None or namespace not in scope.namespaces:
-            _fail(f"namespace {namespace!r} is outside certificate {cid} scope", "Certificates are namespace-specific.")
+            _fail(
+                f"namespace {namespace!r} is outside certificate {cid} scope",
+                "Certificates are namespace-specific.",
+            )
     if exposures is not None:
         check_scope_limits(cert, exposures)
     elif scope.limits.declared():
-        warnings.append("limits_not_evaluated: supply exposures or call check_scope_limits at book level")
-    return CertificateCheck(cid, pol.name, scope.environment.value, True, False, tuple(warnings))
+        warnings.append(
+            "limits_not_evaluated: supply exposures or call check_scope_limits at book level"
+        )
+    return CertificateCheck(
+        cid, pol.name, scope.environment.value, True, False, tuple(warnings)
+    )

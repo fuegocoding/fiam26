@@ -12,7 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Sequence
 
 from pydantic import Field
 
@@ -113,7 +113,8 @@ def freeze_run(
     checks.append(
         AcceptanceCheck(
             item="every deployed forecast has a valid certificate",
-            satisfied=certificate_count >= deployed_forecast_count and deployed_forecast_count > 0,
+            satisfied=certificate_count >= deployed_forecast_count
+            and deployed_forecast_count > 0,
             evidence=f"{certificate_count} certificates for {deployed_forecast_count} forecasts",
         )
     )
@@ -121,7 +122,9 @@ def freeze_run(
         AcceptanceCheck(
             item="accounting reconciles",
             satisfied=accounting_reconciled,
-            evidence="NAV identity verified" if accounting_reconciled else "reconciliation failed",
+            evidence="NAV identity verified"
+            if accounting_reconciled
+            else "reconciliation failed",
         )
     )
     checks.append(
@@ -136,7 +139,8 @@ def freeze_run(
     checks.append(
         AcceptanceCheck(
             item="agent counterfactual generated for material agent interventions",
-            satisfied=material_agent_interventions == 0 or agent_counterfactual_present,
+            satisfied=material_agent_interventions == 0
+            or agent_counterfactual_present,
             evidence="no material agent intervention in this run"
             if material_agent_interventions == 0
             else "twin comparison attached to run artifacts"
@@ -152,7 +156,10 @@ def freeze_run(
         )
     )
 
-    output_hashes = {name: _sha256_bytes(payload) for name, payload in sorted(outputs.items())}
+    output_hashes = {
+        name: _sha256_bytes(payload)
+        for name, payload in sorted(outputs.items())
+    }
     result = FreezeResult(
         run_id=manifest.run_id,
         frozen_at=frozen_at,

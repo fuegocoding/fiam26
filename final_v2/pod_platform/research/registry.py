@@ -210,7 +210,11 @@ CREATE TRIGGER IF NOT EXISTS research_audit_no_delete BEFORE DELETE ON research_
 """
 
 # Trial kinds that consume a registration's variant budget.
-BUDGETED_TRIAL_KINDS = ("scored_variant", "hyperparameter_config", "seed_restart")
+BUDGETED_TRIAL_KINDS = (
+    "scored_variant",
+    "hyperparameter_config",
+    "seed_restart",
+)
 
 _PROTECTED_PARTITIONS = frozenset({"check", "final", "evaluation", "holdout"})
 
@@ -396,7 +400,9 @@ class Registry:
 
     def trial_count(self, kind: Optional[str] = None) -> int:
         if kind is None:
-            row = self._conn.execute("SELECT COUNT(*) FROM trial_counts").fetchone()
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM trial_counts"
+            ).fetchone()
         else:
             row = self._conn.execute(
                 "SELECT COUNT(*) FROM trial_counts WHERE kind = ?", (kind,)
@@ -435,12 +441,29 @@ class Registry:
     def _now() -> str:
         return dt.datetime.now(dt.timezone.utc).isoformat()
 
-    def _insert_trial(self, conn, kind, spec_hash, detail, counted_at, registration_id, reservation_key) -> str:
+    def _insert_trial(
+        self,
+        conn,
+        kind,
+        spec_hash,
+        detail,
+        counted_at,
+        registration_id,
+        reservation_key,
+    ) -> str:
         trial_id = f"trial_{uuid.uuid4().hex}"
         conn.execute(
             "INSERT INTO research_trials (trial_id, kind, spec_hash, registration_id, detail, counted_at, reservation_key)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (trial_id, kind, spec_hash, registration_id, detail, counted_at, reservation_key),
+            (
+                trial_id,
+                kind,
+                spec_hash,
+                registration_id,
+                detail,
+                counted_at,
+                reservation_key,
+            ),
         )
         # mirror into the legacy counter table under the same unique id (no shared in-process counter)
         conn.execute(
@@ -449,15 +472,35 @@ class Registry:
         )
         return trial_id
 
-    def research_register(self, registration_id: str, spec_hash: str, registered_at: str, payload: dict, trial: dict) -> None:
+    def research_register(
+        self,
+        registration_id: str,
+        spec_hash: str,
+        registered_at: str,
+        payload: dict,
+        trial: dict,
+    ) -> None:
         """Insert a registration and its ``registered_specification`` trial in ONE transaction."""
         try:
             with self._immediate() as conn:
                 conn.execute(
                     "INSERT INTO research_registrations (registration_id, spec_hash, registered_at, payload) VALUES (?, ?, ?, ?)",
-                    (registration_id, spec_hash, registered_at, json.dumps(payload, sort_keys=True, default=str)),
+                    (
+                        registration_id,
+                        spec_hash,
+                        registered_at,
+                        json.dumps(payload, sort_keys=True, default=str),
+                    ),
                 )
-                self._insert_trial(conn, trial["kind"], trial["spec_hash"], trial["detail"], trial["counted_at"], registration_id, None)
+                self._insert_trial(
+                    conn,
+                    trial["kind"],
+                    trial["spec_hash"],
+                    trial["detail"],
+                    trial["counted_at"],
+                    registration_id,
+                    None,
+                )
         except sqlite3.IntegrityError as exc:
             raise PodPlatformError(
                 ToolResponse.failure(
@@ -469,13 +512,23 @@ class Registry:
 
     def research_registration(self, registration_id: str) -> Optional[dict]:
         row = self._conn.execute(
-            "SELECT payload FROM research_registrations WHERE registration_id = ?", (registration_id,)
+            "SELECT payload FROM research_registrations WHERE registration_id = ?",
+            (registration_id,),
         ).fetchone()
         return json.loads(row[0]) if row else None
 
-    def research_add_trial(self, kind: str, spec_hash: str, detail: str, counted_at: str, registration_id: Optional[str] = None) -> str:
+    def research_add_trial(
+        self,
+        kind: str,
+        spec_hash: str,
+        detail: str,
+        counted_at: str,
+        registration_id: Optional[str] = None,
+    ) -> str:
         with self._immediate() as conn:
-            return self._insert_trial(conn, kind, spec_hash, detail, counted_at, registration_id, None)
+            return self._insert_trial(
+                conn, kind, spec_hash, detail, counted_at, registration_id, None
+            )
 
     def research_reserve(
         self,
@@ -497,24 +550,41 @@ class Registry:
         denied = None
         with self._immediate() as conn:
             prior = conn.execute(
-                "SELECT trial_id FROM research_trials WHERE reservation_key = ?", (reservation_key,)
+                "SELECT trial_id FROM research_trials WHERE reservation_key = ?",
+                (reservation_key,),
             ).fetchone()
             if prior:
                 return {"trial_id": prior[0], "replayed": True}
             if kind in BUDGETED_TRIAL_KINDS:
                 marks = ",".join("?" * len(BUDGETED_TRIAL_KINDS))
-                used = conn.execute(
-                    f"SELECT COUNT(*) FROM research_trials WHERE spec_hash = ? AND kind IN ({marks})",
-                    (spec_hash, *BUDGETED_TRIAL_KINDS),
-                ).fetchone()[0] + extra_used
+                used = (
+                    conn.execute(
+                        f"SELECT COUNT(*) FROM research_trials WHERE spec_hash = ? AND kind IN ({marks})",
+                        (spec_hash, *BUDGETED_TRIAL_KINDS),
+                    ).fetchone()[0]
+                    + extra_used
+                )
                 if used >= variant_budget:
                     denied = f"{kind} {detail!r}: {used}/{variant_budget} variants already spent"
                     conn.execute(
                         "INSERT INTO research_audit (event, subject, detail, at) VALUES (?, ?, ?, ?)",
-                        ("reservation_denied", registration_id, denied, self._now()),
+                        (
+                            "reservation_denied",
+                            registration_id,
+                            denied,
+                            self._now(),
+                        ),
                     )
             if denied is None:
-                trial_id = self._insert_trial(conn, kind, spec_hash, detail, counted_at, registration_id, reservation_key)
+                trial_id = self._insert_trial(
+                    conn,
+                    kind,
+                    spec_hash,
+                    detail,
+                    counted_at,
+                    registration_id,
+                    reservation_key,
+                )
         if denied is not None:
             raise PodPlatformError(
                 ToolResponse.failure(
@@ -528,19 +598,31 @@ class Registry:
     def research_budgeted_used(self, spec_hash: str) -> int:
         marks = ",".join("?" * len(BUDGETED_TRIAL_KINDS))
         row = self._conn.execute(
-            f"SELECT COUNT(*) FROM research_trials WHERE spec_hash = ? AND kind IN ({marks})", (spec_hash, *BUDGETED_TRIAL_KINDS)
+            f"SELECT COUNT(*) FROM research_trials WHERE spec_hash = ? AND kind IN ({marks})",
+            (spec_hash, *BUDGETED_TRIAL_KINDS),
         ).fetchone()
         return int(row[0])
 
     def research_trial_count(self, kind: Optional[str] = None) -> int:
         if kind is None:
-            row = self._conn.execute("SELECT COUNT(*) FROM research_trials").fetchone()
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM research_trials"
+            ).fetchone()
         else:
-            row = self._conn.execute("SELECT COUNT(*) FROM research_trials WHERE kind = ?", (kind,)).fetchone()
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM research_trials WHERE kind = ?", (kind,)
+            ).fetchone()
         return int(row[0])
 
     def research_record_access(
-        self, access_id: str, partition: str, actor: str, purpose: str, record_count: int, *, authorized: bool = False
+        self,
+        access_id: str,
+        partition: str,
+        actor: str,
+        purpose: str,
+        record_count: int,
+        *,
+        authorized: bool = False,
     ) -> dict:
         """Durable outcome-access event; an identical repeat is a replay, a conflicting id or an unauthorized
         protected access is refused and logged in ``research_audit``."""
@@ -548,20 +630,39 @@ class Registry:
         code = ErrorCode.SCHEMA_MISMATCH
         with self._immediate() as conn:
             prior = conn.execute(
-                "SELECT partition, actor, purpose, record_count FROM research_access WHERE access_id = ?", (access_id,)
+                "SELECT partition, actor, purpose, record_count FROM research_access WHERE access_id = ?",
+                (access_id,),
             ).fetchone()
             if partition in _PROTECTED_PARTITIONS and not authorized:
-                problem, code = f"partition {partition!r} is referee-controlled", ErrorCode.PARTITION_ACCESS_DENIED
-            elif prior and tuple(prior) == (partition, actor, purpose, record_count):
+                problem, code = (
+                    f"partition {partition!r} is referee-controlled",
+                    ErrorCode.PARTITION_ACCESS_DENIED,
+                )
+            elif prior and tuple(prior) == (
+                partition,
+                actor,
+                purpose,
+                record_count,
+            ):
                 return {"access_id": access_id, "replayed": True}
             elif prior:
-                problem = f"access id {access_id} already used for a different access"
-            elif conn.execute("SELECT 1 FROM evaluation_access WHERE access_id = ?", (access_id,)).fetchone():
+                problem = (
+                    f"access id {access_id} already used for a different access"
+                )
+            elif conn.execute(
+                "SELECT 1 FROM evaluation_access WHERE access_id = ?",
+                (access_id,),
+            ).fetchone():
                 problem = f"access id {access_id} already used in the evaluation access log"
             if problem is not None:
                 conn.execute(
                     "INSERT INTO research_audit (event, subject, detail, at) VALUES (?, ?, ?, ?)",
-                    ("access_refused", access_id, f"{actor}/{partition}: {problem}", self._now()),
+                    (
+                        "access_refused",
+                        access_id,
+                        f"{actor}/{partition}: {problem}",
+                        self._now(),
+                    ),
                 )
             else:
                 now = self._now()
@@ -589,7 +690,16 @@ class Registry:
         rows = self._conn.execute(
             "SELECT access_id, partition, actor, purpose, record_count FROM research_access ORDER BY seq"
         ).fetchall()
-        return [dict(access_id=r[0], partition=r[1], actor=r[2], purpose=r[3], record_count=r[4]) for r in rows]
+        return [
+            dict(
+                access_id=r[0],
+                partition=r[1],
+                actor=r[2],
+                purpose=r[3],
+                record_count=r[4],
+            )
+            for r in rows
+        ]
 
     def research_audit(self, event: str, subject: str, detail: str) -> None:
         with self._immediate() as conn:
@@ -600,8 +710,15 @@ class Registry:
 
     def research_audit_log(self, event: Optional[str] = None) -> list[dict]:
         query = "SELECT seq, event, subject, detail, at FROM research_audit"
-        rows = self._conn.execute(query + (" WHERE event = ? ORDER BY seq" if event else " ORDER BY seq"), (event,) if event else ()).fetchall()
-        return [dict(seq=r[0], event=r[1], subject=r[2], detail=r[3], at=r[4]) for r in rows]
+        rows = self._conn.execute(
+            query
+            + (" WHERE event = ? ORDER BY seq" if event else " ORDER BY seq"),
+            (event,) if event else (),
+        ).fetchall()
+        return [
+            dict(seq=r[0], event=r[1], subject=r[2], detail=r[3], at=r[4])
+            for r in rows
+        ]
 
     def verify_immutability(self) -> None:
         for table in sorted(IMMUTABLE_TABLES | APPEND_ONLY_TABLES):

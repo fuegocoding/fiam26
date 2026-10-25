@@ -39,7 +39,9 @@ def aware(value: dt.datetime, name: str) -> dt.datetime:
 def parse_aware(text: str, name: str = "timestamp") -> dt.datetime:
     """Parse an ISO-8601 timestamp that carries an explicit offset (``Z`` allowed)."""
     try:
-        parsed = dt.datetime.fromisoformat(str(text).strip().replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(
+            str(text).strip().replace("Z", "+00:00")
+        )
     except ValueError:
         raise ValueError(f"{name} is not an ISO-8601 timestamp") from None
     return require_aware(parsed, name)
@@ -51,7 +53,9 @@ def utc_close(day: dt.date) -> dt.datetime:
 
 
 def canonical_json(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str, allow_nan=False)
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), default=str, allow_nan=False
+    )
 
 
 def digest(obj: Any) -> str:
@@ -69,7 +73,11 @@ def sha256_text(text: str) -> str:
 def file_sha256(path: "str | Path") -> str:
     path = Path(path)
     if not path.is_file():
-        fail(ErrorCode.SCHEMA_MISMATCH, f"file does not exist: {path}", "Source hashes need existing files.")
+        fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            f"file does not exist: {path}",
+            "Source hashes need existing files.",
+        )
     h = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
@@ -83,11 +91,17 @@ def tree_sha256(path: "str | Path") -> str:
     if path.is_file():
         return file_sha256(path)
     if not path.is_dir():
-        fail(ErrorCode.SCHEMA_MISMATCH, f"path does not exist: {path}", "Source hashes need existing paths.")
+        fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            f"path does not exist: {path}",
+            "Source hashes need existing paths.",
+        )
     h = hashlib.sha256()
     for item in sorted(p for p in path.rglob("*") if p.is_file()):
         rel = item.relative_to(path)
-        if any(part.startswith(".") or part == "__pycache__" for part in rel.parts):
+        if any(
+            part.startswith(".") or part == "__pycache__" for part in rel.parts
+        ):
             continue
         h.update(rel.as_posix().encode("utf-8"))
         h.update(b"\0")
@@ -112,7 +126,9 @@ def atomic_write_bytes(path: "str | Path", payload: bytes) -> str:
 
 
 def pretty_json(obj: Any) -> str:
-    return json.dumps(obj, indent=2, sort_keys=True, default=str, allow_nan=False)
+    return json.dumps(
+        obj, indent=2, sort_keys=True, default=str, allow_nan=False
+    )
 
 
 def atomic_write_json(path: "str | Path", obj: Any) -> str:
@@ -125,9 +141,17 @@ def read_json(path: "str | Path") -> Any:
 
 def safe_id(value: str, what: str = "identifier") -> str:
     if not isinstance(value, str) or not _SAFE_ID.match(value):
-        fail(ErrorCode.SCHEMA_MISMATCH, f"invalid {what}: {value!r}", "Identifiers are plain [A-Za-z0-9_.-] tokens.")
+        fail(
+            ErrorCode.SCHEMA_MISMATCH,
+            f"invalid {what}: {value!r}",
+            "Identifiers are plain [A-Za-z0-9_.-] tokens.",
+        )
     return value
 
 
 def fail(code: ErrorCode, summary: str, stop: str, **kwargs: Any) -> NoReturn:
-    raise PodPlatformError(ToolResponse.failure(summary=summary, code=code, stop_condition=stop, **kwargs))
+    raise PodPlatformError(
+        ToolResponse.failure(
+            summary=summary, code=code, stop_condition=stop, **kwargs
+        )
+    )

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Sequence
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,11 @@ class IntegratedForecast:
 
     @property
     def coverage_fraction(self) -> float:
-        return self.families_available / self.families_total if self.families_total else 0.0
+        return (
+            self.families_available / self.families_total
+            if self.families_total
+            else 0.0
+        )
 
 
 class FamilyIntegrator:
@@ -63,7 +67,9 @@ class FamilyIntegrator:
     def families(self) -> tuple[str, ...]:
         return self._families
 
-    def integrate(self, estimates: Sequence[FamilyEstimate]) -> IntegratedForecast:
+    def integrate(
+        self, estimates: Sequence[FamilyEstimate]
+    ) -> IntegratedForecast:
         security_ids = {e.security_id for e in estimates}
         if len(security_ids) != 1:
             raise ValueError("estimates must belong to a single security")
@@ -71,9 +77,13 @@ class FamilyIntegrator:
         by_family: dict[str, FamilyEstimate] = {}
         for estimate in estimates:
             if estimate.family_id not in self._families:
-                raise ValueError(f"family {estimate.family_id!r} is not admitted")
+                raise ValueError(
+                    f"family {estimate.family_id!r} is not admitted"
+                )
             if estimate.family_id in by_family:
-                raise ValueError(f"duplicate estimate for family {estimate.family_id!r}")
+                raise ValueError(
+                    f"duplicate estimate for family {estimate.family_id!r}"
+                )
             by_family[estimate.family_id] = estimate
 
         total = len(self._families)
@@ -85,7 +95,9 @@ class FamilyIntegrator:
             estimate = by_family.get(family_id)
             if estimate is None or not estimate.available:
                 missing.append(family_id)
-                variance_sum += (self._missing_multiplier * self._neutral_uncertainty_value) ** 2
+                variance_sum += (
+                    self._missing_multiplier * self._neutral_uncertainty_value
+                ) ** 2
                 continue
             available += 1
             alpha_sum += estimate.expected_excess_return

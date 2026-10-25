@@ -8,9 +8,18 @@ trading days of holding month t+1.
 
 from __future__ import annotations
 
+try:
+    import torch
+except ImportError:
+    torch = None
+try:
+    from timesfm3 import TimesFM3Forecaster
+except ImportError:
+    TimesFM3Forecaster = None
+
+
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -41,11 +50,14 @@ def prepare_daily_excess_inputs(
 ) -> tuple[list[int], list[np.ndarray]]:
     """Extracts trailing market-adjusted daily log-return arrays strictly <= cutoff_date."""
     sub = dsf_window.loc[
-        (dsf_window["day"] <= cutoff_date) & (dsf_window["permno"].isin(eligible_permnos))
+        (dsf_window["day"] <= cutoff_date)
+        & (dsf_window["permno"].isin(eligible_permnos))
     ]
     if sub.empty:
         return [], []
-    px = sub.pivot(index="day", columns="permno", values="daily_return").tail(max_context)
+    px = sub.pivot(index="day", columns="permno", values="daily_return").tail(
+        max_context
+    )
     spx_aligned = spx_daily.reindex(px.index).fillna(0.0).to_numpy(float)
 
     valid_permnos: list[int] = []
@@ -95,8 +107,12 @@ def summarize_trajectory_forecasts(
     if qf.ndim == 3 and qf.shape[2] >= 2:
         q_low_sum = qf[:, :, 0].sum(axis=1)
         q_high_sum = qf[:, :, -1].sum(axis=1)
-        q_spread = np.expm1(np.clip(q_high_sum, -2.0, 2.0)) - np.expm1(np.clip(q_low_sum, -2.0, 2.0))
-        upside_tail_5d = np.expm1(np.clip(qf[:, :h5, -1].sum(axis=1), -2.0, 2.0))
+        q_spread = np.expm1(np.clip(q_high_sum, -2.0, 2.0)) - np.expm1(
+            np.clip(q_low_sum, -2.0, 2.0)
+        )
+        upside_tail_5d = np.expm1(
+            np.clip(qf[:, :h5, -1].sum(axis=1), -2.0, 2.0)
+        )
     else:
         q_spread = np.zeros(len(permnos), dtype=float)
         upside_tail_5d = np.expm1(np.clip(cum5_log, -2.0, 2.0))
@@ -120,8 +136,8 @@ def load_timesfm_3p0_forecaster(
     cfg: DailyTimesFMConfig = DailyTimesFMConfig(),
 ) -> Callable[[list[np.ndarray], int], tuple[np.ndarray, np.ndarray]]:
     """Loads google/timesfm-3.0-pytorch via TimesFM3Forecaster and returns a batched forecast callable."""
-    import torch
-    from timesfm3 import TimesFM3Forecaster
+    if torch is None or TimesFM3Forecaster is None:
+        raise ImportError("TimesFM inference requires torch and timesfm3")
 
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision("high")
@@ -130,7 +146,9 @@ def load_timesfm_3p0_forecaster(
         per_core_batch_size=min(cfg.batch_size, 128),
     )
 
-    def _forecast_fn(inputs: list[np.ndarray], horizon: int) -> tuple[np.ndarray, np.ndarray]:
+    def _forecast_fn(
+        inputs: list[np.ndarray], horizon: int
+    ) -> tuple[np.ndarray, np.ndarray]:
         outputs = list(
             forecaster.predict_batch(
                 contexts=inputs,
@@ -139,8 +157,12 @@ def load_timesfm_3p0_forecaster(
                 use_znorm=True,
             )
         )
-        pf = np.stack([np.asarray(o.forecast, dtype=np.float32) for o in outputs], axis=0)
-        qf = np.stack([np.asarray(o.quantiles, dtype=np.float32) for o in outputs], axis=0)
+        pf = np.stack(
+            [np.asarray(o.forecast, dtype=np.float32) for o in outputs], axis=0
+        )
+        qf = np.stack(
+            [np.asarray(o.quantiles, dtype=np.float32) for o in outputs], axis=0
+        )
         return pf, qf
 
     return _forecast_fn

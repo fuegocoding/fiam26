@@ -38,7 +38,13 @@ class Observation(DurableModel):
 
     @model_validator(mode="after")
     def _check_clocks(self) -> "Observation":
-        for name in ("event_time", "period_start", "period_end", "source_published_at", "platform_delivered_at"):
+        for name in (
+            "event_time",
+            "period_start",
+            "period_end",
+            "source_published_at",
+            "platform_delivered_at",
+        ):
             value = getattr(self, name)
             if value is not None:
                 require_aware(value, name)
@@ -46,14 +52,18 @@ class Observation(DurableModel):
         require_aware(self.version_known_at, "version_known_at")
         require_aware(self.available_at, "available_at")
         if self.available_at > self.version_known_at:
-            raise ValueError("a version cannot be known before the information is available")
+            raise ValueError(
+                "a version cannot be known before the information is available"
+            )
         if self.period_start is not None and self.period_end is not None:
             if self.period_end < self.period_start:
                 raise ValueError("period_end cannot precede period_start")
         if self.version == 1 and self.revision_of is not None:
             raise ValueError("a first report cannot be a revision_of anything")
         if self.version > 1 and self.revision_of is None:
-            raise ValueError("a restatement must reference the observation it revises")
+            raise ValueError(
+                "a restatement must reference the observation it revises"
+            )
         return self
 
     @property
@@ -67,7 +77,9 @@ class BitemporalStore:
 
     def insert(self, observation: Observation) -> str:
         if observation.observation_id in self._rows:
-            raise ValueError(f"duplicate observation_id {observation.observation_id}")
+            raise ValueError(
+                f"duplicate observation_id {observation.observation_id}"
+            )
         self._rows[observation.observation_id] = observation
         return observation.observation_id
 
@@ -105,9 +117,14 @@ class BitemporalStore:
                 latest[key] = row
         return sorted(latest.values(), key=lambda r: r.observation_id)
 
-    def eligibility_predicate(self, observation: Observation, information_cutoff: dt.datetime) -> bool:
+    def eligibility_predicate(
+        self, observation: Observation, information_cutoff: dt.datetime
+    ) -> bool:
         cutoff = require_aware(information_cutoff, "information_cutoff")
-        return observation.available_at <= cutoff and observation.version_known_at <= cutoff
+        return (
+            observation.available_at <= cutoff
+            and observation.version_known_at <= cutoff
+        )
 
     def __len__(self) -> int:
         return len(self._rows)

@@ -15,8 +15,8 @@ import datetime as dt
 import enum
 import hashlib
 import json
-from dataclasses import dataclass, field
-from typing import Callable, Optional, Sequence
+from dataclasses import dataclass
+from typing import Callable, Optional
 
 from ..contracts.base import require_aware
 from ..contracts.decisions import ActorKind, DecisionEvent
@@ -85,7 +85,9 @@ class AgentTwin:
             "skipped_routine": 0,
         }
 
-    def handle(self, trigger: ExceptionTrigger, *, force_call: bool = False) -> InterventionRecord:
+    def handle(
+        self, trigger: ExceptionTrigger, *, force_call: bool = False
+    ) -> InterventionRecord:
         self._triggers_seen += 1
         twin_action = self._deterministic_action(trigger)
         response: Optional[AgentResponse] = None
@@ -142,7 +144,9 @@ class AgentTwin:
     ) -> DecisionEvent:
         require_aware(record.trigger.fired_at, "fired_at")
         if record.used_agent and record.agent_action:
-            raise ValueError("use decision_event_from_agent for agent interventions")
+            raise ValueError(
+                "use decision_event_from_agent for agent interventions"
+            )
         return DecisionEvent(
             owner=owner,
             created_at=record.trigger.fired_at,
@@ -154,11 +158,14 @@ class AgentTwin:
             input_artifact_ids=[f"trigger_{record.trigger.kind.value}"],
             input_hashes={
                 f"trigger_{record.trigger.kind.value}": hashlib.sha256(
-                    json.dumps(record.trigger.context, sort_keys=True, default=str).encode()
+                    json.dumps(
+                        record.trigger.context, sort_keys=True, default=str
+                    ).encode()
                 ).hexdigest()
             },
             chosen_action=record.chosen_action,
-            rationale=record.fallback_reason or "fixed-rule path with no agent intervention",
+            rationale=record.fallback_reason
+            or "fixed-rule path with no agent intervention",
             authorizing_rule_or_certificate_id="rule_fixed_execution_baseline_v1",
             resulting_artifact_id=resulting_artifact_id,
         )
@@ -183,7 +190,9 @@ class AgentTwin:
             input_artifact_ids=[f"trigger_{record.trigger.kind.value}"],
             input_hashes={
                 f"trigger_{record.trigger.kind.value}": hashlib.sha256(
-                    json.dumps(record.trigger.context, sort_keys=True, default=str).encode()
+                    json.dumps(
+                        record.trigger.context, sort_keys=True, default=str
+                    ).encode()
                 ).hexdigest()
             },
             proposed_alternatives=[record.twin_action],

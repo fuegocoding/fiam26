@@ -33,7 +33,9 @@ class SecurityFeatures:
 
     def get(self, key: str) -> float:
         if key not in self.values:
-            raise KeyError(f"feature {key!r} is not declared for {self.security_id}")
+            raise KeyError(
+                f"feature {key!r} is not declared for {self.security_id}"
+            )
         return self.values[key]
 
 
@@ -52,7 +54,9 @@ class Belief:
         require_aware(self.information_cutoff, "information_cutoff")
         require_aware(self.expected_resolution_at, "expected_resolution_at")
         if self.expected_resolution_at <= self.information_cutoff:
-            raise ValueError("expected resolution must lie after the information cutoff")
+            raise ValueError(
+                "expected resolution must lie after the information cutoff"
+            )
 
 
 class RankSpreadBridge(StrictModel):
@@ -64,13 +68,17 @@ class RankSpreadBridge(StrictModel):
     @model_validator(mode="after")
     def _check_unit(self) -> "RankSpreadBridge":
         if self.unit != "decimal_return":
-            raise ValueError("bridge outputs must be decimal_return; convert at boundaries")
+            raise ValueError(
+                "bridge outputs must be decimal_return; convert at boundaries"
+            )
         return self
 
-    def expected_excess_return(self, belief: Belief, scaled_score: Decimal) -> Decimal:
-        return (self.slope_bp_per_unit * scaled_score / Decimal(10000)).quantize(
-            Decimal("0.000001")
-        )
+    def expected_excess_return(
+        self, belief: Belief, scaled_score: Decimal
+    ) -> Decimal:
+        return (
+            self.slope_bp_per_unit * scaled_score / Decimal(10000)
+        ).quantize(Decimal("0.000001"))
 
 
 class StrategyCandidate:
@@ -84,7 +92,9 @@ class StrategyCandidate:
     uses_pretrained_model: bool
     bridge: RankSpreadBridge
 
-    def score(self, features: SecurityFeatures, expected_resolution_at: dt.datetime) -> Optional[Belief]:
+    def score(
+        self, features: SecurityFeatures, expected_resolution_at: dt.datetime
+    ) -> Optional[Belief]:
         raise NotImplementedError
 
     def scaled_score(self, belief: Belief) -> Decimal:
@@ -122,7 +132,9 @@ class StrategyCandidate:
                 expected_resolution_at=expected_resolution_at,
             ),
             return_forecast=ReturnForecast(
-                expected_excess_return=self.bridge.expected_excess_return(belief, scaled),
+                expected_excess_return=self.bridge.expected_excess_return(
+                    belief, scaled
+                ),
                 unit="decimal_return",
                 horizon_trading_days=self.bridge.horizon_trading_days,
                 bridge_id=self.bridge.bridge_id,

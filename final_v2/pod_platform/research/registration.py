@@ -12,7 +12,12 @@ from typing import Optional
 
 from pydantic import Field, model_validator
 
-from ..contracts.base import DurableModel, StrictModel, canonical_digest, require_aware
+from ..contracts.base import (
+    DurableModel,
+    StrictModel,
+    canonical_digest,
+    require_aware,
+)
 from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
 from .registry import BUDGETED_TRIAL_KINDS, Registry
 
@@ -94,7 +99,9 @@ class ResearchLedger:
         self._registrations[experiment.registration_id] = experiment
         return experiment.registration_id
 
-    def ensure_registered(self, experiment: RegisteredExperiment) -> tuple[RegisteredExperiment, bool]:
+    def ensure_registered(
+        self, experiment: RegisteredExperiment
+    ) -> tuple[RegisteredExperiment, bool]:
         """Return the stored registration if the id is known (never resetting counts), else register it.
 
         Known id with a different spec hash is refused. Returns ``(registration, created)``."""
@@ -131,30 +138,68 @@ class ResearchLedger:
     # ------------------------------------------------------------------ trials
     @staticmethod
     def _trial_row(trial: TrialRecord) -> dict:
-        return {"kind": trial.kind, "spec_hash": trial.spec_hash, "detail": trial.detail, "counted_at": trial.counted_at.isoformat()}
+        return {
+            "kind": trial.kind,
+            "spec_hash": trial.spec_hash,
+            "detail": trial.detail,
+            "counted_at": trial.counted_at.isoformat(),
+        }
 
-    def record_trial(self, trial: TrialRecord, registration_id: Optional[str] = None) -> None:
+    def record_trial(
+        self, trial: TrialRecord, registration_id: Optional[str] = None
+    ) -> None:
         row = self._trial_row(trial)
-        self._registry.research_add_trial(row["kind"], row["spec_hash"], row["detail"], row["counted_at"], registration_id)
+        self._registry.research_add_trial(
+            row["kind"],
+            row["spec_hash"],
+            row["detail"],
+            row["counted_at"],
+            registration_id,
+        )
 
-    def reserve_trial(self, registration_id: str, trial: TrialRecord, *, reservation_key: Optional[str] = None) -> dict:
+    def reserve_trial(
+        self,
+        registration_id: str,
+        trial: TrialRecord,
+        *,
+        reservation_key: Optional[str] = None,
+    ) -> dict:
         """Spend one trial BEFORE the work runs. Atomic against the variant budget.
 
         The same ``reservation_key`` (default: registration, kind, spec hash and detail) is one logical spend, so
         retrying a cached identical experiment costs nothing, while a new variant detail spends a new slot."""
         registration = self.registration(registration_id)
         key = reservation_key or canonical_digest(
-            {"registration": registration_id, "kind": trial.kind, "spec_hash": trial.spec_hash, "detail": trial.detail}
+            {
+                "registration": registration_id,
+                "kind": trial.kind,
+                "spec_hash": trial.spec_hash,
+                "detail": trial.detail,
+            }
         )
         row = self._trial_row(trial)
         return self._registry.research_reserve(
-            registration_id, registration.spec_content_hash, registration.variant_budget,
-            row["kind"], row["detail"], row["counted_at"], key,
-            extra_used=sum(1 for t in self._trials if t.kind in BUDGETED_TRIAL_KINDS and t.spec_hash == registration.spec_content_hash),
+            registration_id,
+            registration.spec_content_hash,
+            registration.variant_budget,
+            row["kind"],
+            row["detail"],
+            row["counted_at"],
+            key,
+            extra_used=sum(
+                1
+                for t in self._trials
+                if t.kind in BUDGETED_TRIAL_KINDS
+                and t.spec_hash == registration.spec_content_hash
+            ),
         )
 
     def trial_count(self, kind: Optional[str] = None) -> int:
-        legacy = len(self._trials) if kind is None else sum(1 for trial in self._trials if trial.kind == kind)
+        legacy = (
+            len(self._trials)
+            if kind is None
+            else sum(1 for trial in self._trials if trial.kind == kind)
+        )
         return self._registry.research_trial_count(kind) + legacy
 
     # ---------------------------------------------------------- outcome access
@@ -168,7 +213,14 @@ class ResearchLedger:
         *,
         authorized: bool = False,
     ) -> str:
-        self._registry.research_record_access(access_id, partition, actor, purpose, record_count, authorized=authorized)
+        self._registry.research_record_access(
+            access_id,
+            partition,
+            actor,
+            purpose,
+            record_count,
+            authorized=authorized,
+        )
         return access_id
 
     def outcome_accesses(self) -> list[dict]:
@@ -177,15 +229,24 @@ class ResearchLedger:
     # ------------------------------------------------------------------ budget
     def variant_budget_remaining(self, registration_id: str) -> int:
         experiment = self.registration(registration_id)
-        used = self._registry.research_budgeted_used(experiment.spec_content_hash) + sum(
-            1 for trial in self._trials if trial.kind in BUDGETED_TRIAL_KINDS and trial.spec_hash == experiment.spec_content_hash
+        used = self._registry.research_budgeted_used(
+            experiment.spec_content_hash
+        ) + sum(
+            1
+            for trial in self._trials
+            if trial.kind in BUDGETED_TRIAL_KINDS
+            and trial.spec_hash == experiment.spec_content_hash
         )
         return experiment.variant_budget - used
 
     def enforce_variant_budget(self, registration_id: str) -> None:
         remaining = self.variant_budget_remaining(registration_id)
         if remaining <= 0:
-            self._registry.research_audit("budget_check_failed", registration_id, "variant budget exhausted")
+            self._registry.research_audit(
+                "budget_check_failed",
+                registration_id,
+                "variant budget exhausted",
+            )
             raise PodPlatformError(
                 ToolResponse.failure(
                     summary=f"variant budget exhausted for {registration_id}",

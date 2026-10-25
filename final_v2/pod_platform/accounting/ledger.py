@@ -53,7 +53,9 @@ class Position:
         if self.quantity >= ZERO:
             return ZERO
         if self.last_mark is None:
-            raise ValueError(f"{self.security_id} is short with no mark; the liability cannot be deleted")
+            raise ValueError(
+                f"{self.security_id} is short with no mark; the liability cannot be deleted"
+            )
         return -self.quantity * self.last_mark
 
 
@@ -80,7 +82,9 @@ class AccountingLedger:
         self.cash_income = ZERO
 
     def position(self, security_id: str) -> Position:
-        return self.positions.setdefault(security_id, Position(security_id=security_id))
+        return self.positions.setdefault(
+            security_id, Position(security_id=security_id)
+        )
 
     def execute(
         self,
@@ -108,7 +112,9 @@ class AccountingLedger:
         if side == OrderSide.SHORT:
             position.borrowed_notional += quantity * price
         if side == OrderSide.COVER:
-            position.borrowed_notional = max(ZERO, position.borrowed_notional - quantity * price)
+            position.borrowed_notional = max(
+                ZERO, position.borrowed_notional - quantity * price
+            )
         position.quantity += signed
         self.cash -= proceeds
         self.cash -= fees
@@ -164,11 +170,16 @@ class AccountingLedger:
                 event_id=event_id,
                 kind="split",
                 effective_at=at,
-                detail={"security_id": security_id, "ratio": f"{numerator}/{denominator}"},
+                detail={
+                    "security_id": security_id,
+                    "ratio": f"{numerator}/{denominator}",
+                },
             )
         )
 
-    def accrue_cash(self, annual_rate: Decimal, periods_per_year: int, at: dt.datetime) -> None:
+    def accrue_cash(
+        self, annual_rate: Decimal, periods_per_year: int, at: dt.datetime
+    ) -> None:
         at = require_aware(at, "at")
         if periods_per_year <= 0:
             raise ValueError("periods_per_year must be positive")
@@ -235,7 +246,9 @@ class AccountingLedger:
         return [p for p in self.positions.values() if p.quantity != ZERO]
 
     def gross_exposure(self) -> Decimal:
-        return sum((abs(p.market_value()) for p in self.marked_positions()), ZERO)
+        return sum(
+            (abs(p.market_value()) for p in self.marked_positions()), ZERO
+        )
 
     def net_exposure(self) -> Decimal:
         return sum((p.market_value() for p in self.marked_positions()), ZERO)
@@ -245,18 +258,29 @@ class AccountingLedger:
 
     def nav(self) -> Decimal:
         marked_assets = sum(
-            (p.market_value() for p in self.marked_positions() if p.quantity > ZERO), ZERO
+            (
+                p.market_value()
+                for p in self.marked_positions()
+                if p.quantity > ZERO
+            ),
+            ZERO,
         )
         return marked_assets + self.cash - self.short_liabilities()
 
     def assert_nav_identity(self) -> None:
-        recomputed = self.cash + sum((p.market_value() for p in self.marked_positions()), ZERO)
+        recomputed = self.cash + sum(
+            (p.market_value() for p in self.marked_positions()), ZERO
+        )
         if recomputed != self.nav():
-            raise ValueError("NAV identity failed: cash + marked quantities != marked assets + cash - liabilities")
+            raise ValueError(
+                "NAV identity failed: cash + marked quantities != marked assets + cash - liabilities"
+            )
 
     def positions_table(self) -> list[dict]:
         rows = []
-        for position in sorted(self.marked_positions(), key=lambda p: p.security_id):
+        for position in sorted(
+            self.marked_positions(), key=lambda p: p.security_id
+        ):
             rows.append(
                 {
                     "security_id": position.security_id,

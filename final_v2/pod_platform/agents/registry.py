@@ -94,7 +94,9 @@ class ModelRegistry:
 
     def register(self, checkpoint: ModelCheckpoint) -> str:
         if checkpoint.checkpoint_id in self._checkpoints:
-            raise ValueError(f"duplicate checkpoint_id {checkpoint.checkpoint_id}")
+            raise ValueError(
+                f"duplicate checkpoint_id {checkpoint.checkpoint_id}"
+            )
         self._checkpoints[checkpoint.checkpoint_id] = checkpoint
         return checkpoint.checkpoint_id
 
@@ -119,7 +121,10 @@ class ModelRegistry:
                     stop_condition="A proposed upgrade passes only through the fixed-task benchmark (20.18).",
                 )
             )
-        if record.temporal_policy == TemporalPolicy.CUTOFF_QUALIFIED_BACKCAST and not self._allow_policy_b:
+        if (
+            record.temporal_policy == TemporalPolicy.CUTOFF_QUALIFIED_BACKCAST
+            and not self._allow_policy_b
+        ):
             raise PodPlatformError(
                 ToolResponse.failure(
                     summary="cutoff-qualified backcast is disabled for this registry",
@@ -131,7 +136,11 @@ class ModelRegistry:
         return record.adoption_id
 
     def eligible_at(
-        self, checkpoint_id: str, simulated_at: dt.datetime, *, policy: TemporalPolicy = TemporalPolicy.RELEASE_GATED
+        self,
+        checkpoint_id: str,
+        simulated_at: dt.datetime,
+        *,
+        policy: TemporalPolicy = TemporalPolicy.RELEASE_GATED,
     ) -> bool:
         checkpoint = self._checkpoints.get(checkpoint_id)
         if checkpoint is None:
@@ -155,7 +164,9 @@ class ModelRegistry:
             if record.role == role
             and record.effective_start <= simulated_at
             and record.temporal_policy == policy
-            and self.eligible_at(record.checkpoint_id, simulated_at, policy=policy)
+            and self.eligible_at(
+                record.checkpoint_id, simulated_at, policy=policy
+            )
         ]
         if not candidates:
             raise PodPlatformError(

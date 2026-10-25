@@ -13,7 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .models import PaperCard, PapersError, canonical_json, ensure_aware, sha256_text
+from .models import (
+    PaperCard,
+    PapersError,
+    canonical_json,
+    ensure_aware,
+    sha256_text,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS versions(
@@ -50,23 +56,32 @@ class PaperStore:
 
     # ----------------------------------------------------------- aliases
     def resolve(self, alias: str) -> Optional[str]:
-        r = self._db.execute("SELECT paper_id FROM aliases WHERE alias=?", (alias,)).fetchone()
+        r = self._db.execute(
+            "SELECT paper_id FROM aliases WHERE alias=?", (alias,)
+        ).fetchone()
         return r[0] if r else None
 
     def _merge_into(self, old: str, new: str) -> None:
-        for (key, js) in self._db.execute(
-                "SELECT version_key, card_json FROM versions WHERE paper_id=?", (old,)).fetchall():
-            exists = self._db.execute("SELECT 1 FROM versions WHERE paper_id=? AND version_key=?",
-                                      (new, key)).fetchone()
+        for key, js in self._db.execute(
+            "SELECT version_key, card_json FROM versions WHERE paper_id=?",
+            (old,),
+        ).fetchall():
+            exists = self._db.execute(
+                "SELECT 1 FROM versions WHERE paper_id=? AND version_key=?",
+                (new, key),
+            ).fetchone()
             if not exists:
                 d = json.loads(js)
                 d["paper_id"] = new
                 card = PaperCard.model_validate(d)
                 self._db.execute(
                     "UPDATE versions SET paper_id=?, card_json=? WHERE paper_id=? AND version_key=?",
-                    (new, card.sealed().model_dump_json(), old, key))
+                    (new, card.sealed().model_dump_json(), old, key),
+                )
         self._db.execute("DELETE FROM versions WHERE paper_id=?", (old,))
-        self._db.execute("UPDATE aliases SET paper_id=? WHERE paper_id=?", (new, old))
+        self._db.execute(
+            "UPDATE aliases SET paper_id=? WHERE paper_id=?", (new, old)
+        )
 
     def register_aliases(self, card: PaperCard) -> str:
         """Link all ids of ``card``; merge previously separate papers. Return canonical id."""
@@ -82,7 +97,10 @@ class PaperStore:
         for o in owners - {canon}:
             self._merge_into(o, canon)
         for a in aliases | owners:
-            self._db.execute("INSERT OR REPLACE INTO aliases(alias, paper_id) VALUES(?,?)", (a, canon))
+            self._db.execute(
+                "INSERT OR REPLACE INTO aliases(alias, paper_id) VALUES(?,?)",
+                (a, canon),
+            )
         return canon
 
     # ------------------------------------------------------------- cards
@@ -93,12 +111,19 @@ class PaperStore:
             card = card.model_copy(update={"paper_id": canon})
             old = self.get_row(canon, card.version_key)
             if old is not None:
-                keep = {"latest_version": card.latest_version or old.latest_version}
+                keep = {
+                    "latest_version": card.latest_version or old.latest_version
+                }
                 if old.abstract_hash == card.abstract_hash:
-                    keep.update(claims=old.claims, content_hash=old.content_hash,
-                                original_hash=old.original_hash, content_chars=old.content_chars,
-                                content_truncated=old.content_truncated,
-                                text_status=old.text_status, access_status=old.access_status)
+                    keep.update(
+                        claims=old.claims,
+                        content_hash=old.content_hash,
+                        original_hash=old.original_hash,
+                        content_chars=old.content_chars,
+                        content_truncated=old.content_truncated,
+                        text_status=old.text_status,
+                        access_status=old.access_status,
+                    )
                 card = card.model_copy(update=keep)
             self._write(card)
         return card.sealed()
@@ -107,9 +132,15 @@ class PaperStore:
         card = card.sealed()
         self._db.execute(
             "INSERT OR REPLACE INTO versions VALUES(?,?,?,?,?,?)",
-            (card.paper_id, card.version_key, card.version,
-             card.version_date.isoformat() if card.version_date else None,
-             card.retrieved_at.isoformat(), card.model_dump_json()))
+            (
+                card.paper_id,
+                card.version_key,
+                card.version,
+                card.version_date.isoformat() if card.version_date else None,
+                card.retrieved_at.isoformat(),
+                card.model_dump_json(),
+            ),
+        )
 
     def save_card(self, card: PaperCard) -> PaperCard:
         with self._db:
@@ -121,30 +152,48 @@ class PaperStore:
         """Parse a stored card and re-verify its seal (a damaged row must not become evidence)."""
         card = PaperCard.model_validate_json(js)
         if card.card_hash != card.compute_hash():
-            raise PapersError(f"stored card {card.paper_id}/{card.version_key} failed its card hash")
+            raise PapersError(
+                f"stored card {card.paper_id}/{card.version_key} failed its card hash"
+            )
         return card
 
     def get_row(self, paper_id: str, version_key: str) -> Optional[PaperCard]:
-        r = self._db.execute("SELECT card_json FROM versions WHERE paper_id=? AND version_key=?",
-                             (paper_id, version_key)).fetchone()
+        r = self._db.execute(
+            "SELECT card_json FROM versions WHERE paper_id=? AND version_key=?",
+            (paper_id, version_key),
+        ).fetchone()
         return self._load(r[0]) if r else None
 
     def rows(self, paper_id: str) -> list[PaperCard]:
-        return [self._load(r[0]) for r in self._db.execute(
-            "SELECT card_json FROM versions WHERE paper_id=?", (paper_id,)).fetchall()]
+        return [
+            self._load(r[0])
+            for r in self._db.execute(
+                "SELECT card_json FROM versions WHERE paper_id=?", (paper_id,)
+            ).fetchall()
+        ]
 
     def all_cards(self, limit: int = 20000) -> list[PaperCard]:
-        return [self._load(r[0]) for r in self._db.execute(
-            "SELECT card_json FROM versions LIMIT ?", (limit,)).fetchall()]
+        return [
+            self._load(r[0])
+            for r in self._db.execute(
+                "SELECT card_json FROM versions LIMIT ?", (limit,)
+            ).fetchall()
+        ]
 
     # ----------------------------------------------------------- content
-    def put_content(self, text: str, content_hash: str, original_hash: str, truncated: bool) -> None:
+    def put_content(
+        self, text: str, content_hash: str, original_hash: str, truncated: bool
+    ) -> None:
         with self._db:
-            self._db.execute("INSERT OR IGNORE INTO contents VALUES(?,?,?,?)",
-                             (content_hash, text, original_hash, int(truncated)))
+            self._db.execute(
+                "INSERT OR IGNORE INTO contents VALUES(?,?,?,?)",
+                (content_hash, text, original_hash, int(truncated)),
+            )
 
     def get_content(self, content_hash: str) -> Optional[str]:
-        r = self._db.execute("SELECT text FROM contents WHERE content_hash=?", (content_hash,)).fetchone()
+        r = self._db.execute(
+            "SELECT text FROM contents WHERE content_hash=?", (content_hash,)
+        ).fetchone()
         if r is None:
             return None
         if sha256_text(r[0]) != content_hash:
@@ -152,25 +201,45 @@ class PaperStore:
         return r[0]
 
     # ----------------------------------------------------------- queries
-    def put_query(self, qkey: str, results: list[dict], fetched_at: datetime) -> None:
+    def put_query(
+        self, qkey: str, results: list[dict], fetched_at: datetime
+    ) -> None:
         with self._db:
-            self._db.execute("INSERT OR REPLACE INTO queries VALUES(?,?,?)",
-                             (qkey, canonical_json(results), ensure_aware(fetched_at).isoformat()))
+            self._db.execute(
+                "INSERT OR REPLACE INTO queries VALUES(?,?,?)",
+                (
+                    qkey,
+                    canonical_json(results),
+                    ensure_aware(fetched_at).isoformat(),
+                ),
+            )
 
     def get_query(self, qkey: str) -> Optional[list[dict]]:
-        r = self._db.execute("SELECT results_json FROM queries WHERE qkey=?", (qkey,)).fetchone()
+        r = self._db.execute(
+            "SELECT results_json FROM queries WHERE qkey=?", (qkey,)
+        ).fetchone()
         return json.loads(r[0]) if r else None
 
     # --------------------------------------------------------- artifacts
-    def put_artifact(self, kind: str, artifact_id: str, body: dict, created_at: datetime) -> None:
+    def put_artifact(
+        self, kind: str, artifact_id: str, body: dict, created_at: datetime
+    ) -> None:
         with self._db:
-            self._db.execute("INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)",
-                             (kind, artifact_id, canonical_json(body),
-                              ensure_aware(created_at).isoformat()))
+            self._db.execute(
+                "INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)",
+                (
+                    kind,
+                    artifact_id,
+                    canonical_json(body),
+                    ensure_aware(created_at).isoformat(),
+                ),
+            )
 
     def get_artifact(self, kind: str, artifact_id: str) -> Optional[dict]:
-        r = self._db.execute("SELECT body_json FROM artifacts WHERE kind=? AND artifact_id=?",
-                             (kind, artifact_id)).fetchone()
+        r = self._db.execute(
+            "SELECT body_json FROM artifacts WHERE kind=? AND artifact_id=?",
+            (kind, artifact_id),
+        ).fetchone()
         return json.loads(r[0]) if r else None
 
 

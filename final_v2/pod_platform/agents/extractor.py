@@ -13,7 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from ..contracts.base import require_aware
@@ -34,11 +34,15 @@ def cache_key(
         "checkpoint_revision": checkpoint_revision,
         "prompt_hash": prompt_hash,
         "input_hashes": dict(sorted(input_hashes.items())),
-        "research_asof": require_aware(research_asof, "research_asof").isoformat(),
+        "research_asof": require_aware(
+            research_asof, "research_asof"
+        ).isoformat(),
         "generation_params": dict(sorted(generation_params.items())),
         "role": role,
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode()
+    ).hexdigest()
 
 
 @dataclass
@@ -87,7 +91,9 @@ class SchemaExtractor:
     ) -> ExtractionRecord:
         generation_params = generation_params or {"temperature": 0.0}
         input_hashes = {
-            key: hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+            key: hashlib.sha256(
+                json.dumps(value, sort_keys=True, default=str).encode()
+            ).hexdigest()
             for key, value in source_payload.items()
         }
         key = cache_key(
@@ -110,7 +116,9 @@ class SchemaExtractor:
         raw = self._model_call(source_payload, prompt_hash)
         missing = [name for name in self._required_fields if name not in raw]
         if missing:
-            raise ValueError(f"extraction missing required fields: {', '.join(missing)}")
+            raise ValueError(
+                f"extraction missing required fields: {', '.join(missing)}"
+            )
         record = ExtractionRecord(
             key=key,
             fields={name: raw[name] for name in self._required_fields},

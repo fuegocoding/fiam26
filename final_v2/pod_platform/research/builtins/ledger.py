@@ -81,7 +81,13 @@ def _utc_now() -> dt.datetime:
 class Admission:
     """Outcome of ``BuiltinLedger.admit``."""
 
-    def __init__(self, state: str, result: Optional[dict] = None, report: Optional[dict] = None, failure: Optional[dict] = None):
+    def __init__(
+        self,
+        state: str,
+        result: Optional[dict] = None,
+        report: Optional[dict] = None,
+        failure: Optional[dict] = None,
+    ):
         self.state = state  # new | resumed | cached | failed
         self.result = result
         self.report = report
@@ -89,7 +95,12 @@ class Admission:
 
 
 class BuiltinLedger:
-    def __init__(self, state_dir: "str | Path | None" = None, *, clock: Callable[[], dt.datetime] = _utc_now):
+    def __init__(
+        self,
+        state_dir: "str | Path | None" = None,
+        *,
+        clock: Callable[[], dt.datetime] = _utc_now,
+    ):
         self._clock = clock
         self._lock = threading.RLock()
         if state_dir is None:
@@ -100,7 +111,9 @@ class BuiltinLedger:
             root.mkdir(parents=True, exist_ok=True)
             self.path = root / "builtin_research.sqlite"
             target = str(self.path)
-        self._conn = sqlite3.connect(target, timeout=30, isolation_level=None, check_same_thread=False)
+        self._conn = sqlite3.connect(
+            target, timeout=30, isolation_level=None, check_same_thread=False
+        )
         self._conn.executescript(_SCHEMA)
 
     def close(self) -> None:
@@ -117,7 +130,14 @@ class BuiltinLedger:
 
     # -- admission ---------------------------------------------------------
 
-    def admit(self, registration_id: str, variant_name: str, spec_hash: str, *, budget: int) -> Admission:
+    def admit(
+        self,
+        registration_id: str,
+        variant_name: str,
+        spec_hash: str,
+        *,
+        budget: int,
+    ) -> Admission:
         with self._tx() as conn:
             row = conn.execute(
                 "SELECT spec_hash, state, result_json, report_json, failure_json FROM variant_slots"
@@ -131,13 +151,25 @@ class BuiltinLedger:
                         "registered specifications are immutable (use a new registration or variant)"
                     )
                 if row[1] == "succeeded":
-                    return Admission("cached", result=json.loads(row[2]), report=json.loads(row[3]))
+                    return Admission(
+                        "cached",
+                        result=json.loads(row[2]),
+                        report=json.loads(row[3]),
+                    )
                 if row[1] == "failed_evidence":
                     return Admission("failed", failure=json.loads(row[4]))
-                self._trial(conn, registration_id, "failed_infrastructure_attempt", spec_hash, "interrupted attempt resumed", 1)
+                self._trial(
+                    conn,
+                    registration_id,
+                    "failed_infrastructure_attempt",
+                    spec_hash,
+                    "interrupted attempt resumed",
+                    1,
+                )
                 return Admission("resumed")
             used = conn.execute(
-                "SELECT COUNT(*) FROM variant_slots WHERE registration_id=?", (registration_id,)
+                "SELECT COUNT(*) FROM variant_slots WHERE registration_id=?",
+                (registration_id,),
             ).fetchone()[0]
             if used >= budget:
                 raise VariantBudgetExhausted(
@@ -149,34 +181,94 @@ class BuiltinLedger:
                 " VALUES (?,?,?,?,?,?)",
                 (registration_id, variant_name, spec_hash, "started", now, now),
             )
-            self._trial(conn, registration_id, "scored_variant", spec_hash, f"variant {variant_name}", 1)
+            self._trial(
+                conn,
+                registration_id,
+                "scored_variant",
+                spec_hash,
+                f"variant {variant_name}",
+                1,
+            )
             return Admission("new")
 
-    def _trial(self, conn: sqlite3.Connection, registration_id: str, kind: str, spec_hash: str, detail: str, quantity: int) -> None:
+    def _trial(
+        self,
+        conn: sqlite3.Connection,
+        registration_id: str,
+        kind: str,
+        spec_hash: str,
+        detail: str,
+        quantity: int,
+    ) -> None:
         if kind not in TRIAL_KINDS:
             raise ValueError(f"unknown trial kind {kind!r}")
         conn.execute(
             "INSERT INTO trials (registration_id, kind, spec_hash, detail, quantity, counted_at) VALUES (?,?,?,?,?,?)",
-            (registration_id, kind, spec_hash, detail, int(quantity), self._now()),
+            (
+                registration_id,
+                kind,
+                spec_hash,
+                detail,
+                int(quantity),
+                self._now(),
+            ),
         )
 
-    def record_trial(self, registration_id: str, kind: str, spec_hash: str, detail: str, quantity: int = 1) -> None:
+    def record_trial(
+        self,
+        registration_id: str,
+        kind: str,
+        spec_hash: str,
+        detail: str,
+        quantity: int = 1,
+    ) -> None:
         with self._tx() as conn:
-            self._trial(conn, registration_id, kind, spec_hash, detail, quantity)
+            self._trial(
+                conn, registration_id, kind, spec_hash, detail, quantity
+            )
 
-    def record_access(self, registration_id: str, dataset_id: str, partition: str, purpose: str, record_count: int) -> None:
+    def record_access(
+        self,
+        registration_id: str,
+        dataset_id: str,
+        partition: str,
+        purpose: str,
+        record_count: int,
+    ) -> None:
         with self._tx() as conn:
             conn.execute(
                 "INSERT INTO access_log (registration_id, dataset_id, partition_name, purpose, record_count, accessed_at)"
                 " VALUES (?,?,?,?,?,?)",
-                (registration_id, dataset_id, partition, purpose, int(record_count), self._now()),
+                (
+                    registration_id,
+                    dataset_id,
+                    partition,
+                    purpose,
+                    int(record_count),
+                    self._now(),
+                ),
             )
-            self._trial(conn, registration_id, "design_partition_access", "0" * 64, f"{dataset_id}:{purpose}", 1)
+            self._trial(
+                conn,
+                registration_id,
+                "design_partition_access",
+                "0" * 64,
+                f"{dataset_id}:{purpose}",
+                1,
+            )
 
     # -- completion --------------------------------------------------------
 
     def record_success(
-        self, registration_id: str, variant_name: str, spec_hash: str, result: dict, report: dict, *, fits: int, ridge: bool
+        self,
+        registration_id: str,
+        variant_name: str,
+        spec_hash: str,
+        result: dict,
+        report: dict,
+        *,
+        fits: int,
+        ridge: bool,
     ) -> None:
         with self._tx() as conn:
             conn.execute(
@@ -185,26 +277,63 @@ class BuiltinLedger:
                 (
                     json.dumps(result, sort_keys=True, allow_nan=False),
                     json.dumps(report, sort_keys=True, allow_nan=False),
-                    self._now(), registration_id, variant_name, spec_hash,
+                    self._now(),
+                    registration_id,
+                    variant_name,
+                    spec_hash,
                 ),
             )
             if conn.execute("SELECT changes()").fetchone()[0] != 1:
                 raise RuntimeError("variant slot was not in the started state")
             if ridge:
-                self._trial(conn, registration_id, "hyperparameter_config", spec_hash, f"ridge configuration of {variant_name}", 1)
+                self._trial(
+                    conn,
+                    registration_id,
+                    "hyperparameter_config",
+                    spec_hash,
+                    f"ridge configuration of {variant_name}",
+                    1,
+                )
             if fits:
-                self._trial(conn, registration_id, "fold_evaluation", spec_hash, f"walk-forward refits of {variant_name}", fits)
+                self._trial(
+                    conn,
+                    registration_id,
+                    "fold_evaluation",
+                    spec_hash,
+                    f"walk-forward refits of {variant_name}",
+                    fits,
+                )
 
-    def record_evidence_failure(self, registration_id: str, variant_name: str, spec_hash: str, failure: dict) -> None:
+    def record_evidence_failure(
+        self,
+        registration_id: str,
+        variant_name: str,
+        spec_hash: str,
+        failure: dict,
+    ) -> None:
         with self._tx() as conn:
             conn.execute(
                 "UPDATE variant_slots SET state='failed_evidence', failure_json=?, updated_at=?"
                 " WHERE registration_id=? AND variant_name=? AND spec_hash=? AND state='started'",
-                (json.dumps(failure, sort_keys=True, allow_nan=False), self._now(), registration_id, variant_name, spec_hash),
+                (
+                    json.dumps(failure, sort_keys=True, allow_nan=False),
+                    self._now(),
+                    registration_id,
+                    variant_name,
+                    spec_hash,
+                ),
             )
 
-    def record_infrastructure_failure(self, registration_id: str, spec_hash: str, detail: str) -> None:
-        self.record_trial(registration_id, "failed_infrastructure_attempt", spec_hash, detail[:300], 1)
+    def record_infrastructure_failure(
+        self, registration_id: str, spec_hash: str, detail: str
+    ) -> None:
+        self.record_trial(
+            registration_id,
+            "failed_infrastructure_attempt",
+            spec_hash,
+            detail[:300],
+            1,
+        )
 
     # -- reads -------------------------------------------------------------
 
@@ -216,7 +345,9 @@ class BuiltinLedger:
             ).fetchone()
         return json.loads(row[0]) if row and row[0] else None
 
-    def slot(self, registration_id: str, variant_name: str) -> Optional[dict[str, Any]]:
+    def slot(
+        self, registration_id: str, variant_name: str
+    ) -> Optional[dict[str, Any]]:
         with self._tx() as conn:
             row = conn.execute(
                 "SELECT spec_hash, state, failure_json FROM variant_slots WHERE registration_id=? AND variant_name=?",
@@ -224,9 +355,15 @@ class BuiltinLedger:
             ).fetchone()
         if row is None:
             return None
-        return {"spec_hash": row[0], "state": row[1], "failure": json.loads(row[2]) if row[2] else None}
+        return {
+            "spec_hash": row[0],
+            "state": row[1],
+            "failure": json.loads(row[2]) if row[2] else None,
+        }
 
-    def trial_counts(self, registration_id: Optional[str] = None) -> dict[str, int]:
+    def trial_counts(
+        self, registration_id: Optional[str] = None
+    ) -> dict[str, int]:
         sql = "SELECT kind, COALESCE(SUM(quantity),0) FROM trials"
         args: tuple = ()
         if registration_id is not None:
@@ -238,7 +375,12 @@ class BuiltinLedger:
 
     def variants_used(self, registration_id: str) -> int:
         with self._tx() as conn:
-            return int(conn.execute("SELECT COUNT(*) FROM variant_slots WHERE registration_id=?", (registration_id,)).fetchone()[0])
+            return int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM variant_slots WHERE registration_id=?",
+                    (registration_id,),
+                ).fetchone()[0]
+            )
 
 
 class _Tx:

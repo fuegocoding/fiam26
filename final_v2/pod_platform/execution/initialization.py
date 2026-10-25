@@ -54,7 +54,9 @@ def initialize_book(
                 )
             )
         state = engine.open(order)
-        cost = engine.fill_day(state, snapshot, fill_dollars=abs(order.order_dollars))
+        cost = engine.fill_day(
+            state, snapshot, fill_dollars=abs(order.order_dollars)
+        )
         result.filled_dollars += state.filled_dollars
         result.entry_costs += cost
         filled_names.add(order.security_id)

@@ -8,8 +8,7 @@ position-dossier lookup. Handpicked success stories alone are rejected.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Optional
 
 from pydantic import Field, model_validator
 
@@ -19,7 +18,9 @@ from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
 
 class WorkedExample(StrictModel):
     example_id: str = Field(min_length=1)
-    kind: str = Field(pattern=r"^(complete_investment|rejected_idea|failed_trade)$")
+    kind: str = Field(
+        pattern=r"^(complete_investment|rejected_idea|failed_trade)$"
+    )
     security_id: str = Field(min_length=1)
     question: str = Field(min_length=1)
     measurements: str = Field(min_length=1)
@@ -90,7 +91,9 @@ class JudgePackage(StrictModel):
         for attr, kind in expected.items():
             example: WorkedExample = getattr(self, attr)
             if example.kind != kind:
-                raise ValueError(f"{attr} must have kind {kind!r}, got {example.kind!r}")
+                raise ValueError(
+                    f"{attr} must have kind {kind!r}, got {example.kind!r}"
+                )
         return self
 
     def narrative_coverage(self) -> dict[str, bool]:
@@ -99,8 +102,12 @@ class JudgePackage(StrictModel):
             "one_rejected_idea": True,
             "one_failed_trade": True,
             "research_funnel": self.research_funnel.experiments_run > 0,
-            "incremental_portfolio_evidence": bool(self.incremental_evidence.baseline_comparison_id),
-            "implementation_evidence": bool(self.implementation_evidence.alpha_decay_curve_id),
+            "incremental_portfolio_evidence": bool(
+                self.incremental_evidence.baseline_comparison_id
+            ),
+            "implementation_evidence": bool(
+                self.implementation_evidence.alpha_decay_curve_id
+            ),
             "agent_evidence": bool(self.agent_evidence.counterfactual_id),
             "official_statistics": bool(self.official_statistics_artifact_id),
             "dossier_lookup": bool(self.dossier_demo),
