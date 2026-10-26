@@ -474,7 +474,7 @@ def native_review_calendar(strategy, panel, market):
         yield execution, t, update
 
 
-def code_signals(strategy, panel, market):
+def code_signals(strategy, panel, market, *, readiness=None):
     """Replay code at each review using strictly past data and stable columns."""
     if strategy.entry_rank and strategy.exit_rank >= strategy.entry_rank:
         raise ValueError("Exit must be below entry threshold")
@@ -505,6 +505,8 @@ def code_signals(strategy, panel, market):
                 cached = value.copy()
             value = cached.copy()
             value[~panel.mask[t]] = np.nan
+            if readiness is not None:
+                readiness[execution] = bool(np.isfinite(value).any())
             ranks = pd.Series(value).rank(pct=True).to_numpy() * 2 - 1
             if strategy.entry_rank:
                 previous = threshold_positions(

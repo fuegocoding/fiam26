@@ -3244,8 +3244,8 @@
     "execution_gross_buffer": 0.98,
     "impact_eta": 0.5,
     "large_cap_borrow_threshold_usd": 10000000000,
-    "large_cap_borrow_bps": 50,
-    "other_borrow_bps": 500,
+    "large_cap_borrow_bps": 50.0,
+    "other_borrow_bps": 100.0,
     "max_borrow_fraction_market_cap": 0.001,
     "max_borrow_adv_days": 5,
     "execution_max_absolute_net": 0.05,
@@ -3271,7 +3271,9 @@
       3
     ],
     "filings_research_enabled": true,
-    "filings_path": "${project_root}/data/8k_20150101_20260831_identified.parquet"
+    "filings_path": "${project_root}/data/8k_20150101_20260831_identified.parquet",
+    "borrow_fee_calibration_path": "${project_root}/final_v2/configs/costs/borrow_20261026.json",
+    "borrow_fee_calibration_sha256": "96eb7b15b4cd138bc3d2bfc1cfe20de6ba1e2eec14ae9fe5b71ed14e44dd461f"
   },
   "edge_research": {
     "proposal_path": "${project_root}/final_v2/.pod_state/training_through_2020/pod_plan_proposals/reviewed_05efd3567dd2933d.json",

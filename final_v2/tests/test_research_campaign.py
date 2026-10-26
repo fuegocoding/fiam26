@@ -16,6 +16,7 @@ from pod_platform.application.research_campaign import (
     ResearchCampaign,
     economic_controls,
     grouped_allocation,
+    select_roster,
 )
 from pod_platform.research.campaign_metrics import competition_report
 from pod_platform.research.input_permissions import COMPETITION_CHARACTERISTICS
@@ -94,6 +95,76 @@ def test_generated_code_uses_month_end_snapshot_before_next_close_even_on_weeken
     _, changed = code_signals(s, panel, market)
     np.testing.assert_array_equal(original[feb][1], changed[feb][1])
     assert changed[feb][0] == 0
+    panel.features["cash_at"][0] = np.nan
+    panel.features["cash_at"][1] = 0
+    readiness = {}
+    threshold_rule = strategy(
+        code="def score(features, history, daily):\n    return features['cash_at']\n",
+        entry_rank=0.6,
+        exit_rank=0.2,
+    )
+    _, idle = code_signals(threshold_rule, panel, market, readiness=readiness)
+    assert not readiness[feb]
+    assert readiness[march]
+    assert np.all(idle[march][1] == 0)
+
+
+def test_roster_cannot_count_pre_forecast_warmup_as_a_strategy_track_record():
+    known = np.arange(36)
+
+    def trial(values, ready):
+        return {
+            "strategy": SimpleNamespace(pod="fundamentals"),
+            "gross_monthly": np.asarray(values),
+            "evidence_available": np.asarray(ready, dtype=bool),
+        }
+
+    trials = {
+        "recent_model": trial(
+            np.r_[np.zeros(24), np.full(12, 0.05)],
+            np.r_[np.zeros(24), np.ones(12)],
+        ),
+        "seasoned": trial(0.01 + 0.001 * np.sin(known), np.ones(36)),
+    }
+    assert (
+        select_roster(trials, "fundamentals", known, minimum=24)[0]
+        == "seasoned"
+    )
+
+
+def test_rejected_text_definition_cannot_enter_a_ridge_model_via_old_features(
+    tmp_path, monkeypatch
+):
+    import pod_platform.application.research_campaign as module
+
+    campaign = ResearchCampaign.__new__(ResearchCampaign)
+    campaign.trials, campaign.attempts, campaign.output = {}, [], tmp_path
+    campaign.panel = SimpleNamespace(
+        features={"filings_custom_conflict": np.ones((2, 3))}
+    )
+
+    def forbidden_fit(*args, **kwargs):
+        raise AssertionError(
+            "A rejected definition reached the trusted trainer"
+        )
+
+    monkeypatch.setattr(module, "fit_ridge_forecast", forbidden_fit)
+    proposed = strategy(
+        forecast_model="ridge",
+        model_features=["filings_custom_conflict"],
+        code="def score(features, history, daily):\n    return features['model_forecast']\n",
+    )
+    campaign._evaluate(
+        proposed,
+        "agent_written_code",
+        1,
+        unavailable_features=["filings_custom_conflict"],
+    )
+    assert campaign.attempts[0]["status"] == "rejected"
+    assert (
+        "rejected text measurement" in campaign.attempts[0]["failure"]["reason"]
+    )
+    assert not campaign.trials
 
 
 def test_nested_continuous_allocator_enforces_pod_and_fund_caps():
@@ -250,6 +321,7 @@ def test_entire_campaign_codes_revises_owns_funds_executes_replays_and_reports(
         cost_bps_one_way=0,
         large_cap_borrow_bps=0,
         other_borrow_bps=0,
+        borrow_fee_calibration_path=None,
         fund_capital_usd=1e6,
         impact_eta=0,
     )
@@ -271,6 +343,10 @@ def test_entire_campaign_codes_revises_owns_funds_executes_replays_and_reports(
     assert len(provider.requests) == 8
     assert provider.requests[1]["feedback"]
     assert report["successful_strategies"] >= len(economic_controls()) + 4
+    assert (
+        report["conservative_borrow_case"]["execution"]["borrow_cost_usd"]
+        >= report["execution"]["borrow_cost_usd"]
+    )
     assert all(1 <= n <= 3 for n in report["owned_strategy_counts"].values())
     assert report["static_target_replay_max_return_difference"] < 1e-10
     assert report["fund"]["daily"]["observations"] > 500

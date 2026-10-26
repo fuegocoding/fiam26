@@ -1,0 +1,47 @@
+{
+  "calibration_policy": "Equal-name mean within each eligible size tier, rounded upward to the next25bp; no return-based fitting",
+  "inventory_policy": "Current availability is not used to filter historical stocks or claim historical locates",
+  "limitations": [
+    "Current broker inventory is survivor-conditioned and does not cover every issuer",
+    "Exact unique current-ticker matching is approximate; broker ISINs are masked",
+    "Size snapshot predates the broker quote date; tiers approximate stock-loan economics",
+    "Flat tier fees do not capture individual specials, changing fees or recalls",
+    "Forward-dated cost calibration is disclosed under the challenge cost exception; this is not historical quote evidence"
+  ],
+  "matched_groups": {
+    "large_cap": {
+      "mean_bps": 33.60751308900524,
+      "median_bps": 27.82,
+      "names": 382,
+      "p95_bps": 41.4695
+    },
+    "other_eligible": {
+      "mean_bps": 76.43174503657262,
+      "median_bps": 40.44,
+      "names": 957,
+      "p95_bps": 103.78799999999994
+    }
+  },
+  "panel_sha256": "797c01ebd59f7a14585cb2e0290aa0b2c43b9188b7ac16384762d3df615215ca",
+  "parameters": {
+    "large_cap_borrow_bps": 50.0,
+    "other_borrow_bps": 100.0
+  },
+  "provider_header": "#BOF|2026.10.26|11:45:39",
+  "quote_fee_units": "Annual percentage points multiplied by100 to obtain basis points",
+  "quote_sha256": "4f69b8bdf61fd0c860e517ee6daaf576835affa7a602db06544de30f13ee4d57",
+  "return_columns_read": [],
+  "size_asof": "2026-08-31",
+  "size_columns_read": [
+    "permno",
+    "eom",
+    "me",
+    "ticker"
+  ],
+  "size_thresholds_usd": {
+    "large_cap": 10000000000.0,
+    "short_floor": 500000000.0
+  },
+  "source": "ftp://ftp2.interactivebrokers.com/usa.txt",
+  "status": "current_quote_derived_cost_model"
+}

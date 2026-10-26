@@ -22,6 +22,35 @@ from pod_platform.research.training_data import prepare_panel
 from pod_platform.research.training_tactical import daily_market, replay_daily
 
 
+def verify_cost_lineage(output, experiment, report):
+    calibration = experiment.get("borrow_fee_calibration")
+    settings = experiment["settings"]
+    if calibration is None:
+        if settings.get("borrow_fee_calibration_path"):
+            raise ValueError(
+                "Declared borrow calibration is missing from the experiment"
+            )
+        return False
+    copy = Path(output) / "borrow_fee_calibration.json"
+    if file_sha256(copy) != settings.get("borrow_fee_calibration_sha256"):
+        raise ValueError("Saved borrow calibration receipt hash changed")
+    if (
+        json.loads(copy.read_text()) != calibration
+        or report.get("borrow_fee_model") != calibration
+    ):
+        raise ValueError(
+            "Borrow calibration lineage differs across report and experiment"
+        )
+    if any(
+        settings.get(key) != value
+        for key, value in calibration["parameters"].items()
+    ):
+        raise ValueError(
+            "Configured execution fees differ from the saved calibration"
+        )
+    return True
+
+
 def verify(report_path):
     report_path = Path(report_path)
     output = report_path.parent
@@ -29,6 +58,7 @@ def verify(report_path):
     experiment = json.loads((output / "experiment.json").read_text())
     config = json.loads((output / "config.json").read_text())
     settings = experiment["settings"]
+    cost_lineage_verified = verify_cost_lineage(output, experiment, report)
     for field, digest in (
         ("panel_path", "panel_sha256"),
         ("daily_path", "daily_sha256"),
@@ -269,6 +299,7 @@ def verify(report_path):
         "competition_constraints_pass": bool(constraints_pass),
         "recomputed_constraints": constraints,
         "benchmark_source_evidence_hashes_verified": True,
+        "cost_calibration_provenance_verified": cost_lineage_verified,
         "headline_metrics_recomputed": True,
         "ineligible_actual_short_increases": ineligible_short_increases,
         "attribution_reconciled": True,

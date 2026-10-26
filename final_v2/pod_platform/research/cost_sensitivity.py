@@ -8,6 +8,10 @@ from .edge_capacity import measure_edge
 from .training_tactical import monthly_net
 
 CASES = (
+    (
+        "competition_conservative_borrow_50_500bp",
+        {"large_cap_borrow_bps": 50, "other_borrow_bps": 500},
+    ),
     ("half_proxy_same_borrow", {"spread_proxy_scale": 0.5}),
     ("one_and_half_proxy_same_borrow", {"spread_proxy_scale": 1.5}),
     (
@@ -85,7 +89,7 @@ def frozen_cost_sensitivity(market, schedule, panel, settings, baseline):
             "calibration_status": "unfitted_parameter_sensitivity",
         }
 
-    rows = [summarize("current_conservative_reference", {}, baseline)]
+    rows = [summarize("configured_reference", {}, baseline)]
     for name, overrides in CASES:
         result = measure_edge(
             market, schedule, {**settings, **overrides}, keep_holdings=False
