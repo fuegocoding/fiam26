@@ -1,47 +1,85 @@
 {
   "application": {
-    "mode": "research",
-    "state_dir": "${project_root}/final_v2/.pod_state/platform",
-    "output_dir": "${project_root}/final_v2/.pod_state/platform/output",
-    "run_id": "strategy_pods_v1",
-    "online_papers": false,
-    "paper_queries": [],
-    "papers_per_query": 5,
+    "mode": "research_campaign",
+    "state_dir": "${project_root}/final_v2/.pod_state/training_through_2020",
+    "output_dir": "${project_root}/final_v2/.pod_state/training_through_2020",
+    "run_id": "training_through_2020_v1",
+    "online_papers": true,
+    "paper_queries": [
+      {
+        "namespace": "pod_fundamentals",
+        "query": "earnings surprise"
+      },
+      {
+        "namespace": "pod_events",
+        "query": "equity issuance"
+      },
+      {
+        "namespace": "pod_valuation",
+        "query": "value stock"
+      },
+      {
+        "namespace": "pod_dynamics",
+        "query": "momentum reversal"
+      }
+    ],
+    "papers_per_query": 2,
     "paper_ids": [],
-    "manifest": "${project_root}/final_v2/.pod_state/datasets/competition_design.json",
-    "dataset_id": "comp_chars_design",
+    "manifest": "${project_root}/final_v2/.pod_state/platform_live_v5/competition_training.json",
+    "dataset_id": "comp_chars_training",
     "papers_db": "${project_root}/final_v2/.pod_state/year_trial_2025/papers.sqlite",
     "research_asof": "2026-10-25T20:00:00+00:00",
     "max_iterations": 4
   },
   "models": {
-    "online": false,
+    "online": true,
     "roles": {
       "lead": {
         "provider": "openai",
-        "model": "",
-        "base_url": "",
-        "api_key_env": "RESEARCH_LEAD_API_KEY",
+        "model": "openai/gpt-oss-120b",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
         "max_calls": 4,
-        "max_tokens": 60000
+        "max_tokens": 100000,
+        "structured_outputs": true,
+        "reasoning_effort": "low"
       },
       "challenger": {
         "provider": "openai",
-        "model": "",
-        "base_url": "",
-        "api_key_env": "RESEARCH_CHALLENGER_API_KEY",
+        "model": "openai/gpt-oss-20b",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
         "max_calls": 4,
-        "max_tokens": 60000
+        "max_tokens": 100000,
+        "structured_outputs": true,
+        "reasoning_effort": "low"
       },
       "extractor": {
         "provider": "openai",
-        "model": "",
-        "base_url": "",
-        "api_key_env": "RESEARCH_EXTRACTOR_API_KEY",
+        "model": "openai/gpt-oss-20b",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
         "max_calls": 4,
-        "max_tokens": 60000
+        "max_tokens": 100000,
+        "structured_outputs": true,
+        "reasoning_effort": "low"
       }
-    }
+    },
+    "global_max_calls": 100,
+    "global_max_tokens": 1500000,
+    "env_file": "${project_root}/local/groq-api.env",
+    "min_interval_seconds": 60,
+    "generation": {
+      "max_tokens": 4096,
+      "temperature": 0.0,
+      "timeout_s": 120.0
+    },
+    "budget_path": "${project_root}/final_v2/.pod_state/initial_research_budget.sqlite",
+    "budget_id": "research_v3",
+    "repair_attempts": 2,
+    "retry_attempts": 2,
+    "retry_delay_seconds": 30,
+    "raise_budget_limits": true
   },
   "carbon": {
     "allow_remote": true,
@@ -60,11 +98,66 @@
     "compositions": [],
     "observation_sources": [],
     "financial_reviews": [],
-    "proposals": []
+    "proposals": [],
+    "prepare_inputs": true,
+    "source_manifest": "${project_root}/final_v2/.pod_state/datasets/competition_design.json",
+    "literature_asof": "2019-12-31T23:59:59+00:00",
+    "periods": {
+      "feature_start": "2015-01-01",
+      "training_start": "2015-01-01",
+      "training_end": "2019-12-31",
+      "validation_start": "2020-01-01",
+      "validation_end": "2020-12-31",
+      "evaluation_start": "2021-01-01",
+      "purge_horizon_months": 3
+    },
+    "desk_evaluation": {
+      "enabled": true,
+      "periods_per_year": 12,
+      "cost_bps_one_way": 10.0,
+      "tail_fraction": 0.2,
+      "min_training_periods": 24,
+      "min_training_psr": 0.95,
+      "min_training_mean_net": 0.0,
+      "min_names_per_date": 20,
+      "max_validation_candidates": 4,
+      "min_validation_periods": 9,
+      "min_validation_psr": 0.8,
+      "min_validation_mean_net": 0.0,
+      "prior_unmeasured_attempt_ids": [
+        "platform_live_v1:pod_fundamentals:malformed_lead",
+        "platform_live_v1:pod_valuation:malformed_lead",
+        "platform_live_v2:pod_fundamentals:malformed_lead",
+        "platform_live_v2:pod_events:malformed_lead",
+        "platform_live_v2:pod_valuation:malformed_lead",
+        "platform_live_v2:pod_dynamics:malformed_lead",
+        "platform_live_v3:pod_fundamentals:combined_information_node",
+        "platform_live_v3:pod_fundamentals:lagged_earnings_surprise_node",
+        "platform_live_v3:pod_fundamentals:sales_growth_node",
+        "platform_live_v3:pod_events:followup_lagged_issuance",
+        "platform_live_v3:pod_valuation:malformed_lead",
+        "platform_live_v3:pod_dynamics:malformed_lead",
+        "platform_live_v4:pod_fundamentals:combined_diff",
+        "platform_live_v4:pod_fundamentals:earnings_surprise_input",
+        "platform_live_v4:pod_fundamentals:sales_growth_input",
+        "platform_live_v4:pod_events:malformed_lead",
+        "platform_live_v4:pod_valuation:malformed_lead",
+        "platform_live_v4:pod_dynamics:malformed_lead"
+      ]
+    },
+    "universe_limit": 500
   },
   "portfolio": {
     "input_dir": null,
-    "certificate_policy": "production"
+    "certificate_policy": "production",
+    "cash_run": {
+      "enabled": true,
+      "calendar_csv": "${project_root}/data/dsf_mini_from_2014.csv",
+      "start_cash_usd": 1000000000,
+      "risk_free_annual_percent": 0.0,
+      "start_date": "2025-01-01",
+      "end_date": "2025-12-31"
+    }
   },
   "mcp": {
     "role": "strategy",
@@ -3028,5 +3121,189 @@
       "commands": {},
       "defaults": {}
     }
+  },
+  "training_lab": {
+    "start": "2011-01-01",
+    "end": "2020-12-31",
+    "panel_path": "${project_root}/data/chars_final_with_names.parquet",
+    "daily_path": "${project_root}/data/dsf_mini_from_2014.csv",
+    "universe_size": 500,
+    "min_positions": 200,
+    "min_market_cap_millions": 0,
+    "min_price": 0,
+    "min_daily_dollar_volume": 0,
+    "gross_limit": 2.0,
+    "single_name_limit": 0.05,
+    "cost_bps_one_way": 10,
+    "borrow_bps_annual": 50,
+    "min_feature_coverage": 0.65,
+    "smoothing_months": [
+      1,
+      3,
+      6
+    ],
+    "ensemble_sizes": [
+      2,
+      3,
+      5,
+      8
+    ],
+    "max_strategies_per_pod": 3,
+    "max_strategy_correlation": 0.85,
+    "min_incremental_score": 0.02,
+    "max_pod_capital": 0.5,
+    "allocation_min_history": 12,
+    "allocation_lookbacks": [
+      12,
+      24,
+      36
+    ],
+    "allocation_methods": [
+      "equal",
+      "inverse_volatility",
+      "performance",
+      "mean_variance"
+    ],
+    "risk_aversions": [
+      2,
+      5,
+      10
+    ],
+    "daily_warmup_start": "2014-01-01",
+    "slow_rebalance_months": [
+      3,
+      6
+    ],
+    "tactical_lookbacks": {
+      "reversal": [
+        5,
+        10
+      ],
+      "momentum": [
+        21,
+        63
+      ],
+      "low_volatility": [
+        21,
+        63
+      ],
+      "breakout": [
+        63
+      ]
+    },
+    "threshold_pairs": [
+      [
+        0,
+        0
+      ],
+      [
+        0.6,
+        0.2
+      ]
+    ],
+    "walk_forward_years": [
+      2018,
+      2019,
+      2020
+    ],
+    "selection_family": "all",
+    "mechanism_smoothing_months": [
+      1,
+      3,
+      6
+    ],
+    "mechanism_review_months": [
+      1,
+      3
+    ],
+    "ridge_penalties": [
+      0.1,
+      1,
+      10
+    ],
+    "ridge_lookbacks": [
+      24,
+      48
+    ],
+    "ridge_min_history": 12,
+    "model_review_months": [
+      1,
+      3
+    ],
+    "research_universe_size": null,
+    "capital_profitability_gate": false,
+    "capital_signal_months": 6,
+    "capacity_execution": true,
+    "strategy_capital_usd": 250000000,
+    "fund_capital_usd": 1000000000,
+    "max_daily_participation": 0.1,
+    "order_ttl_sessions": 10,
+    "execution_no_trade_band": 2e-05,
+    "execution_gross_buffer": 0.98,
+    "impact_eta": 0.5,
+    "large_cap_borrow_threshold_usd": 10000000000,
+    "large_cap_borrow_bps": 50,
+    "other_borrow_bps": 500,
+    "max_borrow_fraction_market_cap": 0.001,
+    "max_borrow_adv_days": 5,
+    "execution_max_absolute_net": 0.05,
+    "target_net_band": 0.01,
+    "target_beta_band": 0.05,
+    "target_sector_band": 0.02,
+    "neutralize_size": false,
+    "gbdt_depths": [
+      2,
+      3
+    ],
+    "gbdt_lookbacks": [
+      36,
+      60
+    ],
+    "gbdt_min_history": 24,
+    "gbdt_rounds": 80,
+    "gbdt_learning_rate": 0.03,
+    "gbdt_min_child_weight": 500,
+    "gbdt_l2": 20,
+    "gbdt_review_months": [
+      1,
+      3
+    ],
+    "filings_research_enabled": true,
+    "filings_path": "${project_root}/data/8k_20150101_20260831_identified.parquet"
+  },
+  "edge_research": {
+    "proposal_path": "${project_root}/final_v2/.pod_state/training_through_2020/pod_plan_proposals/reviewed_05efd3567dd2933d.json",
+    "minimum_edge_months": 24,
+    "edge_lookback_months": 36,
+    "edge_uncertainty_haircut": 1.0,
+    "strategy_position_limit": 100
+  },
+  "research_campaign": {
+    "max_rounds": 2,
+    "max_new_model_calls": 12,
+    "code_max_tokens": 2048,
+    "minimum_edge_months": 24,
+    "edge_lookback_months": 36,
+    "edge_uncertainty_haircut": 1.0,
+    "benchmark_fred_path": "${project_root}/external_data/external.parquet",
+    "alternative_bindings": [],
+    "alt_discovery": [
+      {
+        "namespace": "pod_fundamentals",
+        "request": {
+          "entity_query": "Microsoft",
+          "metric_query": "earnings guidance"
+        }
+      },
+      {
+        "namespace": "pod_events",
+        "request": {
+          "entity_query": "Walmart",
+          "metric_query": "consumer spending"
+        }
+      }
+    ],
+    "max_rss_mib": 1600,
+    "feature_documentation_path": "${project_root}/final_v2/.pod_state/training_through_2020/jkp_factor_details.xlsx"
   }
 }

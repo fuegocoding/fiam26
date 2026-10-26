@@ -69,6 +69,93 @@ class FinancialReview(StrictModel):
         return self
 
 
+def financial_outcomes(plan, frozen, observations, dates, now):
+    """Measure a frozen graph without granting financial admission authority."""
+    grant = plan["grant"]
+    review = frozen["review"]
+    now = require_aware(now, "clock")
+    labels = {}
+    for observation in observations:
+        if max(observation.available_at, observation.version_known_at) > now:
+            continue
+        key = (
+            observation.source_id,
+            observation.metric,
+            observation.security_id,
+            month_index(observation.period_end.date()),
+        )
+        old = labels.get(key)
+        if (
+            old
+            and old.version_known_at == observation.version_known_at
+            and old.value != observation.value
+        ):
+            raise ValueError("ambiguous native or return outcome version")
+        if old is None or observation.version_known_at > old.version_known_at:
+            labels[key] = observation
+    out = []
+    target = frozen["target"]
+    for day in dates:
+        values = evaluate_graph(
+            frozen["graph"], observations, day, grant["security_ids"]
+        )
+        for node in (review["output_node"], review["baseline_node"]):
+            values[node] = CompositionBridge._scores(values[node])
+        month = month_index(day.date())
+        for security in grant["security_ids"]:
+            prediction = values[review["output_node"]][security]
+            baseline = values[review["baseline_node"]][security]
+            label = labels.get(
+                (
+                    target["source_id"],
+                    target["metric"],
+                    security,
+                    month + target["horizon_months"],
+                )
+            )
+            ret = labels.get(
+                (
+                    review["return_source_id"],
+                    review["return_metric"],
+                    security,
+                    month + review["return_horizon_months"],
+                )
+            )
+            if (
+                prediction is None
+                or baseline is None
+                or label is None
+                or ret is None
+            ):
+                continue
+            resolved = max(
+                label.available_at,
+                label.version_known_at,
+                ret.available_at,
+                ret.version_known_at,
+                month_end_known_at(
+                    month + target["horizon_months"],
+                    target["resolve_lag_days"],
+                ),
+                month_end_known_at(month + review["return_horizon_months"]),
+            )
+            if resolved > now:
+                continue
+            out.append(
+                ForecastOutcome(
+                    security_id=security,
+                    formation_at=day,
+                    feature_available_at=day,
+                    label_resolves_at=resolved,
+                    prediction=prediction,
+                    baseline_prediction=baseline,
+                    target=label.value,
+                    net_forward_return=review["bridge_sign"] * ret.value,
+                )
+            )
+    return out
+
+
 class CompositionBridge:
     """Freeze host-reviewed graph and spend each protected access at most once."""
 
@@ -213,95 +300,9 @@ class CompositionBridge:
 
     def _outcomes(self, frozen, observations, dates):
         plan = self.compositions.integrated_plan(frozen["composition_id"])
-        grant = plan["grant"]
-        review = frozen["review"]
-        now = require_aware(self.clock(), "clock")
-        labels = {}
-        for observation in observations:
-            if (
-                max(observation.available_at, observation.version_known_at)
-                > now
-            ):
-                continue
-            key = (
-                observation.source_id,
-                observation.metric,
-                observation.security_id,
-                month_index(observation.period_end.date()),
-            )
-            old = labels.get(key)
-            if (
-                old
-                and old.version_known_at == observation.version_known_at
-                and old.value != observation.value
-            ):
-                raise ValueError("ambiguous native or return outcome version")
-            if (
-                old is None
-                or observation.version_known_at > old.version_known_at
-            ):
-                labels[key] = observation
-        out = []
-        target = frozen["target"]
-        for day in dates:
-            values = evaluate_graph(
-                frozen["graph"], observations, day, grant["security_ids"]
-            )
-            for node in (review["output_node"], review["baseline_node"]):
-                values[node] = self._scores(values[node])
-            month = month_index(day.date())
-            for security in grant["security_ids"]:
-                prediction = values[review["output_node"]][security]
-                baseline = values[review["baseline_node"]][security]
-                label = labels.get(
-                    (
-                        target["source_id"],
-                        target["metric"],
-                        security,
-                        month + target["horizon_months"],
-                    )
-                )
-                ret = labels.get(
-                    (
-                        review["return_source_id"],
-                        review["return_metric"],
-                        security,
-                        month + review["return_horizon_months"],
-                    )
-                )
-                if (
-                    prediction is None
-                    or baseline is None
-                    or label is None
-                    or ret is None
-                ):
-                    continue
-                resolved = max(
-                    label.available_at,
-                    label.version_known_at,
-                    ret.available_at,
-                    ret.version_known_at,
-                    month_end_known_at(
-                        month + target["horizon_months"],
-                        target["resolve_lag_days"],
-                    ),
-                    month_end_known_at(month + review["return_horizon_months"]),
-                )
-                if resolved > now:
-                    continue
-                out.append(
-                    ForecastOutcome(
-                        security_id=security,
-                        formation_at=day,
-                        feature_available_at=day,
-                        label_resolves_at=resolved,
-                        prediction=prediction,
-                        baseline_prediction=baseline,
-                        target=label.value,
-                        net_forward_return=review["bridge_sign"] * ret.value,
-                    )
-                )
-        return out
+        return financial_outcomes(
+            plan, frozen, observations, dates, self.clock()
+        )
 
     @staticmethod
     def _scores(values):

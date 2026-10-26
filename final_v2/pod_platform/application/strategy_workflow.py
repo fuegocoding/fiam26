@@ -31,18 +31,28 @@ from ..orchestration.replay import (
     load_fixture,
 )
 from ..papers import PaperService, PaperStore
+from ..papers.models import PapersError
+from ..papers.transport import UrllibTransport
 from ..research.composition import FeatureObservation, observation_digest
 from ..research.composition_bridge import CompositionBridge
 from ..research.evaluation import RegisteredEvaluator
 from ..research.promotion import AdmissionCertificate
 from .common import atomic_write_json, file_sha256, now_utc
 from .configuration import PROJECT_ROOT, config_path, load_config
+from .desk_evaluation import evaluate_training, evaluate_validation
+from .edge_diagnostics import run_edge_diagnostics
+from .edge_research import run_edge_research
 from .integrity import IntegrityPolicy, IntegrityService
+from .live_models import create_live_models
+from .market_run import finish_research_run
 from .namespaces import RoleContext
 from .publication import PublicationService
+from .research_campaign import run_research_campaign
 from .research_desk import ResearchDesk
+from .research_inputs import prepare_inputs
 from .research_loop import NAMESPACES, AutonomousResearchLoop, RoleProviders
 from .system_workflow import CompletePlatformWorkflow
+from .training_lab import run_training_lab
 
 
 class UnconfiguredProvider:
@@ -95,6 +105,17 @@ class StrategyWorkflow:
         clock=now_utc,
     ):
         self.settings = settings or load_config()
+        self.input_snapshot = None
+        if self.settings["research"].get("prepare_inputs"):
+            prepared = prepare_inputs(self.settings, clock)
+            for key in (
+                "measurement_grants",
+                "observation_sources",
+                "proposals",
+            ):
+                self.settings["research"][key] = prepared[key]
+            self.settings["application"]["manifest"] = prepared["manifest_path"]
+            self.input_snapshot = prepared["snapshot"]
         self.application = self.settings["application"]
         self.clock = clock
         self.state = config_path(self.application["state_dir"])
@@ -122,10 +143,23 @@ class StrategyWorkflow:
             PaperStore(config_path(self.application["papers_db"])),
             clock=clock,
             online=self.application["online_papers"],
+            transport=(
+                UrllibTransport() if self.application["online_papers"] else None
+            ),
         )
-        self.providers = providers or configured_providers(
-            self.settings["models"]
-        )
+        self.global_budget = None
+        if providers:
+            self.providers = providers
+        elif "global_max_calls" in self.settings["models"]:
+            self.providers, self.global_budget = create_live_models(
+                self.settings["models"],
+                self.state,
+                self.application["run_id"],
+                clock,
+            )
+        else:
+            self.providers = configured_providers(self.settings["models"])
+        periods = self.settings["research"].get("periods", {})
         self.loop = AutonomousResearchLoop(
             self.state / "research",
             providers=self.providers,
@@ -141,6 +175,12 @@ class StrategyWorkflow:
             max_role_tokens=min(
                 r["max_tokens"]
                 for r in self.settings["models"]["roles"].values()
+            ),
+            check_start=dt.date.fromisoformat(
+                periods.get("validation_start", "2019-01-01")
+            ),
+            check_end=dt.date.fromisoformat(
+                periods.get("validation_end", "2020-12-31")
             ),
         )
         self.loop.publication = PublicationService(
@@ -165,6 +205,11 @@ class StrategyWorkflow:
                 budgets={
                     role: self.loop.budgets[namespace, role] for role in limits
                 },
+                generation_params=self.settings["models"].get("generation"),
+                paper_asof=self.settings["research"].get("literature_asof"),
+                repair_attempts=self.settings["models"].get(
+                    "repair_attempts", 0
+                ),
             )
         self.loop.research_desks = self.desks
         self.loop.composition_loader_factory = self.prepare_composition
@@ -336,10 +381,61 @@ class StrategyWorkflow:
             "research": [],
             "model_roles_enabled": self.settings["models"]["online"],
             "orders": 0,
+            "input_snapshot": self.input_snapshot,
+            "literature": [],
         }
+        discovered = {}
+        literature_asof = research.get("literature_asof")
         for query in self.application["paper_queries"]:
-            self.loop.papers.search(
-                query, limit=self.application["papers_per_query"]
+            namespace = (
+                query.get("namespace") if isinstance(query, dict) else None
+            )
+            text = query["query"] if isinstance(query, dict) else query
+            query_key = "literature:" + canonical_digest(
+                [
+                    namespace,
+                    text,
+                    literature_asof,
+                    self.application["papers_per_query"],
+                ]
+            )
+            previous = self.loop._get(query_key)
+            if previous is not None:
+                discovered.setdefault(namespace, []).extend(
+                    previous.get("paper_ids", [])
+                )
+                result["literature"].append(previous)
+                continue
+            try:
+                found = self.loop.papers.search(
+                    text,
+                    limit=self.application["papers_per_query"],
+                    as_of=literature_asof,
+                )
+                identifiers = [
+                    c.paper_id + (f"v{c.version}" if c.version else "")
+                    for c in found.cards
+                    if c.abstract and c.arxiv_id and c.version
+                ]
+                discovered.setdefault(namespace, []).extend(identifiers)
+                result["literature"].append(
+                    {
+                        "query": text,
+                        "origin": found.origin,
+                        "paper_ids": identifiers,
+                        "as_of": literature_asof,
+                    }
+                )
+            except PapersError as exc:
+                result["literature"].append(
+                    {
+                        "query": text,
+                        "status": "source_unavailable",
+                        "error_type": type(exc).__name__,
+                    }
+                )
+            self.loop._event(
+                query_key, "host", "literature", result["literature"][-1]
             )
         for paper_id in self.application["paper_ids"]:
             self.loop.papers.ingest_full_text(paper_id)
@@ -352,11 +448,30 @@ class StrategyWorkflow:
             self.loop.review_composition(reviewed["namespace"], reviewed)
         for task in research.get("proposals", []):
             namespace = task["namespace"]
-            result["research"].append(
-                self.desks[namespace].propose(
-                    **{k: v for k, v in task.items() if k != "namespace"}
+            selected = list(
+                dict.fromkeys(
+                    task["paper_ids"]
+                    + discovered.get(namespace, [])
+                    + discovered.get(None, [])
                 )
-            )
+            )[:16]
+            try:
+                proposal = self.desks[namespace].propose(
+                    **{
+                        k: v
+                        for k, v in task.items()
+                        if k not in {"namespace", "paper_ids"}
+                    },
+                    paper_ids=selected,
+                )
+            except (ValueError, PapersError) as exc:
+                proposal = {
+                    "namespace": namespace,
+                    "status": "preparation_failed",
+                    "error_type": type(exc).__name__,
+                    "admitted": False,
+                }
+            result["research"].append(proposal)
         plans = []
         for task in research["compositions"]:
             plans.append(
@@ -373,15 +488,29 @@ class StrategyWorkflow:
             result["research"].append(
                 self.loop.run_composition(namespace, identifier)
             )
+        if research.get("desk_evaluation", {}).get("enabled"):
+            result["desk_evaluation"] = evaluate_training(
+                self, list(unique.values())
+            )
+            result["validation"] = evaluate_validation(
+                self, list(unique.values()), result["desk_evaluation"]
+            )
         result["financial_reviews"] = self.challenge_compositions(
             research["financial_reviews"]
         )
         result["portfolio"] = self.run_portfolio()
         result["orders"] = result["portfolio"].get("orders", 0)
         result["status"] = (
-            "completed" if unique else "needs_research_configuration"
+            "completed"
+            if unique
+            else "completed_no_candidates"
+            if research.get("proposals")
+            else "needs_research_configuration"
         )
+        result["temporal_mode"] = "contemporary_research_on_historical_training"
         result["investment_validation"] = "UNPROVEN"
+        if self.global_budget:
+            result["model_budget"] = self.global_budget.snapshot()
         atomic_write_json(self.output / "workflow.json", result)
         return result
 
@@ -464,6 +593,18 @@ class StrategyWorkflow:
         """Use actual supplied inputs with the existing CIO, risk and ledger."""
         settings = self.settings["portfolio"]
         if not settings.get("input_dir"):
+            if settings.get("cash_run", {}).get("enabled"):
+                published = self.loop.publication.export_forecasts(
+                    RoleContext(
+                        "allocation",
+                        "allocation",
+                        self.application["run_id"],
+                        self.clock(),
+                    )
+                )
+                return finish_research_run(
+                    settings["cash_run"], self.output, published
+                )
             return {
                 "status": "waiting_for_admitted_forecasts_and_market_inputs",
                 "orders": 0,
@@ -522,6 +663,14 @@ def run_configured():
     """Run the root configuration without parsing command-line arguments."""
     settings = load_config()
     application = settings["application"]
+    if application["mode"] == "research_campaign":
+        return run_research_campaign(settings)
+    if application["mode"] == "edge_diagnostics":
+        return run_edge_diagnostics(settings)
+    if application["mode"] == "edge_training":
+        return run_edge_research(settings)
+    if application["mode"] == "training":
+        return run_training_lab(settings)
     if application["mode"] == "demo":
         return CompletePlatformWorkflow(
             config_path(application["state_dir"]),

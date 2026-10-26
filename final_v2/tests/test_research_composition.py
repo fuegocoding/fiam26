@@ -15,11 +15,35 @@ from pod_platform.research.builtins.timeutil import (
 )
 from pod_platform.research.composition import (
     CompositionService,
+    MeasurementGrant,
     observation_digest,
 )
 from pod_platform.research.features import FeatureObservation
 
 NOW = dt.datetime(2026, 10, 25, tzinfo=dt.timezone.utc)
+
+
+def test_expanded_training_requires_host_authority_and_excludes_evaluation(env):
+    grant = json.loads(json.dumps(env[2]))
+    grant["source_cards"][0]["source_id"] = "comp_traffic"
+    grant["source_metrics"]["comp_traffic"] = grant["source_metrics"].pop(
+        "traffic"
+    )
+    grant["protected_from"] = "2020-01-01T00:00:00+00:00"
+    grant["formation_dates"] = ["2019-09-30T23:59:59+00:00"]
+    with pytest.raises(ValueError, match="host authorization"):
+        MeasurementGrant.model_validate(grant)
+    grant["authorized_training_end"] = grant["protected_from"]
+    MeasurementGrant.model_validate(grant)
+    grant["formation_dates"] = ["2019-12-31T23:59:59+00:00"]
+    with pytest.raises(ValueError, match="maturity crosses"):
+        MeasurementGrant.model_validate(grant)
+    grant.update(
+        protected_from="2022-01-01T00:00:00+00:00",
+        authorized_training_end="2022-01-01T00:00:00+00:00",
+    )
+    with pytest.raises(ValueError, match="2021 evaluation"):
+        MeasurementGrant.model_validate(grant)
 
 
 @pytest.fixture

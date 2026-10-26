@@ -81,10 +81,12 @@ class ProviderError(Exception):
         *,
         retryable: bool = False,
         response_hash: Optional[str] = None,
+        diagnostic: Optional[dict] = None,
     ):
         super().__init__(message)
         self.retryable = retryable
         self.response_hash = response_hash
+        self.diagnostic = diagnostic or {}
 
 
 class IncompleteOutputError(ProviderError):
@@ -220,6 +222,113 @@ Transport = Callable[
 ]
 
 
+CONSTRAINT_KEYWORDS = (
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "minimum",
+    "maximum",
+    "pattern",
+    "default",
+)
+
+
+def _constraint_notes(node: dict[str, Any]) -> list[str]:
+    notes = [
+        f"{key} {json.dumps(node[key])}"
+        for key in CONSTRAINT_KEYWORDS
+        if key in node
+    ]
+    tuple_items = node.get("prefixItems")
+    if isinstance(tuple_items, list):
+        notes.append(f"exactly {len(tuple_items)} items")
+    return notes
+
+
+def _with_constraint_text(description: Any, notes: Sequence[str]) -> str:
+    text = "Constraints: " + "; ".join(notes) + "."
+    if isinstance(description, str) and description:
+        return f"{description} {text}"
+    return text
+
+
+def strict_json_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize a Pydantic schema to Groq's strict schema subset.
+
+    Supported semantic structure (types, enums, unions and references) is
+    retained. Pydantic-only validators remain enforced by local model
+    validation after decoding. Fixed homogeneous tuples become regular arrays
+    with the shared item schema because strict outputs do not support
+    ``prefixItems``. Dropped length, range, pattern and default constraints
+    are kept as description text so the model still sees them.
+    """
+    if not isinstance(schema, Mapping):
+        raise ValueError("response_schema must be a JSON schema object")
+    result = json.loads(json.dumps(schema))
+    keep = {
+        "type",
+        "properties",
+        "items",
+        "anyOf",
+        "$ref",
+        "$defs",
+        "enum",
+        "additionalProperties",
+        "required",
+        "description",
+        "title",
+    }
+
+    def normalize(node: Any) -> Any:
+        if isinstance(node, list):
+            return [normalize(value) for value in node]
+        if isinstance(node, dict):
+            notes = _constraint_notes(node)
+            if "const" in node:
+                constant = node.pop("const")
+                existing = node.get("enum")
+                if existing is not None and constant not in existing:
+                    raise ValueError("schema const conflicts with its enum")
+                node["enum"] = [constant]
+            tuple_items = node.pop("prefixItems", None)
+            if tuple_items is not None:
+                if not isinstance(tuple_items, list) or not tuple_items:
+                    raise ValueError(
+                        "strict structured outputs cannot encode this tuple"
+                    )
+                normalized_items = [normalize(value) for value in tuple_items]
+                if any(
+                    value != normalized_items[0] for value in normalized_items
+                ):
+                    raise ValueError(
+                        "strict structured outputs require homogeneous tuple items"
+                    )
+                node["items"] = normalized_items[0]
+            for key, value in list(node.items()):
+                if key in ("properties", "$defs") and isinstance(value, dict):
+                    node[key] = {
+                        name: normalize(child) for name, child in value.items()
+                    }
+                else:
+                    node[key] = normalize(value)
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                node["additionalProperties"] = False
+                if properties:
+                    node["required"] = sorted(properties)
+                else:
+                    node.pop("required", None)
+            if notes:
+                node["description"] = _with_constraint_text(
+                    node.get("description"), notes
+                )
+            return {key: value for key, value in node.items() if key in keep}
+        return node
+
+    return normalize(result)
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self, *args: Any, **kwargs: Any
@@ -292,6 +401,8 @@ class OpenAICompatibleProvider:
         environ: Optional[Mapping[str, str]] = None,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
         json_mode: bool = True,
+        structured_outputs: bool = False,
+        reasoning_effort: Optional[str] = None,
         clock: Callable[[], dt.datetime] = utc_now,
     ):
         parsed = urllib.parse.urlparse(base_url or "")
@@ -324,6 +435,8 @@ class OpenAICompatibleProvider:
         self.api_key_env = api_key_env
         self.max_response_bytes = max_response_bytes
         self.json_mode = json_mode
+        self.structured_outputs = structured_outputs
+        self.reasoning_effort = reasoning_effort
         self._transport = transport or urllib_transport
         self._environ = os.environ if environ is None else environ
         self._clock = clock
@@ -352,7 +465,18 @@ class OpenAICompatibleProvider:
         }
         if request.params.seed is not None:
             payload["seed"] = request.params.seed
-        if self.json_mode:
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        if self.structured_outputs and request.response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_response",
+                    "strict": True,
+                    "schema": strict_json_schema(request.response_schema),
+                },
+            }
+        elif self.json_mode:
             payload["response_format"] = {"type": "json_object"}
         headers = {
             "Content-Type": "application/json",
@@ -391,10 +515,21 @@ class OpenAICompatibleProvider:
             snippet = redact_secrets(
                 bytes(body[:400]).decode("utf-8", "replace"), key
             )[:200]
+            diagnostic = {"http_status": status}
+            try:
+                error = json.loads(bytes(body).decode("utf-8"))["error"]
+                for field in ("message", "type", "code", "failed_generation"):
+                    if field in error:
+                        diagnostic[field] = redact_secrets(
+                            str(error[field]), key
+                        )[:24000]
+            except (ValueError, KeyError, TypeError):
+                pass
             raise ProviderError(
                 f"provider returned HTTP {status}: {snippet}",
                 retryable=status in (408, 429) or status >= 500,
                 response_hash=response_hash,
+                diagnostic=diagnostic,
             )
         try:
             doc = json.loads(body.decode("utf-8"))

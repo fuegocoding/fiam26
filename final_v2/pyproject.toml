@@ -10,7 +10,8 @@ requires-python = ">=3.11"
 dependencies = ["pydantic>=2,<3"]
 
 [project.optional-dependencies]
-research = ["numpy>=1.26", "pandas>=2", "pyarrow>=14", "pypdf>=5"]
+charts = ["plotly>=6"]
+research = ["numpy>=1.26", "pandas>=2", "pyarrow>=14", "pypdf>=5", "scipy>=1.11", "xgboost>=2"]
 signals = ["numpy>=1.26", "pandas>=2", "pyarrow>=14", "scipy>=1.11", "xgboost>=2"]
 graph = ["torch>=2"]
 test = ["pytest>=8"]

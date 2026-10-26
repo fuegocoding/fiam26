@@ -604,8 +604,10 @@ async def connect(args, interactive=False):
     for header, variable in settings.get("env_http_headers", {}).items():
         if variable in os.environ:
             headers[header] = os.environ[variable]
-    token = os.environ.get("CARBONARC_TOKEN") or os.environ.get(
-        settings.get("bearer_token_env_var", "")
+    token = (
+        getattr(args, "bearer_token", None)
+        or os.environ.get("CARBONARC_TOKEN")
+        or os.environ.get(settings.get("bearer_token_env_var", ""))
     )
     callback = None
     auth = None

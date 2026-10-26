@@ -143,9 +143,9 @@ class RegisteredEvaluator:
         allowed_partitions: tuple[str, ...] = ("design",),
     ) -> dict:
         require_aware(evaluation_asof, "evaluation_asof")
-        if not variant_id or not observations or len(observations) > 100_000:
+        if not variant_id or not observations or len(observations) > 300_000:
             raise ValueError(
-                "nonempty variant and 1..100000 observations required"
+                "nonempty variant and 1..300000 observations required"
             )
         row = self.connection.execute(
             "SELECT payload FROM comparison_plans WHERE id=?", (experiment_id,)

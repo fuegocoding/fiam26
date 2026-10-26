@@ -43,13 +43,14 @@ class MeasurementGrant(StrictModel):
     source_metrics: dict[str, list[str]] = Field(min_length=1, max_length=12)
     source_cards: list[SourceCard] = Field(min_length=1, max_length=12)
     targets: dict[str, NativeTarget] = Field(min_length=1, max_length=8)
-    formation_dates: list[dt.datetime] = Field(min_length=1, max_length=36)
+    formation_dates: list[dt.datetime] = Field(min_length=1, max_length=72)
     security_ids: list[str] = Field(min_length=3, max_length=500)
     partition: Literal["design", "prospective"] = "design"
     protected_from: dt.datetime = dt.datetime(
         2019, 1, 1, tzinfo=dt.timezone.utc
     )
-    max_observations: int = Field(default=50000, ge=1, le=100000)
+    authorized_training_end: dt.datetime | None = None
+    max_observations: int = Field(default=50000, ge=1, le=300_000)
 
     @model_validator(mode="after")
     def bounds(self):
@@ -76,12 +77,23 @@ class MeasurementGrant(StrictModel):
                     "native target maturity crosses the host-protected boundary"
                 )
         cards = {c.source_id: c for c in self.source_cards}
+        if self.authorized_training_end is not None:
+            require_aware(
+                self.authorized_training_end, "authorized_training_end"
+            )
         if self.protected_from.date() > dt.date(2019, 1, 1) and any(
             source.lower().startswith("comp_") for source in cards
         ):
-            raise ValueError(
-                "Competition check/replay dates cannot be reclassified as design."
-            )
+            # A new host grant can adopt an explicitly authorized training
+            # split. Existing grants and their exposure ledgers stay immutable.
+            if (
+                self.authorized_training_end != self.protected_from
+                or self.protected_from.date() > dt.date(2021, 1, 1)
+            ):
+                raise ValueError(
+                    "Expanded competition training needs host authorization "
+                    "and must stop before the 2021 evaluation."
+                )
         if set(cards) != set(self.source_metrics):
             raise ValueError("each granted source needs its actual source card")
         if any(

@@ -14,7 +14,15 @@ from tests.test_research_composition import env as composition_env
 NOW = dt.datetime(2026, 10, 25, tzinfo=dt.timezone.utc)
 
 
-def make_desk(tmp_path, env, *, category="testable", fail_role=None):
+def make_desk(
+    tmp_path,
+    env,
+    *,
+    category="testable",
+    fail_role=None,
+    malformed_first=False,
+    repair_attempts=0,
+):
     service, spec, grant, rows = env
     seen = []
 
@@ -41,6 +49,10 @@ def make_desk(tmp_path, env, *, category="testable", fail_role=None):
         seen.append(("lead", json.loads(request.user)))
         if fail_role == "lead":
             raise RuntimeError("private transport detail")
+        if malformed_first and "previous_attempt_rejected" not in json.loads(
+            request.user
+        ):
+            return json.dumps({**spec, "composition_name": "Upper_Case"})
         return json.dumps(spec)
 
     def critique(request):
@@ -77,6 +89,7 @@ def make_desk(tmp_path, env, *, category="testable", fail_role=None):
         run_id="desk_test",
         max_calls=3,
         max_tokens=100000,
+        repair_attempts=repair_attempts,
     )
     args = dict(
         question=spec["question"],
@@ -229,3 +242,26 @@ def test_private_or_ungranted_metadata_cannot_enter_prompts(
     with pytest.raises(ValueError):
         desk.propose(**{**args, "source_metadata": metadata})
     assert seen == []
+
+
+@pytest.mark.parametrize("repair_attempts", [0, 1])
+def test_rejected_output_is_returned_for_one_charged_repair(
+    tmp_path, composition_env, repair_attempts
+):
+    desk, args, seen, _ = make_desk(
+        tmp_path,
+        composition_env,
+        malformed_first=True,
+        repair_attempts=repair_attempts,
+    )
+    result = desk.propose(**args)
+    leads = [payload for role, payload in seen if role == "lead"]
+    if repair_attempts:
+        assert result["status"] == "registered", result
+        assert len(leads) == 2
+        assert "composition_name" in leads[1]["previous_attempt_rejected"]
+        assert [r["role"] for r in result["repairs"]] == ["lead"]
+        assert desk.status()["roles"]["lead"]["calls_used"] == 2
+    else:
+        assert result["status"] == "model_failed"
+        assert len(leads) == 1 and result["repairs"] == []

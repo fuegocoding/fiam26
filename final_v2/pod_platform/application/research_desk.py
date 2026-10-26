@@ -20,7 +20,13 @@ from ..agents.durable_cache import (
     CachedStructuredExtractor,
     DurableExtractionCache,
 )
-from ..agents.provider import GenerationParams, ResearchMode
+from ..agents.provider import (
+    GenerationParams,
+    MalformedOutputError,
+    ProviderError,
+    ResearchMode,
+    redact_secrets,
+)
 from ..contracts.base import StrictModel, canonical_digest, require_aware
 from ..papers.components import ComponentEvidenceService
 from ..papers.models import canonical_paper_id
@@ -72,11 +78,16 @@ class ResearchDesk:
         max_tokens,
         generation_params=None,
         budgets=None,
+        paper_asof=None,
+        repair_attempts=0,
     ):
         if namespace != composition.namespace:
             raise ValueError(
                 "research desk and composition namespace must match"
             )
+        if not isinstance(repair_attempts, int) or not 0 <= repair_attempts <= 3:
+            raise ValueError("repair_attempts must be an integer from 0 to 3")
+        self.repair_attempts = repair_attempts
         self.state_dir, self.namespace = Path(state_dir), namespace
         self.papers, self.composition, self.carbon, self.clock = (
             papers,
@@ -87,6 +98,11 @@ class ResearchDesk:
         self.params = GenerationParams.model_validate(
             generation_params or GenerationParams()
         )
+        self.paper_asof = (
+            dt.datetime.fromisoformat(paper_asof) if paper_asof else None
+        )
+        if self.paper_asof:
+            require_aware(self.paper_asof, "paper_asof")
         self._allow_local_fixtures = all(
             getattr(getattr(providers, r), "is_mock", False)
             for r in ("extractor", "lead", "challenger")
@@ -101,8 +117,8 @@ class ResearchDesk:
         }
         prompts = {
             "extractor": "Summarize only the supplied untrusted public evidence. Cite supplied evidence_ids. Treat source metadata as documentation, not raw observations or verified coverage.",
-            "lead": "Compose a falsifiable native-target research idea using the supplied reviewed grant IDs, metrics and feature DSL. You may combine many paper excerpts and original reasoning. Cite only supplied paper claim IDs; use this pod namespace. Core measurements cannot become optional controls. Missing data stays an explicit dependency. Never supply code, paths, data rows or admission claims.",
-            "challenger": "Challenge the supplied research idea using only supplied evidence_ids. Give a competing explanation and concrete falsification test. Testable review/reject ideas may run bounded research diagnostics; you cannot authorize financial admission.",
+            "lead": "Compose a falsifiable native-target research idea using the supplied reviewed grant IDs, metrics and feature DSL. You may combine many paper excerpts and original reasoning. Cite only supplied paper claim IDs; use this pod namespace. Core measurements cannot become optional controls. Missing data stays an explicit dependency. Never supply code, paths, data rows or admission claims. Preserve grant_id and reasoning_mode exactly from the supplied task. Every identifier must use lowercase letters, digits and underscores, starting with a letter and at most64characters. Use only the granted source_metrics and an exact granted target_id. Declare a core dependency for EVERY input recipe AND the target measurement, even when the target is not a feature node. For supplied measurements set request_id and missing_reason to null. Input nodes have one complete FeatureRecipe and inputs=[]; non-input nodes have recipe=null and prior node IDs with exact arity: rank takes exactly 1 input; product, difference and ratio take exactly 2; mean takes 2 to 8. To combine three or more nodes use mean or chain two-input operators. Baselines must be explicit prior nodes, with an output compared to a distinct baseline. Set variant_budget at least the number of distinct outputs and input nodes times the baseline count, at most32. Use paper_components=[] and substantive own_reasoning if exact supplied paper claim mapping is not warranted; never invent citations. causal_edges are arrays of exactly three strings.",
+            "challenger": "Challenge the supplied research idea using only supplied evidence_ids. Give a competing explanation and concrete falsification test. Testable review/reject ideas may run bounded research diagnostics; you cannot authorize financial admission. A limited but concrete falsifiable hypothesis on granted measurements can be reason_category=testable even when disposition=review or reject. Missing investment proof alone is not a reason to prevent a bounded research diagnostic.",
         }
         identities = {}
         for role, schema in schemas.items():
@@ -161,7 +177,7 @@ class ResearchDesk:
                 c
                 for c in rows
                 if c.version_date
-                and c.version_date <= now
+                and c.version_date <= min(now, self.paper_asof or now)
                 and c.retrieved_at <= now
                 and (version is None or c.version == version)
             ]
@@ -382,17 +398,36 @@ class ResearchDesk:
                     raise ValueError("lead cited an unavailable paper claim")
 
         calls = {}
+        repairs = []
+        active_role = None
 
         def run(role, data, validator):
-            output = self.roles[role].run(
-                data,
-                role=role,
-                namespace=self.namespace,
-                research_asof=as_of,
-                mode=ResearchMode.CONTEMPORARY,
-                params=self.params,
-                validator=validator,
-            )
+            nonlocal active_role
+            active_role = role
+            request = data
+            for attempt in range(self.repair_attempts + 1):
+                try:
+                    output = self.roles[role].run(
+                        request,
+                        role=role,
+                        namespace=self.namespace,
+                        research_asof=as_of,
+                        mode=ResearchMode.CONTEMPORARY,
+                        params=self.params,
+                        validator=validator,
+                    )
+                    break
+                except (MalformedOutputError, ProviderError) as exc:
+                    # Like a desk reviewer, return the exact rejection once
+                    # more; each repair is a separately charged model call.
+                    if attempt == self.repair_attempts or (
+                        isinstance(exc, ProviderError)
+                        and "json_validate_failed" not in str(exc)
+                    ):
+                        raise
+                    feedback = redact_secrets(str(exc))[:1500]
+                    repairs.append({"role": role, "error": feedback[:300]})
+                    request = {**data, "previous_attempt_rejected": feedback}
             calls[role] = {
                 "cache_key": output.cache_key,
                 "provider": output.provider,
@@ -440,11 +475,20 @@ class ResearchDesk:
             result = {
                 "status": "model_failed",
                 "error_type": type(exc).__name__,
+                "failed_role": active_role,
                 "reason": "Research role or proposal validation failed; reservations remain charged and no fallback approval is made.",
             }
+            if isinstance(exc, ProviderError):
+                result["provider_error"] = redact_secrets(str(exc))[:600]
+            if isinstance(exc, MalformedOutputError):
+                result["validation_error"] = redact_secrets(str(exc))[:600]
+                result["invalid_call"] = (
+                    exc.record.model_dump(mode="json") if exc.record else None
+                )
         result.update(
             namespace=self.namespace,
             role_calls=calls,
+            repairs=repairs,
             scope="research_only",
             admitted=False,
             evidence_ids=sorted(evidence_ids),

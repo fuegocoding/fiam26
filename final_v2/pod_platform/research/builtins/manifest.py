@@ -146,6 +146,7 @@ class DatasetSpec(StrictModel):
         default_factory=ComponentEvaluationSpec
     )
     notes: Optional[str] = None
+    authorized_training_end: Optional[dt.date] = None
 
     @model_validator(mode="after")
     def _check(self, info: ValidationInfo) -> "DatasetSpec":
@@ -225,9 +226,12 @@ class DatasetSpec(StrictModel):
             )
         if DESIGN not in self.partitions:
             raise ValueError("a design partition is required")
-        if self.partitions[DESIGN].end >= PROTECTED_FROM:
+        boundary = self.authorized_training_end or PROTECTED_FROM
+        if not PROTECTED_FROM <= boundary <= dt.date(2021, 1, 1):
+            raise ValueError("training authorization cannot include evaluation")
+        if self.partitions[DESIGN].end >= boundary:
             raise ValueError(
-                f"design partition must end before {PROTECTED_FROM.isoformat()}"
+                f"design partition must end before {boundary.isoformat()}"
             )
         return self
 
@@ -238,6 +242,7 @@ class DatasetManifest(StrictModel):
     approved_by: str = Field(min_length=1)
     approved_at: dt.datetime
     allowed_roots: list[str] = Field(default_factory=list)
+    research_periods: dict[str, dt.date] = Field(default_factory=dict)
     datasets: dict[str, DatasetSpec] = Field(min_length=1)
 
     @field_validator("approved_at")

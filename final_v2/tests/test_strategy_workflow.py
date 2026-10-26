@@ -20,6 +20,11 @@ def test_root_configuration_runs_composed_research_and_resumes(
     service, spec, grant, observations = composition_env
     original = build_fixture_loop(tmp_path / "host")
     settings = load_config()
+    settings["application"].update(online_papers=False, paper_queries=[])
+    settings["research"].update(
+        prepare_inputs=False, desk_evaluation={"enabled": False}
+    )
+    settings["portfolio"]["cash_run"]["enabled"] = False
     settings["application"].update(
         state_dir=str(tmp_path / "runtime"),
         output_dir=str(tmp_path / "output"),

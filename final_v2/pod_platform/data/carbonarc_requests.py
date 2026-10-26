@@ -282,7 +282,23 @@ class CarbonArcOAuthTransport:
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        token = None
+        env_file = self.root / "local/carbonarc-api.env"
+        if env_file.is_file():
+            for line in env_file.read_text().splitlines():
+                key, separator, value = (
+                    line.strip().removeprefix("export ").partition("=")
+                )
+                if separator and key.strip() == "CARBONARC_API_TOKEN":
+                    token = value.strip()
+                    if (
+                        len(token) >= 2
+                        and token[0] == token[-1]
+                        and token[0] in "\"'"
+                    ):
+                        token = token[1:-1]
         connection = SimpleNamespace(
+            bearer_token=token,
             config=self.config_path,
             server="carbonarc",
             url=None,
