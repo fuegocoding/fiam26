@@ -219,13 +219,26 @@ def construct_target(
             score, design, frame, settings, maximum=maximum
         )
     sizing_factors = None
-    if strategy.construction == "liquidity_tilt":
+    if strategy.construction in {"liquidity_tilt", "liquidity_borrow_tilt"}:
         prepared = (
             prepare_forecast(score, design) if prepared is None else prepared
         )
         indices = prepared[0]
         adv = frame.dolvol_126d.fillna(0).to_numpy(float)[indices]
         sizing_factors = np.clip(adv / 20_000_000, 0, 1)
+        if strategy.construction == "liquidity_borrow_tilt":
+            cap = frame.me.fillna(0).to_numpy(float)[indices] * 1e6
+            fees = np.where(
+                cap >= settings["large_cap_borrow_threshold_usd"],
+                settings["large_cap_borrow_bps"],
+                settings["other_borrow_bps"],
+            )
+            penalty = np.divide(
+                max(settings["large_cap_borrow_bps"], 1), np.maximum(fees, 1)
+            )
+            sizing_factors[prepared[2] < 0] *= np.minimum(
+                1, penalty[prepared[2] < 0]
+            )
     return supported_target(
         score,
         design,

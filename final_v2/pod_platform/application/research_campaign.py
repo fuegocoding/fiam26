@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+from pydantic import ValidationError
 
 from ..agents.provider import (
     BudgetExhausted,
@@ -20,6 +22,8 @@ from ..agents.provider import (
 from ..contracts.base import canonical_digest
 from ..pods.charters import pod_spec
 from ..research.campaign_metrics import competition_report
+from ..research.causal_forecast import fit_ridge_forecast
+from ..research.cost_sensitivity import frozen_cost_sensitivity
 from ..research.edge_capacity import (
     allocate_continuously,
     measure_edge,
@@ -41,6 +45,7 @@ from ..research.filing_text import (
     text_measurements,
 )
 from ..research.forecast_construction import monthly_concentration
+from ..research.input_permissions import FILING_RESEARCH_FEATURES
 from ..research.joint_allocation import allocate_jointly, capital_bound
 from ..research.sleeve_execution import RecordedInstruction, SleeveExecutionBook
 from ..research.strategy_code import (
@@ -48,12 +53,18 @@ from ..research.strategy_code import (
     CodeStrategy,
     code_signals,
     compile_strategy,
+    required_features,
     unit_schedule,
 )
 from ..research.training_data import POD_FEATURES, prepare_panel
 from ..research.training_mechanisms import MECHANISMS
 from ..research.training_search import summarize
-from ..research.training_tactical import daily_market, monthly_net, replay_daily
+from ..research.training_tactical import (
+    daily_market,
+    monthly_net,
+    replay_daily,
+    unit_return_month_ends,
+)
 from .campaign_sources import (
     attach_alternative_features,
     discover_evidence,
@@ -88,11 +99,12 @@ Filing text measurements have explicit dictionaries and survivor-biased coverage
 Do not treat missing filing coverage as zero or infer future coverage. Sector and
 beta controls are construction choices; capital, fees and capacity are separate
 from the forecast. Short floor is $500m; small-cap longs remain allowed.
-Write ONLY def score(features, history, daily): using assignments and return.
+Write ONLY def score(features, history, daily): using numerical assignments,
+finite if statements, up to eight acyclic pure numerical helpers, and return.
 features['name'] is the current ranked security vector; history['name'] is up to
 12 past/current monthly vectors; daily is up to 252 strictly past daily return
 vectors. Output one security vector. There are no outcomes, capital, IDs, paths,
-imports, loops, input reassignment, IO or arbitrary calls. Numpy is available as np:
+imports, loops, recursion, input reassignment, IO or arbitrary calls. Numpy is available as np:
 abs, sign, sqrt, log1p, minimum, maximum, clip, where, isfinite, nan_to_num,
 nanmean, nanstd, nansum, mean, std, sum, diff, tanh, exp, isnan and np.nan. Use literal feature
 keys and slices (daily[-21:], history['x'][-3:]); reductions need axis=0.
@@ -108,6 +120,8 @@ Use [] when the existing filing measurements suffice. No raw filing text is sent
 Choose weighting=score for amplitude sizing or equal_tail for equal ranked tails.
 construction=liquidity_tilt uses trailing ADV to size the same forecast cohort,
 without a dollar capital assumption; unscaled leaves this tilt off.
+liquidity_borrow_tilt additionally sizes short positions by the disclosed fee
+schedule; this changes construction, never the forecast or its rank IC.
 hedge_policy=paired_signal uses negative forecasts on eligible shorts;
 liquid_sector instead builds an explicit liquid large-cap sector hedge for
 high-score alpha longs and requires controls=sector. A hedge is not a negative forecast. Disclose residual
@@ -266,6 +280,48 @@ def economic_controls():
                 construction="liquidity_tilt",
             )
         )
+    for pod, expression, update in [
+        ("fundamentals", "features['cash_at']", 6),
+        (
+            "events",
+            "(-features['eqnpo_me'] + features['debt_gr3'] - features['taccruals_at']) / 3",
+            3,
+        ),
+        ("valuation", "-features['div12m_me']", 3),
+    ]:
+        result.append(
+            CodeStrategy(
+                pod=pod,
+                name="development_borrow_sizing_" + pod,
+                mechanism="Implementation ablation of an existing development forecast: preserve its forecast, update frequency and ranked cohort but size short exposure inversely to the declared borrow fee schedule, with trailing ADV sizing. This tests whether expensive mid-cap shorts consume otherwise measurable forecast edge.",
+                falsification="Compare identical forecast ranks and active support against liquidity-only sizing. Reject if net improvement comes from unreported beta/sector drift or disappears under doubled fees, chronological subperiods or actual dollar capacity. This is an adaptive development experiment, not independent validation.",
+                code=f"def score(features, history, daily):\n    return {expression}\n",
+                controls="sector_beta",
+                review="monthly",
+                signal_update_months=update,
+                expected_holding_days=21 * update,
+                construction="liquidity_borrow_tilt",
+            )
+        )
+    for pod in POD_FEATURES:
+        result.append(
+            CodeStrategy(
+                pod=pod,
+                name="causal_ridge_" + pod,
+                mechanism="A regularized linear combination of the pod's economic measurements adapts using only previously settled stock-return labels, with equal weighting across training months. This tests whether unstable fixed directions require shrinkage and dated refits; labels never reach generated code.",
+                falsification="Reject if net edge fails under prior-only replay, regularization sensitivity, conservative costs or chronological stability. Never claim that adaptive use of all pre-2021 development data is an untouched validation.",
+                code="def score(features, history, daily):\n    return features['model_forecast']\n",
+                controls="sector_beta",
+                review="monthly",
+                signal_update_months=3,
+                expected_holding_days=63,
+                construction="liquidity_borrow_tilt",
+                forecast_model="ridge",
+                model_features=list(POD_FEATURES[pod]),
+                model_penalty=1.0,
+                model_lookback_months=36,
+            )
+        )
     return result
 
 
@@ -355,6 +411,7 @@ class ResearchCampaign:
         self.evidence_services = evidence_services or {}
         self.trials, self.attempts = {}, []
         self.calls = 0
+        self.custom_feature_specs = {}
         documentation = self.policy.get("feature_documentation_path")
         self.feature_definitions = (
             characteristic_definitions(config_path(documentation))
@@ -365,7 +422,7 @@ class ResearchCampaign:
     def _save(self):
         atomic_write_json(self.output / "attempt_ledger.json", self.attempts)
 
-    def _evaluate(self, strategy, origin, round_number):
+    def _evaluate(self, strategy, origin, round_number, provenance=None):
         identity = (
             strategy.pod
             + ":"
@@ -381,16 +438,43 @@ class ResearchCampaign:
             "round": round_number,
             "strategy": strategy.model_dump(mode="json"),
             "status": "registered_before_evaluation",
+            "model_provenance": provenance,
         }
         self.attempts.append(record)
         self._save()
         try:
-            compile_strategy(strategy.code, set(self.panel.features))
+            strategy_panel = self.panel
+            model_state = None
+            if strategy.forecast_model == "ridge":
+                if "model_forecast" not in required_features(strategy.code):
+                    raise ValueError(
+                        "Ridge strategies must use the registered model_forecast in their code"
+                    )
+                model_inputs = strategy.model_features or list(
+                    POD_FEATURES[strategy.pod]
+                )
+                predicted, model_state = fit_ridge_forecast(
+                    self.panel,
+                    model_inputs,
+                    penalty=strategy.model_penalty,
+                    lookback=strategy.model_lookback_months,
+                    controls=strategy.controls,
+                )
+                strategy_panel = replace(
+                    self.panel,
+                    features={
+                        **self.panel.features,
+                        "model_forecast": predicted,
+                    },
+                )
+            compile_strategy(strategy.code, set(strategy_panel.features))
             if not set(strategy.evidence_refs) <= self.evidence_ids:
                 raise ValueError(
                     "Strategy cites evidence absent from its packet"
                 )
-            scores, decisions = code_signals(strategy, self.panel, self.market)
+            scores, decisions = code_signals(
+                strategy, strategy_panel, self.market
+            )
             monthly_scores = np.full(self.panel.mask.shape, np.nan)
             # For daily/weekly rules the latest review preceding each monthly
             # formation is recomputed independently, never taken from a later day.
@@ -412,6 +496,10 @@ class ResearchCampaign:
             )
             curves = summarize_prefixes(prefixes)
             stem = identity.replace(":", "_")
+            if model_state is not None:
+                atomic_write_json(
+                    self.output / (stem + "_causal_model.json"), model_state
+                )
             curves.to_csv(
                 self.output / (stem + "_concentration.csv"), index=False
             )
@@ -473,9 +561,23 @@ class ResearchCampaign:
                 self.settings,
                 holdings_path=self.output / (stem + "_unit_holdings.npy"),
             )
+            atomic_write_json(
+                self.output / (stem + "_schedule_dates.json"),
+                [
+                    str(self.market.dates[day].date())
+                    for day in sorted(schedule)
+                ],
+            )
+            if self.policy.get("cost_sensitivity", False):
+                rows = frozen_cost_sensitivity(
+                    self.market, schedule, self.panel, self.settings, edge
+                )
+                pd.DataFrame(rows).to_csv(
+                    self.output / (stem + "_cost_sensitivity.csv"), index=False
+                )
             gross = monthly_net(edge["gross"], self.market, self.panel)
             net = monthly_net(edge["net"], self.market, self.panel)
-            chronological = self.panel.settlement_dates >= pd.Timestamp(
+            chronological = unit_return_month_ends(self.panel) >= pd.Timestamp(
                 "2018-01-01"
             )
             report = {
@@ -646,6 +748,17 @@ class ResearchCampaign:
             "mandate": pod_spec(pod).mission,
             "development_cutoff": self.settings["end"],
             "features": sorted(self.panel.features),
+            "default_feature_coverage": {
+                name: round(
+                    self.panel.metadata.get("feature_coverage", {}).get(
+                        name, 0.0
+                    ),
+                    3,
+                )
+                for name in [*POD_FEATURES[pod], *FILING_RESEARCH_FEATURES]
+                if name in self.panel.features
+            },
+            "trusted_forecast_model": "Set forecast_model=ridge to use host-fitted model_forecast. model_features can use any distinct supplied features (default: pod examples), model_penalty>0, model_lookback_months12-120. Host fits only previously settled labels, with month weighting and fixed regularization; code receives the prediction, never outcomes. forecast_model=code uses raw current/history features only.",
             "feature_definitions": {
                 f: self.feature_definitions[f]["meaning"]
                 for f in POD_FEATURES[pod]
@@ -672,6 +785,10 @@ class ResearchCampaign:
                 "weighting",
                 "hedge_policy",
                 "construction",
+                "forecast_model",
+                "model_features",
+                "model_penalty",
+                "model_lookback_months",
             ],
             "filing_features": "filings_text_risk_90d: literal default/impairment/restatement/bankruptcy/covenant/litigation/breach frequency; filings_text_uncertainty_90d: uncertainty/may/might frequency; credit_event: SEC items1.01/1.02/2.03/2.04; management_event:5.02; earnings_event:2.02. All survivor-conditioned; missing is unknown. Custom literal phrase features are supported.",
             "feedback": feedback[-5:],
@@ -771,68 +888,29 @@ class ResearchCampaign:
             if any(s.pod != pod for s in batch.strategies):
                 raise ValueError("A pod may propose only its own strategies")
         except ValueError as exc:
+            summary = str(exc)[:250]
+            if isinstance(exc, ValidationError):
+                summary = json.dumps(
+                    exc.errors(
+                        include_input=False,
+                        include_url=False,
+                        include_context=False,
+                    )
+                )[:1200]
             self.attempts.append(
                 {
                     "round": number,
                     "pod": pod,
                     "status": "rejected_batch",
-                    "failure": str(exc)[:1200],
+                    "failure": {"type": type(exc).__name__, "reason": summary},
                 }
             )
             self._save()
-            return {"status": "invalid_batch", "reason": str(exc)[:600]}
+            return {"status": "invalid_batch", "reason": summary}
         try:
-            if batch.filing_measurements:
-                if not self.settings.get("filings_research_enabled"):
-                    return {"status": "text_source_disabled"}
-                definitions = [
-                    s.model_dump(mode="json") for s in batch.filing_measurements
-                ]
-                registry = self.state / (
-                    "custom_text_"
-                    + canonical_digest(
-                        {
-                            "file": file_sha256(self.settings["filings_path"]),
-                            "specs": definitions,
-                        }
-                    )[:24]
-                    + ".parquet"
-                )
-                store = FilingResearchStore(
-                    self.settings["filings_path"],
-                    training_end=self.settings["end"],
-                    start=self.settings["start"],
-                )
-                measured = custom_measurements(
-                    store, batch.filing_measurements, registry
-                )
-                for name, values in custom_feature_arrays(
-                    measured,
-                    self.panel.dates,
-                    self.panel.securities,
-                    batch.filing_measurements,
-                ).items():
-                    if name in self.panel.features:
-                        raise ValueError(
-                            "Revised text rules require a new feature name"
-                        )
-                    self.panel.features[name] = (
-                        pd.DataFrame(values)
-                        .where(self.panel.mask)
-                        .rank(axis=1, pct=True)
-                        .to_numpy()
-                        * 2
-                        - 1
-                    ).astype(np.float32)
-                atomic_write_json(
-                    self.output
-                    / f"round_{number}_{pod}_text_measurements.json",
-                    {
-                        "definitions": definitions,
-                        "data_sha256": file_sha256(registry),
-                        "cloud_text_transmission": False,
-                    },
-                )
+            self._install_text_measurements(
+                batch.filing_measurements, f"round_{number}_{pod}"
+            )
         except (ValueError, TypeError, KeyError) as exc:
             self.attempts.append(
                 {
@@ -849,7 +927,22 @@ class ResearchCampaign:
             }
         before = set(self.trials)
         for strategy in batch.strategies:
-            self._evaluate(strategy, "agent_written_code", number)
+            self._evaluate(
+                strategy,
+                "agent_written_code",
+                number,
+                provenance={
+                    k: result[k]
+                    for k in (
+                        "provider",
+                        "model",
+                        "request_hash",
+                        "response_hash",
+                        "received_at",
+                    )
+                    if k in result
+                },
+            )
         accepted = len(set(self.trials) - before)
         return {
             "status": "evaluated" if accepted else "all_proposals_rejected",
@@ -859,6 +952,79 @@ class ResearchCampaign:
             "provider": result["provider"],
             "model": result["model"],
         }
+
+    def _install_text_measurements(self, measurements, label):
+        if measurements:
+            if not self.settings.get("filings_research_enabled"):
+                return {"status": "text_source_disabled"}
+            definitions = [s.model_dump(mode="json") for s in measurements]
+            registry = self.state / (
+                "custom_text_"
+                + canonical_digest(
+                    {
+                        "file": file_sha256(self.settings["filings_path"]),
+                        "specs": definitions,
+                    }
+                )[:24]
+                + ".parquet"
+            )
+            store = FilingResearchStore(
+                self.settings["filings_path"],
+                training_end=self.settings["end"],
+                start=self.settings["start"],
+            )
+            measured = custom_measurements(store, measurements, registry)
+            for name, values in custom_feature_arrays(
+                measured,
+                self.panel.dates,
+                self.panel.securities,
+                measurements,
+            ).items():
+                if name in self.panel.features:
+                    definition = next(
+                        spec.model_dump(mode="json")
+                        for spec in measurements
+                        if spec.name == name
+                    )
+                    if self.custom_feature_specs.get(name) == canonical_digest(
+                        definition
+                    ):
+                        continue
+                    raise ValueError(
+                        "Revised text rules require a new feature name"
+                    )
+                self.panel.metadata.setdefault("feature_coverage", {})[name] = (
+                    float(
+                        np.count_nonzero(np.isfinite(values) & self.panel.mask)
+                        / max(1, self.panel.mask.sum())
+                    )
+                )
+                self.panel.features[name] = (
+                    pd.DataFrame(values)
+                    .where(self.panel.mask)
+                    .rank(axis=1, pct=True)
+                    .to_numpy()
+                    * 2
+                    - 1
+                ).astype(np.float32)
+            for spec in measurements:
+                self.custom_feature_specs[spec.name] = canonical_digest(
+                    spec.model_dump(mode="json")
+                )
+            self.panel.metadata["custom_text_measurements"] = dict(
+                self.custom_feature_specs
+            )
+            self.panel.metadata["available_numeric_research_features"] = sorted(
+                self.panel.features
+            )
+            atomic_write_json(
+                self.output / (label + "_text_measurements.json"),
+                {
+                    "definitions": definitions,
+                    "data_sha256": file_sha256(registry),
+                    "cloud_text_transmission": False,
+                },
+            )
 
     def _construct(self, *, fixed=False):
         decisions, allocation_log = {}, []
@@ -886,7 +1052,8 @@ class ResearchCampaign:
             if formation < 0:
                 continue
             known = np.flatnonzero(
-                self.panel.settlement_dates <= self.panel.dates[formation]
+                unit_return_month_ends(self.panel)
+                <= self.panel.dates[formation]
             )[-self.policy["edge_lookback_months"] :]
             ownership = {
                 p: select_roster(self.trials, p, known, min_months)
@@ -1124,6 +1291,10 @@ class ResearchCampaign:
                 config_path(self.policy["benchmark_fred_path"])
             ),
             "model_configuration": self.config["models"],
+            "recorded_code_proposal_hashes": {
+                str(config_path(path)): file_sha256(config_path(path))
+                for path in self.policy.get("recorded_code_proposals", [])
+            },
             "evidence_configuration": {
                 k: self.config["application"].get(k)
                 for k in (
@@ -1234,6 +1405,13 @@ class ResearchCampaign:
             .to_numpy()
             / 25200
         )
+        self.panel.metadata["feature_coverage"] = {
+            name: float(
+                np.count_nonzero(np.isfinite(values) & self.panel.mask)
+                / max(1, self.panel.mask.sum())
+            )
+            for name, values in self.panel.features.items()
+        }
         for name, values in list(self.panel.features.items()):
             self.panel.features[name] = spill_array(
                 self.output / "feature_arrays" / (name + ".npy"), values
@@ -1242,6 +1420,67 @@ class ResearchCampaign:
         collect_research_memory(self.panel.features.values())
         for strategy in economic_controls():
             self._evaluate(strategy, "economic_control", 0)
+        for proposal_path in self.policy.get("recorded_code_proposals", []):
+            path = config_path(proposal_path)
+            recorded = json.loads(path.read_text())
+            if not all(
+                recorded.get(k)
+                for k in (
+                    "text",
+                    "provider",
+                    "model",
+                    "request_hash",
+                    "response_hash",
+                )
+            ):
+                raise ValueError(
+                    "Recorded code requires an actual model response and provenance"
+                )
+            try:
+                batch = CodeBatch.model_validate_json(recorded["text"])
+            except ValueError as exc:
+                self.attempts.append(
+                    {
+                        "status": "rejected_recorded_schema",
+                        "source_response_sha256": file_sha256(path),
+                        "failure_type": type(exc).__name__,
+                    }
+                )
+                self._save()
+                continue
+            try:
+                self._install_text_measurements(
+                    batch.filing_measurements,
+                    "recorded_" + file_sha256(path)[:12],
+                )
+            except (ValueError, TypeError, KeyError) as exc:
+                self.attempts.append(
+                    {
+                        "status": "rejected_recorded_text_definition",
+                        "source_response_sha256": file_sha256(path),
+                        "failure": str(exc)[:1200],
+                    }
+                )
+                self._save()
+                continue
+            for strategy in batch.strategies:
+                self._evaluate(
+                    strategy,
+                    "recorded_agent_code",
+                    0,
+                    provenance={
+                        k: recorded[k]
+                        for k in (
+                            "provider",
+                            "model",
+                            "request_hash",
+                            "response_hash",
+                            "received_at",
+                        )
+                        if k in recorded
+                    }
+                    | {"source_response_sha256": file_sha256(path)},
+                )
         rounds = []
         for number in range(1, self.policy["max_rounds"] + 1):
             for pod in POD_FEATURES:
@@ -1255,7 +1494,8 @@ class ResearchCampaign:
                 )
                 atomic_write_json(self.output / "rounds.json", rounds)
         known = np.flatnonzero(
-            self.panel.settlement_dates <= pd.Timestamp(self.settings["end"])
+            unit_return_month_ends(self.panel)
+            <= pd.Timestamp(self.settings["end"])
         )
         owned = {
             p: select_roster(
@@ -1404,7 +1644,8 @@ class ResearchCampaign:
         ).to_parquet(self.output / "actual_holdings.parquet", index=False)
         agent_counts = {
             p: sum(
-                t["origin"] == "agent_written_code" and t["strategy"].pod == p
+                t["origin"] in {"agent_written_code", "recorded_agent_code"}
+                and t["strategy"].pod == p
                 for t in self.trials.values()
             )
             for p in POD_FEATURES

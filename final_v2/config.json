@@ -3306,6 +3306,7 @@
       }
     ],
     "max_rss_mib": 1600,
-    "feature_documentation_path": "${project_root}/final_v2/.pod_state/training_through_2020/jkp_factor_details.xlsx"
+    "feature_documentation_path": "${project_root}/final_v2/.pod_state/training_through_2020/jkp_factor_details.xlsx",
+    "cost_sensitivity": true
   }
 }

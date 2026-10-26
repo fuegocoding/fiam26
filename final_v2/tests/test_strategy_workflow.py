@@ -1,17 +1,19 @@
 """Configured research uses actual graph execution and shared service budgets."""
 
 import datetime as dt
-import json
 import hashlib
+import json
 
 import pytest
 
 from pod_platform.application.configuration import load_config
 from pod_platform.application.research_loop import build_fixture_loop
 from pod_platform.application.strategy_workflow import StrategyWorkflow
-from pod_platform.services.app import build_server
 from pod_platform.research.composition import observation_digest
-from tests.test_research_composition import env as composition_env
+from pod_platform.services.app import build_server
+from tests.test_research_composition import env as _composition_env
+
+composition_env = _composition_env
 
 
 def test_root_configuration_runs_composed_research_and_resumes(
@@ -20,7 +22,11 @@ def test_root_configuration_runs_composed_research_and_resumes(
     service, spec, grant, observations = composition_env
     original = build_fixture_loop(tmp_path / "host")
     settings = load_config()
-    settings["application"].update(online_papers=False, paper_queries=[])
+    settings["application"].update(
+        online_papers=False,
+        paper_queries=[],
+        paper_ids=["doi:10.9999/unavailable"],
+    )
     settings["research"].update(
         prepare_inputs=False, desk_evaluation={"enabled": False}
     )
@@ -58,6 +64,13 @@ def test_root_configuration_runs_composed_research_and_resumes(
         settings, providers=original.providers, clock=lambda: at
     )
     result = workflow.run()
+    assert result["literature"] == [
+        {
+            "paper_id": "doi:10.9999/unavailable",
+            "status": "source_unavailable",
+            "error_type": "OfflineError",
+        }
+    ]
     assert result["research"][0]["status"] == "measured"
     assert result["orders"] == 0
     assert (

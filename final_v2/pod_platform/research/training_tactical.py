@@ -122,6 +122,11 @@ def replay_daily(market, schedule, settings, *, keep_holdings=False):
     return {"net": net, "turnover": turnover, "holdings": held}
 
 
+def unit_return_month_ends(panel):
+    """Calendar unit returns are known at month end, unlike interval labels."""
+    return pd.DatetimeIndex(panel.dates[:-1] + pd.offsets.MonthEnd(1))
+
+
 def monthly_net(daily_net, market, panel):
     """Use calendar return months; exclude pre-strategy warmup sessions."""
     series = pd.Series(daily_net, index=market.dates)

@@ -65,6 +65,7 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
         settings["large_cap_borrow_bps"],
         settings["other_borrow_bps"],
         settings.get("execution_spread_multiplier", 1.0),
+        settings.get("spread_proxy_scale", 1.0),
     )
     snapshot_cache = getattr(market, "_execution_snapshot_cache", {})
     market._execution_snapshot_cache = snapshot_cache
@@ -110,7 +111,8 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
             spread,
         )
         base = np.maximum(
-            settings["cost_bps_one_way"] / 10_000, spread
+            settings["cost_bps_one_way"] / 10_000,
+            spread * settings.get("spread_proxy_scale", 1.0),
         ) * settings.get("execution_spread_multiplier", 1.0)
         fee = (
             np.where(

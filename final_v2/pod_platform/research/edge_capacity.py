@@ -5,7 +5,9 @@ from __future__ import annotations
 import numpy as np
 
 
-def measure_edge(market, schedule, settings, *, holdings_path=None):
+def measure_edge(
+    market, schedule, settings, *, holdings_path=None, keep_holdings=True
+):
     """Replay unit weights with spread and borrow, without capital or impact.
 
     This is the zero-size return edge, not the return achievable by a fund.
@@ -22,13 +24,15 @@ def measure_edge(market, schedule, settings, *, holdings_path=None):
     )
     turnover = np.zeros(days)
     hard_caps = np.full(days, np.inf)
-    held = (
-        np.lib.format.open_memmap(
-            holdings_path, mode="w+", dtype=np.float32, shape=(days, names)
+    held = None
+    if keep_holdings:
+        held = (
+            np.lib.format.open_memmap(
+                holdings_path, mode="w+", dtype=np.float32, shape=(days, names)
+            )
+            if holdings_path is not None
+            else np.zeros((days, names), dtype=np.float32)
         )
-        if holdings_path is not None
-        else np.zeros((days, names), dtype=np.float32)
-    )
     context = []
     for frame in market.frames:
         cap = frame.me.fillna(0).to_numpy(dtype=float) * 1_000_000
@@ -42,7 +46,8 @@ def measure_edge(market, schedule, settings, *, holdings_path=None):
                 frame.bidaskhl_21d.fillna(0.01).to_numpy(dtype=float) / 2,
                 0,
                 0.05,
-            ),
+            )
+            * settings.get("spread_proxy_scale", 1.0),
         )
         fee = (
             np.where(
@@ -157,7 +162,8 @@ def measure_edge(market, schedule, settings, *, holdings_path=None):
         turnover[day] = float(trade.sum() + forced_turnover)
         gross[day] = gross_pnl
         borrow_series[day], spread_series[day] = borrow, forced_cost + cost
-        held[day] = gross_weights
+        if held is not None:
+            held[day] = gross_weights
         previous = date
     return {
         "net": net,

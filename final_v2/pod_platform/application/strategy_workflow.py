@@ -438,7 +438,16 @@ class StrategyWorkflow:
                 query_key, "host", "literature", result["literature"][-1]
             )
         for paper_id in self.application["paper_ids"]:
-            self.loop.papers.ingest_full_text(paper_id)
+            try:
+                self.loop.papers.ingest_full_text(paper_id)
+            except PapersError as exc:
+                result["literature"].append(
+                    {
+                        "paper_id": paper_id,
+                        "status": "source_unavailable",
+                        "error_type": type(exc).__name__,
+                    }
+                )
         for request in self.settings["carbon"]["requests"]:
             result["data_requests"].append(
                 self.carbon.request(request["namespace"], request["request"])

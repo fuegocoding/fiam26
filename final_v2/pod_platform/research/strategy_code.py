@@ -51,6 +51,9 @@ FUNCTIONS = {
         "nanmax",
         "prod",
         "nanprod",
+        "nanmedian",
+        "nanpercentile",
+        "nanquantile",
     )
 }
 SAFE_NP = SimpleNamespace(**FUNCTIONS)
@@ -71,7 +74,14 @@ class CodeStrategy(StrictModel):
     expected_holding_days: int = Field(ge=1, le=504)
     weighting: Literal["score", "equal_tail"] = "score"
     hedge_policy: Literal["paired_signal", "liquid_sector"] = "paired_signal"
-    construction: Literal["unscaled", "liquidity_tilt"] = "unscaled"
+    construction: Literal[
+        "unscaled", "liquidity_tilt", "liquidity_borrow_tilt"
+    ] = "unscaled"
+
+    forecast_model: Literal["code", "ridge"] = "code"
+    model_features: list[str] = Field(default_factory=list, max_length=147)
+    model_penalty: float = Field(default=1.0, gt=0, le=100.0)
+    model_lookback_months: int = Field(default=36, ge=12, le=120)
 
     @model_validator(mode="after")
     def explicit_hedge_controls(self):
@@ -94,6 +104,17 @@ class NumericalMethods(ast.NodeTransformer):
     """Translate finite ndarray convenience methods to the same numpy facade."""
 
     methods = {"copy", "mean", "std", "sum", "argsort"}
+
+    def visit_FunctionDef(self, node):
+        node = self.generic_visit(node)
+        if (
+            node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        ):
+            node.body.pop(0)
+        return node
 
     def visit_Call(self, node):
         node = self.generic_visit(node)
@@ -123,8 +144,10 @@ class NumericalMethods(ast.NodeTransformer):
 def compile_strategy(source, feature_names):
     """Validate syntax before compilation; no imports, loops, attributes or IO.
 
-    Mathematical assignments and return expressions are actual agent-written
-    Python. Attributes are permitted exclusively on the finite numpy facade.
+    Numerical assignments, local array masks, finite conditionals and acyclic
+    pure helpers are actual agent-written Python. Attributes are permitted
+    exclusively on the finite numpy facade (array convenience methods lower to
+    the same facade).
     This is a language restriction, not a claim of an OS process sandbox.
     """
     tree = ast.fix_missing_locations(
@@ -155,6 +178,10 @@ def compile_strategy(source, feature_names):
         ast.arguments,
         ast.arg,
         ast.Assign,
+        ast.AugAssign,
+        ast.If,
+        ast.In,
+        ast.NotIn,
         ast.Return,
         ast.Expr,
         ast.Constant,
@@ -191,37 +218,113 @@ def compile_strategy(source, feature_names):
         ast.Or,
         ast.Not,
     )
-    assigned = {"features", "history", "daily", "np"}
-    if len(list(ast.walk(tree))) > 1000:
+    reserved = {"features", "history", "daily", "np"}
+    functions = [
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ]
+    helpers = {node.name for node in functions[1:]}
+    if (
+        len(functions) > 9
+        or len(helpers) != len(functions) - 1
+        or any(
+            name in reserved | {"score"} or name.startswith("_")
+            for name in helpers
+        )
+    ):
+        raise ValueError("Use at most eight distinct pure numerical helpers")
+    assigned = reserved | helpers
+    for helper in functions[1:]:
+        arguments = helper.args
+        if (
+            not 1 <= len(arguments.args) <= 4
+            or arguments.posonlyargs
+            or arguments.kwonlyargs
+            or arguments.vararg
+            or arguments.kwarg
+            or arguments.defaults
+            or helper.decorator_list
+            or helper.returns is not None
+            or any(
+                arg.annotation is not None
+                or arg.arg in reserved | helpers
+                or arg.arg.startswith("_")
+                for arg in arguments.args
+            )
+        ):
+            raise ValueError(
+                "Helpers use 1-4 plain local arguments with no defaults or decorators"
+            )
+        assigned.update(arg.arg for arg in arguments.args)
+    if len(list(ast.walk(tree))) > 1800:
         raise ValueError("Strategy exceeds syntax resource bound")
-    for statement in function.body:
-        if not isinstance(statement, (ast.Assign, ast.Return, ast.Expr)):
-            raise ValueError("Use assignments and a return expression")
-        if isinstance(statement, ast.Assign):
-            if len(statement.targets) != 1:
-                raise ValueError("Assignments must use one explicit target")
-            target = statement.targets[0]
-            if isinstance(target, ast.Subscript):
-                if (
-                    not isinstance(target.value, ast.Name)
-                    or target.value.id not in assigned
-                    or target.value.id in {"features", "history", "daily", "np"}
-                ):
-                    raise ValueError(
-                        "Array assignment is permitted only on local arrays; inputs stay read-only"
-                    )
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AugAssign))
+    ]
+    for statement in assignments:
+        targets = (
+            statement.targets
+            if isinstance(statement, ast.Assign)
+            else [statement.target]
+        )
+        if len(targets) != 1:
+            raise ValueError("Assignments must use one explicit target")
+        target = targets[0]
+        if isinstance(target, ast.Name):
+            if target.id in reserved | helpers or target.id.startswith("_"):
+                raise ValueError(
+                    "Do not overwrite inputs, helpers or numpy namespace"
+                )
+            assigned.add(target.id)
+        elif not isinstance(target, ast.Subscript):
+            raise ValueError(
+                "Assignments create local names or update local arrays"
+            )
+    for statement in assignments:
+        target = (
+            statement.targets[0]
+            if isinstance(statement, ast.Assign)
+            else statement.target
+        )
+        if isinstance(target, ast.Subscript) and (
+            not isinstance(target.value, ast.Name)
+            or target.value.id not in assigned
+            or target.value.id in reserved | helpers
+        ):
+            raise ValueError(
+                "Array assignment is permitted only on local arrays; inputs stay read-only"
+            )
+
+    def own_nodes(node):
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef):
                 continue
-            if not isinstance(target, ast.Name):
-                raise ValueError("Assignments must create local names")
-            name = statement.targets[0].id
-            if name in {
-                "features",
-                "history",
-                "daily",
-                "np",
-            } or name.startswith("_"):
-                raise ValueError("Do not overwrite inputs or numpy namespace")
-            assigned.add(name)
+            yield from own_nodes(child)
+
+    graph = {
+        node.name: {
+            child.func.id
+            for statement in node.body
+            for child in own_nodes(statement)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+        }
+        for node in functions
+    }
+
+    def check_calls(name, stack):
+        if name in stack:
+            raise ValueError("Recursive numerical helpers are forbidden")
+        for called in graph.get(name, ()):
+            if called not in helpers:
+                raise ValueError(
+                    "Only approved numpy functions or pure declared helpers may be called"
+                )
+            check_calls(called, stack | {name})
+
+    for name in graph:
+        check_calls(name, set())
     parents = {
         child: parent
         for parent in ast.walk(tree)
@@ -254,13 +357,22 @@ def compile_strategy(source, feature_names):
         if isinstance(node, ast.Constant):
             if isinstance(node.value, str):
                 parent = parents.get(node)
-                if (
-                    node.value not in feature_names
-                    or not isinstance(parent, ast.Subscript)
-                    or parent.slice is not node
-                    or not isinstance(parent.value, ast.Name)
-                    or parent.value.id not in {"features", "history"}
-                ):
+                key = (
+                    isinstance(parent, ast.Subscript)
+                    and parent.slice is node
+                    and isinstance(parent.value, ast.Name)
+                    and parent.value.id in {"features", "history"}
+                )
+                membership = (
+                    isinstance(parent, ast.Compare)
+                    and parent.left is node
+                    and len(parent.ops) == 1
+                    and isinstance(parent.ops[0], (ast.In, ast.NotIn))
+                    and len(parent.comparators) == 1
+                    and isinstance(parent.comparators[0], ast.Name)
+                    and parent.comparators[0].id in {"features", "history"}
+                )
+                if node.value not in feature_names or not (key or membership):
                     raise ValueError(
                         "Strings are permitted only as registered feature keys"
                     )
@@ -276,8 +388,12 @@ def compile_strategy(source, feature_names):
                     "Only approved numpy functions have attributes"
                 )
         if isinstance(node, ast.Call):
-            if not isinstance(node.func, ast.Attribute):
-                raise ValueError("Only approved numpy functions may be called")
+            if not isinstance(node.func, ast.Attribute) and not (
+                isinstance(node.func, ast.Name) and node.func.id in helpers
+            ):
+                raise ValueError(
+                    "Only approved numpy functions or pure helpers may be called"
+                )
             if any(k.arg is None for k in node.keywords):
                 raise ValueError("Expanded keyword calls are forbidden")
         if isinstance(node, ast.Subscript) and any(
@@ -324,6 +440,40 @@ def required_features(source):
     )
 
 
+def native_review_calendar(strategy, panel, market):
+    """Yield decision timing without computing or inspecting any forecast."""
+    monthly = {
+        int(market.dates.searchsorted(day)): t
+        for t, day in enumerate(panel.execution_dates)
+    }
+    last_update = None
+    for execution in range(1, len(market.dates)):
+        d = execution - 1
+        date = market.dates[d]
+        t = monthly.get(execution, int(market.formation[d]))
+        if t < 0:
+            continue
+        month_close = execution in monthly
+        weekly = (
+            date.isocalendar()[:2] != market.dates[execution].isocalendar()[:2]
+        )
+        due = (
+            strategy.review == "daily"
+            or (strategy.review == "weekly" and weekly)
+            or (strategy.review == "monthly" and month_close)
+        )
+        if not due:
+            continue
+        update = (
+            last_update is None
+            or strategy.review != "monthly"
+            or (t != last_update and t % strategy.signal_update_months == 0)
+        )
+        if update:
+            last_update = t
+        yield execution, t, update
+
+
 def code_signals(strategy, panel, market):
     """Replay code at each review using strictly past data and stable columns."""
     if strategy.entry_rank and strategy.exit_rank >= strategy.entry_rank:
@@ -332,38 +482,12 @@ def code_signals(strategy, panel, market):
     inputs = required_features(strategy.code)
     scores, schedules = {}, {}
     previous = np.zeros(len(panel.securities))
-    cached, last_formation = None, -1
-    monthly = {
-        int(market.dates.searchsorted(day)): t
-        for t, day in enumerate(panel.execution_dates)
-    }
+    cached = None
     with ScoreWorker(function) as worker:
-        for execution in range(1, len(market.dates)):
+        for execution, t, update in native_review_calendar(
+            strategy, panel, market
+        ):
             d = execution - 1
-            date = market.dates[d]
-            t = monthly.get(execution, int(market.formation[d]))
-            if t < 0:
-                continue
-            month_close = execution in monthly
-            weekly = (
-                date.isocalendar()[:2]
-                != market.dates[execution].isocalendar()[:2]
-            )
-            due = (
-                strategy.review == "daily"
-                or (strategy.review == "weekly" and weekly)
-                or (strategy.review == "monthly" and month_close)
-            )
-            if not due:
-                continue
-            update = (
-                cached is None
-                or strategy.review != "monthly"
-                or (
-                    t != last_formation
-                    and t % strategy.signal_update_months == 0
-                )
-            )
             if update:
                 features = {f: panel.features[f][t].copy() for f in inputs}
                 history = {
@@ -378,7 +502,7 @@ def code_signals(strategy, panel, market):
                     raise ValueError(
                         "score must return one finite-or-missing value per security"
                     )
-                cached, last_formation = value.copy(), t
+                cached = value.copy()
             value = cached.copy()
             value[~panel.mask[t]] = np.nan
             ranks = pd.Series(value).rank(pct=True).to_numpy() * 2 - 1

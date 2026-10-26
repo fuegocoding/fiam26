@@ -619,3 +619,29 @@ def test_same_month_benchmark_does_not_inherit_lagged_cash_accrual():
     np.testing.assert_allclose(daily.cash, reference / 25200)
     np.testing.assert_allclose(monthly.cash, [1 / 1200, 3 / 1200])
     assert report["daily"]["annualized_alpha_se"] is not None
+
+
+def test_pure_helpers_and_feature_conditionals_execute_without_io_or_recursion():
+    from pod_platform.research.score_worker import ScoreWorker
+
+    code = "def score(features, history, daily):\n    def winsor(x):\n        lo = np.nanpercentile(x, 5)\n        hi = np.nanpercentile(x, 95)\n        return np.clip(x, lo, hi)\n    value = features['cash_at']\n    if 'cash_at' in history:\n        value = value + np.nanmean(history['cash_at'][-3:], axis=0)\n    return winsor(value)\n"
+    function = compile_strategy(code, {"cash_at"})
+    data = np.array([-1.0, 0.0, 1.0, 2.0])
+    with ScoreWorker(function) as worker:
+        actual = worker.score(
+            {"cash_at": data},
+            {"cash_at": np.array([data, data])},
+            np.zeros((2, 4)),
+        )
+    np.testing.assert_allclose(
+        actual, np.clip(data * 2, *np.nanpercentile(data * 2, [5, 95]))
+    )
+    for body in (
+        "def f(x):\n        return f(x)\n    return f(features['cash_at'])",
+        "def f(x):\n        return g(x)\n    def g(x):\n        return f(x)\n    return f(features['cash_at'])",
+    ):
+        with pytest.raises(ValueError, match="Recursive"):
+            compile_strategy(
+                "def score(features, history, daily):\n    " + body + "\n",
+                {"cash_at"},
+            )
