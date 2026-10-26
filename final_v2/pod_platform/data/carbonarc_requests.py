@@ -403,7 +403,9 @@ class CarbonArcRequests:
             )
         return raw
 
-    def discover_stock(self, namespace, request):
+    def discover_stock(
+        self, namespace, request, *, retry_failed=False, max_attempts=2
+    ):
         """Discover entities and metrics chosen by a pod, charging free-call caps."""
         _namespace(namespace)
         request = CarbonArcSearch.model_validate(request)
@@ -420,16 +422,40 @@ class CarbonArcRequests:
         )
         with open_sqlite(self.path, immediate=True) as conn:
             self._verify(conn)
-            old = conn.execute(
-                "SELECT payload FROM carbon_request_events WHERE key=?",
-                ("result:" + key,),
-            ).fetchone()
-            if old:
-                return json.loads(old[0])
-            charged = conn.execute(
-                "SELECT 1 FROM carbon_request_events WHERE key=?",
-                ("reserve:" + key,),
-            ).fetchone()
+            if not 1 <= max_attempts <= 3:
+                raise ValueError(
+                    "Discovery retry attempts must be bounded to 1-3"
+                )
+            base_key = key
+            for attempt in range(max_attempts):
+                key = (
+                    base_key
+                    if attempt == 0
+                    else "discovery_"
+                    + canonical_digest(
+                        [namespace, request.model_dump(), "retry", attempt]
+                    )[:24]
+                )
+                old = conn.execute(
+                    "SELECT payload FROM carbon_request_events WHERE key=?",
+                    ("result:" + key,),
+                ).fetchone()
+                charged = conn.execute(
+                    "SELECT 1 FROM carbon_request_events WHERE key=?",
+                    ("reserve:" + key,),
+                ).fetchone()
+                if old:
+                    result = json.loads(old[0])
+                    if (
+                        result.get("status") != "failed"
+                        or not retry_failed
+                        or attempt + 1 == max_attempts
+                    ):
+                        return result
+                    continue
+                if charged and retry_failed and attempt + 1 < max_attempts:
+                    continue
+                break
             used = [
                 json.loads(r[0])
                 for r in conn.execute(

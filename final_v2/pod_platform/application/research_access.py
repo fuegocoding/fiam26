@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from ..research.input_permissions import (
     COMPETITION_CHARACTERISTICS,
     FILING_RESEARCH_FEATURES,
@@ -149,6 +151,13 @@ def describe_research_access(config, panel_metadata=None):
             .get("features", [])
         )
         result["remaining_implementation_limits"] = []
+        result["run_health"] = (panel_metadata or {}).get(
+            "campaign_run_health",
+            {"status": "run_in_progress_no_success_claim"},
+        )
+        result["capability_status_scope"] = (
+            "Configured implementation paths; actual successful acquisition and agent execution are reported separately in run_health."
+        )
         result["campaign_connections"] = [
             "evidence discovery -> code proposal -> protected evaluator -> measured feedback -> revised code",
             "all characteristic and dated local filing measurements -> monthly/weekly/daily native reviews",
@@ -183,6 +192,17 @@ def write_access_audit(config, output, panel_metadata=None):
         f"| {row['item']} | {row['detail']} |"
         for row in audit["remaining_implementation_limits"]
     ]
+    if audit.get("campaign_connections"):
+        lines += ["", "Implemented connections:", ""]
+        lines += ["- " + item for item in audit["campaign_connections"]]
+        lines += [
+            "",
+            "Actual run health (implementation availability does not establish successful execution):",
+            "",
+            "```json",
+            json.dumps(audit["run_health"], indent=2),
+            "```",
+        ]
     lines += ["", "The session and competition boundaries remain:", ""]
     lines += [
         "- " + item for item in audit["competition_and_session_boundaries"]

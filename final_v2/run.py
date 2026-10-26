@@ -11,7 +11,10 @@ from pod_platform.application.strategy_workflow import run_configured
 def main():
     """Execute the configured workflow and print its stage results."""
     result = run_configured()
-    if result.get("status") == "integrated_campaign_completed":
+    if result.get("status") in {
+        "integrated_campaign_completed",
+        "research_completed_agent_stage_degraded",
+    }:
         result = {
             k: result[k]
             for k in (

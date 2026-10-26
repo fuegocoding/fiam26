@@ -17,6 +17,10 @@ def measure_edge(market, schedule, settings, *, holdings_path=None):
     net, gross = np.zeros(days), np.zeros(days)
     borrow_series, spread_series = np.zeros(days), np.zeros(days)
     impact_terms = np.zeros(days)
+    long_contribution, short_contribution, trading_drag = (
+        np.zeros(days) for _ in range(3)
+    )
+    turnover = np.zeros(days)
     hard_caps = np.full(days, np.inf)
     held = (
         np.lib.format.open_memmap(
@@ -66,13 +70,20 @@ def measure_edge(market, schedule, settings, *, holdings_path=None):
             valid, gross_weights * (1 + np.nan_to_num(observed)), 0
         ) / (1 + gross_pnl)
         missing = ~valid & (weights != 0)
+        forced_turnover = float(np.abs(weights[missing]).sum())
         forced_cost = float(np.abs(weights[missing]) @ spread[missing])
         borrow = (
             float(np.abs(np.minimum(weights, 0)) @ fee)
             * (date - previous).days
             / 365.25
         )
-        raw_pnl = float(weights[valid] @ observed[valid])
+        long_contribution[day] = float(
+            np.maximum(weights[valid], 0) @ observed[valid]
+        )
+        short_contribution[day] = float(
+            np.minimum(weights[valid], 0) @ observed[valid]
+        )
+        raw_pnl = long_contribution[day] + short_contribution[day]
         pnl = raw_pnl - borrow - forced_cost
         if pnl <= -1:
             raise ValueError("Unit exposure edge replay became insolvent")
@@ -142,6 +153,8 @@ def measure_edge(market, schedule, settings, *, holdings_path=None):
         if limits:
             hard_caps[day] = max(0.0, min(limits))
         net[day] = (1 + pnl) * (1 - cost) - 1
+        trading_drag[day] = forced_cost + cost * (1 + pnl)
+        turnover[day] = float(trade.sum() + forced_turnover)
         gross[day] = gross_pnl
         borrow_series[day], spread_series[day] = borrow, forced_cost + cost
         held[day] = gross_weights
@@ -151,6 +164,10 @@ def measure_edge(market, schedule, settings, *, holdings_path=None):
         "gross": gross,
         "holdings": held,
         "borrow": borrow_series,
+        "long_contribution": long_contribution,
+        "short_contribution": short_contribution,
+        "trading_drag": trading_drag,
+        "turnover_two_way": turnover,
         "spread": spread_series,
         "impact_coefficient_daily": impact_terms,
         "hard_capacity_usd": hard_caps,

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import mmap
+import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -151,12 +155,49 @@ def read_panel(path: Path, settings: dict) -> pd.DataFrame:
     return frame.sort_values(["eom", "permno"])
 
 
+def _file_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def read_daily(path, securities, start, end, cache, *, compact=False):
     """Cache only development prices/returns for the formation-time universe."""
+    identity = {
+        "source": str(Path(path).resolve()),
+        "source_sha256": _file_digest(path),
+        "source_size": Path(path).stat().st_size,
+        "source_mtime_ns": Path(path).stat().st_mtime_ns,
+        "securities": [int(p) for p in securities],
+        "start": pd.Timestamp(start).isoformat(),
+        "end": pd.Timestamp(end).isoformat(),
+        "compact": compact,
+        "version": "dated_security_complete_v2",
+    }
+    signature = hashlib.sha256(
+        json.dumps(identity, sort_keys=True).encode()
+    ).hexdigest()[:20]
+    cache = cache.with_name(cache.stem + "_" + signature + cache.suffix)
     if cache.exists():
+        receipt_path = cache.with_suffix(cache.suffix + ".identity.json")
+        if not receipt_path.exists():
+            raise ValueError("Daily cache has no identity receipt")
+        receipt = json.loads(receipt_path.read_text())
+        if receipt.get("identity") != identity or receipt.get(
+            "data_sha256"
+        ) != _file_digest(cache):
+            raise ValueError("Daily cache identity or content digest changed")
         daily = pd.read_parquet(
             cache, columns=["permno", "date", "prc", "daily_return"]
         )
+        if (
+            daily.date.min() < start
+            or daily.date.max() > end
+            or not set(daily.permno.unique()) <= set(securities)
+        ):
+            raise ValueError("Daily cache violates its requested identity")
         if compact:
             daily = daily.astype(
                 {"permno": "int32", "prc": "float32", "daily_return": "float32"}
@@ -192,6 +233,12 @@ def read_daily(path, securities, start, end, cache, *, compact=False):
         raise ValueError("Duplicate daily security/date observations")
     cache.parent.mkdir(parents=True, exist_ok=True)
     daily.to_parquet(cache, index=False)
+    cache.with_suffix(cache.suffix + ".identity.json").write_text(
+        json.dumps(
+            {"identity": identity, "data_sha256": _file_digest(cache)},
+            sort_keys=True,
+        )
+    )
     return daily
 
 
@@ -293,11 +340,43 @@ def prepare_panel(panel_path, daily_path, settings, cache):
     ]
     mask = np.asarray([g.me.notna().to_numpy() for g in frames])
     features = {}
-    feature_directory = cache.parent / (cache.stem + "_features")
+    feature_identity = {
+        "panel": str(Path(panel_path).resolve()),
+        "panel_sha256": _file_digest(panel_path),
+        "source_size": Path(panel_path).stat().st_size,
+        "source_mtime_ns": Path(panel_path).stat().st_mtime_ns,
+        "securities": [int(p) for p in securities],
+        "dates": [str(d) for d in dates],
+        "mask": hashlib.sha256(mask.tobytes()).hexdigest(),
+        "version": "ranked_compact_v2",
+    }
+    feature_signature = hashlib.sha256(
+        json.dumps(feature_identity, sort_keys=True).encode()
+    ).hexdigest()[:20]
+    feature_directory = cache.parent / (
+        cache.stem + "_" + feature_signature + "_features"
+    )
     if compact:
         feature_directory.mkdir(parents=True, exist_ok=True)
     for name in COMPETITION_CHARACTERISTICS:
         if compact:
+            feature_path = feature_directory / (name + ".npy")
+            feature_receipt = feature_directory / (name + ".sha256")
+            if feature_path.exists() and feature_receipt.exists():
+                if (
+                    _file_digest(feature_path)
+                    != feature_receipt.read_text().strip()
+                ):
+                    raise ValueError(
+                        "Ranked feature cache content digest changed"
+                    )
+                stored = np.load(feature_path, mmap_mode="r")
+                if stored.shape != mask.shape or stored.dtype != np.dtype(
+                    "float32"
+                ):
+                    raise ValueError("Ranked feature cache shape changed")
+                features[name] = stored
+                continue
             observation = pd.read_parquet(
                 panel_path,
                 columns=["permno", "eom", name],
@@ -321,8 +400,11 @@ def prepare_panel(panel_path, daily_path, settings, cache):
                 * 2
                 - 1
             ).astype(np.float32)
+            temporary = feature_directory / (
+                name + "." + uuid.uuid4().hex + ".tmp.npy"
+            )
             destination = np.lib.format.open_memmap(
-                feature_directory / (name + ".npy"),
+                temporary,
                 mode="w+",
                 dtype=np.float32,
                 shape=ranked.shape,
@@ -331,7 +413,10 @@ def prepare_panel(panel_path, daily_path, settings, cache):
             destination.flush()
             if hasattr(destination._mmap, "madvise"):
                 destination._mmap.madvise(mmap.MADV_DONTNEED)
-            features[name] = destination
+            del destination
+            os.replace(temporary, feature_path)
+            feature_receipt.write_text(_file_digest(feature_path))
+            features[name] = np.load(feature_path, mmap_mode="r")
             del observation, values, ranked
         else:
             # Rank before any arithmetic; missing alpha is neutral, never an outcome.

@@ -15,6 +15,7 @@ def regression(y, x):
             "alpha": None,
             "beta": None,
             "beta_se": None,
+            "alpha_se": None,
             "regression_observations": len(y),
         }
     design = np.column_stack([np.ones(len(x)), x])
@@ -33,6 +34,7 @@ def regression(y, x):
         "alpha": float(coefficient[0]),
         "beta": float(coefficient[1]),
         "beta_se": float(np.sqrt(max(0, covariance[1, 1]))),
+        "alpha_se": float(np.sqrt(max(0, covariance[0, 0]))),
         "regression_observations": len(y),
     }
 
@@ -66,6 +68,9 @@ def frequency_metrics(returns, cash, market, annual):
         "annualized_alpha": reg.pop("alpha") * annual
         if reg["alpha"] is not None
         else None,
+        "annualized_alpha_se": reg.pop("alpha_se") * annual
+        if reg["alpha_se"] is not None
+        else None,
         **reg,
     }
 
@@ -83,13 +88,18 @@ def competition_report(
     aligned = benchmark.reindex(dates)
     if aligned["tb3ms"].isna().any():
         raise ValueError("Official benchmark coverage is incomplete")
-    book["cash"] = aligned.tb3ms / 25200
+    reference = (
+        aligned.reference_tb3ms
+        if "reference_tb3ms" in aligned
+        else aligned.tb3ms
+    )
+    book["cash"] = reference / 25200
     book["market"] = aligned.sp_return
     # Net trading book is excess P&L on the NAV; the full NAV earns cash.
     book["total"] = book.net if returns_include_cash else book.net + book.cash
     monthly = (1 + book[["total", "market"]]).resample("ME").prod() - 1
     # Challenge monthly convention: annual rate in percent divided by 1200.
-    monthly["cash"] = aligned.tb3ms.resample("ME").last() / 1200
+    monthly["cash"] = reference.resample("ME").last() / 1200
     incomplete = book.market.isna().resample("ME").max()
     monthly.loc[incomplete, "market"] = np.nan
     wealth = (1 + book.total).cumprod()
@@ -116,7 +126,12 @@ def competition_report(
         "cash_treatment": "cash interest is posted inside daily execution NAV"
         if returns_include_cash
         else "reporting adds daily risk-free to an excess trading-return book",
-        "benchmark": "TB3MS + 4 percent annually",
+        "benchmark": "Same-return-month TB3MS + 4 percent annually, per challenge section 9.2",
+        "cash_accrual_proxy": "Previous-month observable TB3MS; separate from the same-month reporting hurdle",
+        "regression_standard_errors": "HC1 heteroskedasticity-robust standard errors for both alpha and beta",
+        "cumulative_active_return": float(
+            ((1 + book.total).prod() / (1 + book.cash + 0.04 / 252).prod()) - 1
+        ),
         "sp500_coverage_sessions": int(book.market.notna().sum()),
         "sp500_missing_sessions": int(book.market.isna().sum()),
         "regression_policy": "Use only observed official S&P returns; other performance statistics retain every session",

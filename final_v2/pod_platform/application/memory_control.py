@@ -86,6 +86,14 @@ def memory_sample():
         for line in meminfo.read_text().splitlines():
             if line.startswith("MemAvailable:"):
                 result["system_available_kib"] = int(line.split()[1])
+    current_path = Path("/sys/fs/cgroup/memory.current")
+    limit_path = Path("/sys/fs/cgroup/memory.max")
+    if current_path.exists() and limit_path.exists():
+        limit = limit_path.read_text().strip()
+        if limit.isdigit():
+            result["cgroup_available_kib"] = (
+                max(0, int(limit) - int(current_path.read_text())) // 1024
+            )
     return result
 
 
@@ -108,7 +116,13 @@ def memory_watchdog(max_rss_mib=1600, minimum_available_mib=800):
         while not stopped.wait(0.5):
             sample = memory_sample()
             resident = sample.get("VmRSS_kib", 0) / 1024
-            available = sample.get("system_available_kib", 1e12) / 1024
+            available = (
+                min(
+                    sample.get("system_available_kib", 1e12),
+                    sample.get("cgroup_available_kib", 1e12),
+                )
+                / 1024
+            )
             if resident > max_rss_mib or available < minimum_available_mib:
                 print(
                     f"Memory guard stopping research worker: RSS {resident:.0f} MiB, available {available:.0f} MiB",

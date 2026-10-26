@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from pod_platform.application.memory_control import (
     memory_watchdog,
     research_job_lock,
 )
+from pod_platform.research.campaign_metrics import competition_report
+from pod_platform.research.sleeve_execution import RecordedInstruction
 from pod_platform.research.training_data import prepare_panel
 from pod_platform.research.training_tactical import daily_market, replay_daily
 
@@ -38,6 +41,21 @@ def verify(report_path):
             != experiment["filings_sha256"]
         ):
             raise ValueError("Saved filing corpus hash changed")
+    if experiment.get("benchmark_reporting_sha256") != file_sha256(
+        config_path(config["research_campaign"]["benchmark_fred_path"])
+    ):
+        raise ValueError("Benchmark reporting input hash changed")
+    if experiment.get("evidence_sha256") != file_sha256(
+        output / "evidence.json"
+    ):
+        raise ValueError("Research evidence hash changed")
+    source_root = output / "source_snapshot" / "pod_platform"
+    snapshot_digest = hashlib.sha256()
+    for source in sorted(source_root.rglob("*.py")):
+        snapshot_digest.update(str(source.relative_to(source_root)).encode())
+        snapshot_digest.update(source.read_bytes())
+    if snapshot_digest.hexdigest() != experiment["source_sha256"]:
+        raise ValueError("Saved source snapshot hash changed")
     panel = prepare_panel(
         config_path(settings["panel_path"]),
         config_path(settings["daily_path"]),
@@ -46,6 +64,7 @@ def verify(report_path):
         / (experiment["daily_sha256"][:16] + "_campaign_daily.parquet"),
     )
     market = daily_market(panel, settings)
+    panel.daily = None
     active = market.dates >= panel.execution_dates[0]
     benchmark = load_reporting_benchmarks(
         config_path(config["research_campaign"]["benchmark_fred_path"]),
@@ -63,14 +82,36 @@ def verify(report_path):
     }
     index = {int(p): i for i, p in enumerate(panel.securities)}
     targets = pd.read_parquet(output / "execution_targets.parquet")
+    if targets.duplicated(["execution_date", "permno"]).any():
+        raise ValueError("Duplicate saved execution target")
+    if len(dates) != len(set(dates)):
+        raise ValueError("Duplicate execution date")
     for date, group in targets.groupby("execution_date"):
         day = int(market.dates.get_loc(date))
         for row in group.itertuples():
             schedule[day][index[int(row.permno)]] = row.target_weight
+    if (output / "execution_renewals.parquet").exists():
+        masks = {day: np.zeros(len(panel.securities), bool) for day in schedule}
+        renewal_rows = pd.read_parquet(output / "execution_renewals.parquet")
+        if renewal_rows.duplicated(["execution_date", "permno"]).any():
+            raise ValueError("Duplicate saved order renewal")
+        for date, group in renewal_rows.groupby("execution_date"):
+            day = market.dates.get_loc(date)
+            masks[day][[index[int(p)] for p in group.permno]] = True
+        schedule = {
+            day: RecordedInstruction(target, masks[day])
+            for day, target in schedule.items()
+        }
     replay = replay_daily(
         market,
         schedule,
-        {**settings, "execution_start_nav": settings["fund_capital_usd"]},
+        {
+            **settings,
+            "execution_start_nav": settings["fund_capital_usd"],
+            "holdings_storage_path": str(
+                output / "verified_actual_holdings.npy"
+            ),
+        },
         keep_holdings=True,
     )
     saved = pd.read_csv(
@@ -84,6 +125,63 @@ def verify(report_path):
     if difference > 1e-10:
         raise ValueError("Daily net return replay failed")
     holdings = pd.read_parquet(output / "actual_holdings.parquet")
+    if holdings.duplicated(["date", "permno"]).any():
+        raise ValueError("Duplicate saved holding")
+    for component, values in replay["attribution"].items():
+        np.testing.assert_allclose(saved[component], values[active], atol=1e-12)
+    components = (
+        saved.long_return
+        + saved.short_return
+        + saved.cash_return
+        - saved.trading_cost_return
+        - saved.borrow_cost_return
+    )
+    np.testing.assert_allclose(components, saved.net, atol=1e-12)
+    metrics, _, _ = competition_report(
+        market.dates[active],
+        replay["net"][active],
+        benchmark,
+        turnover=replay["turnover"][active],
+        returns_include_cash=True,
+    )
+    for frequency in ("daily", "monthly"):
+        for metric, value in metrics[frequency].items():
+            recorded = report["fund"][frequency][metric]
+            if value is None:
+                if recorded is not None:
+                    raise ValueError(
+                        "Undefined performance metric was fabricated"
+                    )
+            else:
+                np.testing.assert_allclose(
+                    value, recorded, rtol=1e-8, atol=1e-10
+                )
+    actual = replay["holdings"][active]
+    counts = (np.abs(actual) > 1e-10).sum(axis=1)
+    constraints = {
+        "minimum_position_failures": int(
+            (counts < settings["min_positions"]).sum()
+        ),
+        "maximum_position_failures": int(
+            (counts > settings["universe_size"]).sum()
+        ),
+        "maximum_gross": float(np.abs(actual).sum(axis=1).max()),
+        "maximum_absolute_net": float(np.abs(actual.sum(axis=1)).max()),
+        "maximum_absolute_name": float(np.abs(actual).max()),
+    }
+    for key, value in constraints.items():
+        np.testing.assert_allclose(value, report["constraints"][key], atol=1e-6)
+    constraints_pass = (
+        constraints["minimum_position_failures"] == 0
+        and constraints["maximum_position_failures"] == 0
+        and constraints["maximum_gross"] <= 2 + 1e-5
+        and constraints["maximum_absolute_net"] <= 0.5 + 1e-5
+        and constraints["maximum_absolute_name"] <= 0.05 + 1e-5
+    )
+    if constraints_pass != report["constraints_pass"]:
+        raise ValueError(
+            "Reported constraint admission disagrees with actual holdings"
+        )
     for date, group in holdings.groupby("date"):
         day = market.dates.get_loc(date)
         columns = [index[int(p)] for p in group.permno]
@@ -93,6 +191,35 @@ def verify(report_path):
     total_saved = int((np.abs(replay["holdings"][active]) > 1e-10).sum())
     if total_saved != len(holdings):
         raise ValueError("Saved holdings omit or add positions")
+    # Reconstruct short increases in actual dollars; drift alone is not a new
+    # borrow. Formation cap is checked independently of the engine's counters.
+    full_nav = settings["fund_capital_usd"] * np.cumprod(1 + replay["net"])
+    previous_dollars = np.zeros(len(panel.securities))
+    ineligible_short_increases = 0
+    for day in range(len(market.dates)):
+        raw = market.returns[day]
+        valid = np.isfinite(raw) & (raw >= -1)
+        marked = np.where(valid, previous_dollars * (1 + np.nan_to_num(raw)), 0)
+        current = replay["holdings"][day] * full_nav[day]
+        rounding = (
+            np.finfo(np.float32).eps
+            * 8
+            * np.maximum(np.maximum(np.abs(current), np.abs(marked)), 1.0)
+        )
+        increased = np.maximum(-current, 0) - np.maximum(
+            -marked, 0
+        ) > np.maximum(1.0, rounding)
+        formation = int(market.formation[day])
+        if formation >= 0:
+            caps = panel.frames[formation].me.fillna(0).to_numpy(float) * 1e6
+            ineligible_short_increases += int(
+                np.count_nonzero(increased & (caps < 500e6))
+            )
+        previous_dollars = current
+    if ineligible_short_increases:
+        raise ValueError(
+            "Actual short increases violate the formation market-cap floor"
+        )
     allocations = json.loads((output / "capital_allocations.json").read_text())
     for row in allocations:
         if pd.Timestamp(row["decision_asof"]) >= pd.Timestamp(
@@ -104,9 +231,20 @@ def verify(report_path):
         if sum(r["capital_usd"] for r in row["funded"]) > row["nav_usd"] + 1:
             raise ValueError("Capital exceeds fund NAV")
         if any(
-            r["capital_usd"] > r["hard_capacity_usd"] + 1 for r in row["funded"]
+            r["capital_usd"] < 0
+            or r["capital_usd"] > r["hard_capacity_usd"] + 1
+            for r in row["funded"]
         ):
             raise ValueError("Capital exceeds measured capacity")
+        by_pod = {}
+        for funded in row["funded"]:
+            pod = funded["strategy_id"].split(":", 1)[0]
+            by_pod[pod] = by_pod.get(pod, 0) + funded["capital_usd"]
+        if any(
+            amount > row["nav_usd"] * settings["max_pod_capital"] + 1
+            for amount in by_pod.values()
+        ):
+            raise ValueError("Funded capital exceeds a pod budget")
     books = json.loads((output / "pod_books.json").read_text())
     if set(books) != {"fundamentals", "events", "valuation", "dynamics"} or any(
         not 1 <= len(rows) <= 3 for rows in books.values()
@@ -128,7 +266,12 @@ def verify(report_path):
         "pod_rosters_valid": True,
         "allocation_timing_and_capacity_valid": True,
         "final_nav_usd": float(expected_nav),
-        "competition_constraints_pass": report["constraints_pass"],
+        "competition_constraints_pass": bool(constraints_pass),
+        "recomputed_constraints": constraints,
+        "benchmark_source_evidence_hashes_verified": True,
+        "headline_metrics_recomputed": True,
+        "ineligible_actual_short_increases": ineligible_short_increases,
+        "attribution_reconciled": True,
         "profitable_strategy_admission": False,
         "scope": "Independent artifact reload and static replay; this does not independently validate source vintage, borrow proxies or future alpha",
     }

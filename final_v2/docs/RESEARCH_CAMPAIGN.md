@@ -20,3 +20,20 @@ Artifacts live under the configured private state directory. `latest_campaign.js
 Headline reporting separates arithmetic annualized return from CAGR, Sharpe against cash from information ratio against TB3MS+4%, and monthly from daily statistics. S&P excess-return regressions report observed coverage and standard errors; missing licensed history is not fabricated. The explicitly configured FRED container is projected and filtered to reporting series only. Other legacy external rows are never alpha inputs.
 
 A completed run means the connected experiment executed. Financial admission is a separate conclusion: constraints, costs, stability, data provenance, attempt multiplicity and untouched evaluation must support it. Nonempty research rosters and a successful replay do not certify alpha. Borrow inventory and fees remain disclosed proxies until actual historical quotes are supplied.
+
+## Audit remediation and current experiment discipline
+
+The independent engineering and institutional-PM reviews led to these changes:
+
+- Carry observed signal membership through sign-preserving construction. Missing signals never become implicit shorts. An optional liquid sector hedge is explicitly a separate construction choice; it does not certify beta neutrality.
+- Measure every deployable concentration using the constructor and native retention that actually trade. These execution-to-execution labels differ from calendar-month reporting; an exact daily-replay regression checks the distinction. Whole-universe rank-IC curves remain forecast diagnostics.
+- Keep each sleeve's actual dollar positions and pending intent. An unfunded daily idea cannot refresh a monthly book, including when they share the same stocks. Expired entries cannot resume through another sleeve's order.
+- Allocate continuously using aggregate incremental stock orders, shared borrow/liquidity limits, and prior return covariance. Report expected net trading dollars and the TB3MS+4% hurdle separately. Compression to the fund's holding ceiling is an explicit overlay whose results must be assessed in the actual final ledger.
+- Run numerical strategies in a fresh subprocess with hard address-space, CPU and packet limits. Inputs are read-only; local array computations and masked assignments are permitted. There is no inherited provider client or credential context.
+- Key daily/feature caches by exact source digest, universe, dates and representation. Validate content hashes, create unique run directories, and retain evidence/model identities. Cache successes for reproducibility; bounded failed-discovery retries retain their charges and history.
+- Publish actual acquisition and agent-stage health separately from implemented capability availability. A run with rejected model proposals is explicitly degraded.
+- Record long, short/hedge, cash, trading and borrow contributions. The independent verifier checks each component against replay, recomputes headline metrics and constraints, and rejects duplicate holdings, altered sources/evidence or exceeded pod budgets.
+
+Live model feedback contains feature definitions, mandates, public paper excerpts and aggregate development metrics. Existing strategy source code, failed-generation source excerpts, raw filing text, stock-level rows and credentials are excluded from outgoing feedback. The original four-call test remains complete; later calls use the user's separately expanded persistent budget without resetting its history.
+
+Data-heavy jobs are serialized. The loader streams characteristics, retained arrays use disk backing, and a worker guard stops excessive resident memory or low host/cgroup headroom. No test or successful replay establishes profitable alpha by itself.

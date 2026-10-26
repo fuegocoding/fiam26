@@ -12,12 +12,13 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ..contracts.base import StrictModel
 from .filing_text import FilingMeasurement
+from .forecast_construction import construct_target
 from .pod_plans import construction_designs
-from .training_search import make_weights
+from .score_worker import ScoreWorker
 from .training_tactical import threshold_positions
 
 FUNCTIONS = {
@@ -32,6 +33,8 @@ FUNCTIONS = {
         "clip",
         "where",
         "isfinite",
+        "isnan",
+        "nan",
         "nan_to_num",
         "nanmean",
         "nanstd",
@@ -42,6 +45,12 @@ FUNCTIONS = {
         "diff",
         "tanh",
         "exp",
+        "copy",
+        "argsort",
+        "nanmin",
+        "nanmax",
+        "prod",
+        "nanprod",
     )
 }
 SAFE_NP = SimpleNamespace(**FUNCTIONS)
@@ -60,6 +69,17 @@ class CodeStrategy(StrictModel):
     entry_rank: float = Field(default=0, ge=0, le=0.95)
     exit_rank: float = Field(default=0, ge=0, le=0.9)
     expected_holding_days: int = Field(ge=1, le=504)
+    weighting: Literal["score", "equal_tail"] = "score"
+    hedge_policy: Literal["paired_signal", "liquid_sector"] = "paired_signal"
+    construction: Literal["unscaled", "liquidity_tilt"] = "unscaled"
+
+    @model_validator(mode="after")
+    def explicit_hedge_controls(self):
+        if self.hedge_policy == "liquid_sector" and self.controls != "sector":
+            raise ValueError(
+                "liquid_sector hedge implements sector/dollar matching; choose controls=sector and report residual beta"
+            )
+        return self
 
 
 class CodeBatch(StrictModel):
@@ -70,6 +90,36 @@ class CodeBatch(StrictModel):
     )
 
 
+class NumericalMethods(ast.NodeTransformer):
+    """Translate finite ndarray convenience methods to the same numpy facade."""
+
+    methods = {"copy", "mean", "std", "sum", "argsort"}
+
+    def visit_Call(self, node):
+        node = self.generic_visit(node)
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in self.methods
+            and not (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "np"
+            )
+        ):
+            return ast.copy_location(
+                ast.Call(
+                    func=ast.Attribute(
+                        value=ast.Name(id="np", ctx=ast.Load()),
+                        attr=node.func.attr,
+                        ctx=ast.Load(),
+                    ),
+                    args=[node.func.value, *node.args],
+                    keywords=node.keywords,
+                ),
+                node,
+            )
+        return node
+
+
 def compile_strategy(source, feature_names):
     """Validate syntax before compilation; no imports, loops, attributes or IO.
 
@@ -77,7 +127,9 @@ def compile_strategy(source, feature_names):
     Python. Attributes are permitted exclusively on the finite numpy facade.
     This is a language restriction, not a claim of an OS process sandbox.
     """
-    tree = ast.parse(source)
+    tree = ast.fix_missing_locations(
+        NumericalMethods().visit(ast.parse(source))
+    )
     if len(tree.body) != 1 or not isinstance(tree.body[0], ast.FunctionDef):
         raise ValueError("Supply only def score(features, history, daily)")
     function = tree.body[0]
@@ -117,7 +169,6 @@ def compile_strategy(source, feature_names):
         ast.Subscript,
         ast.Slice,
         ast.Tuple,
-        ast.List,
         ast.Call,
         ast.keyword,
         ast.Attribute,
@@ -147,14 +198,35 @@ def compile_strategy(source, feature_names):
         if not isinstance(statement, (ast.Assign, ast.Return, ast.Expr)):
             raise ValueError("Use assignments and a return expression")
         if isinstance(statement, ast.Assign):
-            if len(statement.targets) != 1 or not isinstance(
-                statement.targets[0], ast.Name
-            ):
+            if len(statement.targets) != 1:
+                raise ValueError("Assignments must use one explicit target")
+            target = statement.targets[0]
+            if isinstance(target, ast.Subscript):
+                if (
+                    not isinstance(target.value, ast.Name)
+                    or target.value.id not in assigned
+                    or target.value.id in {"features", "history", "daily", "np"}
+                ):
+                    raise ValueError(
+                        "Array assignment is permitted only on local arrays; inputs stay read-only"
+                    )
+                continue
+            if not isinstance(target, ast.Name):
                 raise ValueError("Assignments must create local names")
             name = statement.targets[0].id
-            if name in assigned or name.startswith("_"):
-                raise ValueError("Do not overwrite inputs or existing locals")
+            if name in {
+                "features",
+                "history",
+                "daily",
+                "np",
+            } or name.startswith("_"):
+                raise ValueError("Do not overwrite inputs or numpy namespace")
             assigned.add(name)
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
     for node in ast.walk(tree):
         if not isinstance(node, allowed):
             raise ValueError(
@@ -162,9 +234,36 @@ def compile_strategy(source, feature_names):
             )
         if isinstance(node, ast.Name) and node.id not in assigned:
             raise ValueError(f"Unknown strategy name: {node.id}")
+        if isinstance(node, ast.Tuple):
+            parent = parents.get(node)
+            in_slice = (
+                isinstance(parent, ast.Subscript) and parent.slice is node
+            )
+            in_axis = (
+                isinstance(parent, ast.keyword)
+                and parent.arg == "axis"
+                and all(
+                    isinstance(x, ast.Constant) and isinstance(x.value, int)
+                    for x in node.elts
+                )
+            )
+            if not in_slice and not in_axis:
+                raise ValueError(
+                    "Tuples are permitted only for slices or reduction axes"
+                )
         if isinstance(node, ast.Constant):
-            if isinstance(node.value, str) and node.value not in feature_names:
-                raise ValueError(f"Unknown research feature: {node.value}")
+            if isinstance(node.value, str):
+                parent = parents.get(node)
+                if (
+                    node.value not in feature_names
+                    or not isinstance(parent, ast.Subscript)
+                    or parent.slice is not node
+                    or not isinstance(parent.value, ast.Name)
+                    or parent.value.id not in {"features", "history"}
+                ):
+                    raise ValueError(
+                        "Strings are permitted only as registered feature keys"
+                    )
             if isinstance(node.value, (float, int)) and abs(node.value) > 10000:
                 raise ValueError("Excessive numeric literal")
         if isinstance(node, ast.Attribute):
@@ -206,6 +305,8 @@ def compile_strategy(source, feature_names):
         {"__builtins__": {}, "np": SAFE_NP},
         namespace,
     )
+    namespace["score"]._strategy_source = source
+    namespace["score"]._strategy_feature_names = tuple(feature_names)
     return namespace["score"]
 
 
@@ -236,67 +337,73 @@ def code_signals(strategy, panel, market):
         int(market.dates.searchsorted(day)): t
         for t, day in enumerate(panel.execution_dates)
     }
-    for execution in range(1, len(market.dates)):
-        d = execution - 1
-        date = market.dates[d]
-        t = monthly.get(execution, int(market.formation[d]))
-        if t < 0:
-            continue
-        month_close = execution in monthly
-        weekly = (
-            date.isocalendar()[:2] != market.dates[execution].isocalendar()[:2]
-        )
-        due = (
-            strategy.review == "daily"
-            or (strategy.review == "weekly" and weekly)
-            or (strategy.review == "monthly" and month_close)
-        )
-        if not due:
-            continue
-        update = (
-            cached is None
-            or strategy.review != "monthly"
-            or (t != last_formation and t % strategy.signal_update_months == 0)
-        )
-        if update:
-            features = {f: panel.features[f][t].copy() for f in inputs}
-            history = {
-                f: panel.features[f][max(0, t - 11) : t + 1].copy()
-                for f in inputs
-            }
-            trailing = market.returns[max(0, d - 251) : d + 1].view()
-            for array in [*features.values(), *history.values(), trailing]:
-                array.setflags(write=False)
-            with np.errstate(all="ignore"):
-                value = np.asarray(
-                    function(features, history, trailing), dtype=float
-                )
-            if value.shape != previous.shape or np.isinf(value).any():
-                raise ValueError(
-                    "score must return one finite-or-missing value per security"
-                )
-            cached, last_formation = value.copy(), t
-        value = cached.copy()
-        value[~panel.mask[t]] = np.nan
-        ranks = pd.Series(value).rank(pct=True).to_numpy() * 2 - 1
-        if strategy.entry_rank:
-            previous = threshold_positions(
-                ranks, previous, strategy.entry_rank, strategy.exit_rank
+    with ScoreWorker(function) as worker:
+        for execution in range(1, len(market.dates)):
+            d = execution - 1
+            date = market.dates[d]
+            t = monthly.get(execution, int(market.formation[d]))
+            if t < 0:
+                continue
+            month_close = execution in monthly
+            weekly = (
+                date.isocalendar()[:2]
+                != market.dates[execution].isocalendar()[:2]
             )
-            value = np.where(previous == 0, 0, ranks)
-        scores[t] = value
-        if update or strategy.review != "monthly" or strategy.entry_rank:
-            schedules[execution] = (t, value)
+            due = (
+                strategy.review == "daily"
+                or (strategy.review == "weekly" and weekly)
+                or (strategy.review == "monthly" and month_close)
+            )
+            if not due:
+                continue
+            update = (
+                cached is None
+                or strategy.review != "monthly"
+                or (
+                    t != last_formation
+                    and t % strategy.signal_update_months == 0
+                )
+            )
+            if update:
+                features = {f: panel.features[f][t].copy() for f in inputs}
+                history = {
+                    f: panel.features[f][max(0, t - 11) : t + 1].copy()
+                    for f in inputs
+                }
+                trailing = market.returns[max(0, d - 251) : d + 1].view()
+                for array in [*features.values(), *history.values(), trailing]:
+                    array.setflags(write=False)
+                value = worker.score(features, history, trailing)
+                if value.shape != previous.shape or np.isinf(value).any():
+                    raise ValueError(
+                        "score must return one finite-or-missing value per security"
+                    )
+                cached, last_formation = value.copy(), t
+            value = cached.copy()
+            value[~panel.mask[t]] = np.nan
+            ranks = pd.Series(value).rank(pct=True).to_numpy() * 2 - 1
+            if strategy.entry_rank:
+                previous = threshold_positions(
+                    ranks, previous, strategy.entry_rank, strategy.exit_rank
+                )
+                value = np.where(previous == 0, 0, ranks)
+            scores[t] = value
+            if update or strategy.review != "monthly" or strategy.entry_rank:
+                schedules[execution] = (t, value)
     return scores, schedules
 
 
 def unit_schedule(strategy, decisions, panel, settings, name_limit):
+    """Use the identical supported constructor for every native review."""
     designs = construction_designs(panel, strategy.controls)
-    schedule = {}
-    for day, (formation, score) in decisions.items():
-        schedule[day] = make_weights(
-            score[None, :],
-            [designs[formation]],
-            {**settings, "universe_size": name_limit},
-        )[0]
-    return schedule
+    return {
+        day: construct_target(
+            strategy,
+            score,
+            designs[formation],
+            panel.frames[formation],
+            settings,
+            name_limit,
+        )
+        for day, (formation, score) in decisions.items()
+    }

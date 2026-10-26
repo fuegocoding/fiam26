@@ -15,6 +15,16 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
     """
     days, names = market.returns.shape
     weights, desired = np.zeros(names), np.zeros(names)
+    position_age = np.zeros(names)
+    closed_dollar_days = closed_dollars = 0.0
+    (
+        long_pnl_series,
+        short_pnl_series,
+        cash_series,
+        fees_series,
+        borrow_series,
+    ) = (np.zeros(days) for _ in range(5))
+    observer = settings.get("execution_observer")
     net, turnover = np.zeros(days), np.zeros(days)
     costs, borrow_costs, pending = (
         np.zeros(days),
@@ -39,6 +49,7 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
             else np.zeros((days, names), dtype=np.float32)
         )
     recorded_targets = {} if keep_holdings else None
+    recorded_renewals = {} if keep_holdings else None
     nav = float(
         settings.get("execution_start_nav", settings["strategy_capital_usd"])
     )
@@ -46,13 +57,14 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
     active_from = min(schedule) if schedule else days
     largest_name = np.zeros(days)
     transaction_dollars = borrow_dollars = cash_income_dollars = 0.0
-    last_order = -10_000
+    last_order = np.full(names, -10_000, dtype=int)
     maximum_participation, expired_orders, rejected_shorts = 0.0, 0, 0
     snapshot_key = (
         settings["cost_bps_one_way"],
         settings["large_cap_borrow_threshold_usd"],
         settings["large_cap_borrow_bps"],
         settings["other_borrow_bps"],
+        settings.get("execution_spread_multiplier", 1.0),
     )
     snapshot_cache = getattr(market, "_execution_snapshot_cache", {})
     market._execution_snapshot_cache = snapshot_cache
@@ -97,7 +109,9 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
             sigma,
             spread,
         )
-        base = np.maximum(settings["cost_bps_one_way"] / 10_000, spread)
+        base = np.maximum(
+            settings["cost_bps_one_way"] / 10_000, spread
+        ) * settings.get("execution_spread_multiplier", 1.0)
         fee = (
             np.where(
                 cap >= settings["large_cap_borrow_threshold_usd"],
@@ -128,6 +142,7 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
         exit_turnover = float(np.abs(weights[exits]).sum())
         exit_fee = float(np.abs(weights[exits]) @ base[exits])
         elapsed = (date - previous_date).days
+        position_age += elapsed
         borrow = float(np.abs(np.minimum(weights, 0)) @ fee) * elapsed / 365.25
         borrow_dollars += borrow * nav
         transaction_dollars += exit_fee * nav
@@ -138,9 +153,20 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
             else 0.0
         )
         cash_income_dollars += cash_return * nav
-        pnl = (
-            float(weights[valid] @ raw[valid]) + cash_return - borrow - exit_fee
+        long_pnl = float(np.maximum(weights[valid], 0) @ raw[valid])
+        short_pnl = float(np.minimum(weights[valid], 0) @ raw[valid])
+        (
+            long_pnl_series[d],
+            short_pnl_series[d],
+            cash_series[d],
+            borrow_series[d],
+        ) = long_pnl, short_pnl, cash_return, borrow
+        closed_dollar_days += (
+            float(np.abs(weights[exits]) @ position_age[exits]) * nav
         )
+        closed_dollars += float(np.abs(weights[exits]).sum()) * nav
+        position_age[exits] = 0
+        pnl = long_pnl + short_pnl + cash_return - borrow - exit_fee
         if pnl <= -1:
             raise ValueError("Capacity replay became insolvent")
         carried = np.where(valid, weights * (1 + np.nan_to_num(raw)), 0) / (
@@ -153,12 +179,22 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
             1 + pnl
         )
         nav *= 1 + pnl
-        if d in schedule:
-            desired = np.asarray(decision, dtype=float).copy()
-            if adaptive:
+        if observer is not None:
+            observer.mark(d, raw, valid, nav, carried)
+        if d in schedule and decision is not None:
+            composed = hasattr(decision, "resolve")
+            desired = np.asarray(
+                decision.resolve(nav) if composed else decision, dtype=float
+            ).copy()
+            if adaptive and not composed:
                 desired *= decision_nav / nav
             if recorded_targets is not None:
                 recorded_targets[d] = desired.copy()
+                recorded_renewals[d] = (
+                    decision.updated_mask.copy()
+                    if composed
+                    else np.ones(names, dtype=bool)
+                )
             desired *= settings.get("execution_gross_buffer", 0.98)
             desired[np.abs(desired) <= 1e-10] = 0
             resizing = (carried * desired > 0) & (np.abs(carried) > 1e-10)
@@ -166,7 +202,10 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
                 np.abs(desired - carried) < settings["execution_no_trade_band"]
             )
             desired[skip_resize] = carried[skip_resize]
-            last_order = d
+            if composed:
+                last_order[decision.updated_mask] = d
+            else:
+                last_order[:] = d
         short_limit = (
             np.minimum(
                 cap * settings["max_borrow_fraction_market_cap"],
@@ -191,14 +230,17 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
                 / max(np.abs(target).sum(), 1e-30),
             )
         delta = target - carried
-        increasing = (np.abs(target) > np.abs(carried)) & (
-            target * carried >= 0
-        )
-        if d - last_order >= settings["order_ttl_sessions"]:
+        increasing = (
+            (np.abs(target) > np.abs(carried)) & (target * carried >= 0)
+        ) | (target * carried < 0)
+        expired = d - last_order >= settings["order_ttl_sessions"]
+        if expired.any():
             expired_orders += int(
-                np.count_nonzero(increasing & (np.abs(delta) > 1e-8))
+                np.count_nonzero(expired & increasing & (np.abs(delta) > 1e-8))
             )
-            delta[increasing] = 0
+            close = expired & (carried * target < 0)
+            delta[close] = -carried[close]
+            delta[expired & increasing & ~close] = 0
         daily_cap = adv * settings["max_daily_participation"] / nav
         fills = np.sign(delta) * np.minimum(np.abs(delta), daily_cap)
         fills[~market.tradable[d]] = 0
@@ -267,13 +309,30 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
         fee_paid = float(np.abs(fills) @ (base + impact))
         if fee_paid >= 1:
             raise ValueError("Execution costs exhausted NAV")
-        weights = (carried + fills) / (1 - fee_paid)
+        closed = np.where(
+            carried * fills < 0, np.minimum(np.abs(carried), np.abs(fills)), 0
+        )
+        closed_dollar_days += float(closed @ position_age) * nav
+        closed_dollars += float(closed.sum()) * nav
+        after = carried + fills
+        old_remaining = np.maximum(0, np.abs(carried) - closed)
+        same_sign = after * carried > 0
+        position_age = np.divide(
+            position_age * old_remaining,
+            np.abs(after),
+            out=np.zeros(names),
+            where=same_sign & (np.abs(after) > 1e-12),
+        )
+        if observer is not None:
+            observer.fills(d, nav, carried, fills, after)
+        weights = after / (1 - fee_paid)
         if np.count_nonzero(weights) > settings["universe_size"]:
             raise ValueError("Executed holdings exceed the position ceiling")
         desired /= 1 - fee_paid
         transaction_dollars += fee_paid * nav
         nav *= 1 - fee_paid
         net[d] = (1 + pnl) * (1 - fee_paid) - 1
+        fees_series[d] = exit_fee + fee_paid * (1 + pnl)
         turnover[d] = np.abs(fills).sum() + exit_turnover
         costs[d], borrow_costs[d] = fee_paid + exit_fee, borrow
         pending[d] = float(np.abs(target - weights).sum() * nav)
@@ -288,9 +347,22 @@ def replay_capacity(market, schedule, settings, *, keep_holdings=False):
         "turnover": turnover,
         "holdings": held,
         "execution_targets": recorded_targets,
+        "execution_renewal_masks": recorded_renewals,
+        "attribution": {
+            "long_return": long_pnl_series,
+            "short_return": short_pnl_series,
+            "cash_return": cash_series,
+            "trading_cost_return": fees_series,
+            "borrow_cost_return": borrow_series,
+        },
         "execution": {
             "initial_nav_usd": initial_nav,
             "cash_income_usd": cash_income_dollars,
+            "average_closed_notional_holding_calendar_days": closed_dollar_days
+            / closed_dollars
+            if closed_dollars > 0
+            else None,
+            "closed_notional_usd": closed_dollars,
             "final_nav_usd": nav,
             "max_daily_participation": maximum_participation,
             "maximum_positions": int(counts.max()),

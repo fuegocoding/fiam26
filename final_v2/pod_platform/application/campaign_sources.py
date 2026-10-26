@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 
 from ..data.carbonarc_requests import (
     CarbonArcOAuthTransport,
@@ -18,6 +22,25 @@ from ..papers.transport import UrllibTransport
 from ..research.filing_access import as_of_timestamp
 from .common import atomic_write_json, file_sha256, now_utc
 from .configuration import PROJECT_ROOT, config_path
+
+
+def paper_relevant(namespace, title, abstract=""):
+    text = (title + " " + (abstract or "")).lower()
+    if re.search(
+        r"noncommutative|quantum field|neutrino|galax|particle physics", text
+    ):
+        return False
+    finance = re.search(
+        r"stock.{0,25}(return|price|market)|equity|asset pric|portfolio|corporate financ|securities|earnings.?announcement|cash flow|financial (market|crash)",
+        text,
+    )
+    focus = {
+        "pod_fundamentals": r"earnings|profit|account|cash|quality",
+        "pod_events": r"issuance|issue|repurchase|event|announcement|earnings|financing|filing",
+        "pod_valuation": r"value|valuation|book.to.market|cash flow|profitab|dividend|pricing",
+        "pod_dynamics": r"momentum|trend|reversal|risk|volatility|trading",
+    }.get(namespace, r".")
+    return bool(finance and re.search(focus, text))
 
 
 def discover_evidence(config, state, *, papers=None, carbon=None):
@@ -47,10 +70,16 @@ def discover_evidence(config, state, *, papers=None, carbon=None):
             }
         ),
     )
-    evidence = {"papers": [], "alternative_data": [], "errors": []}
+    evidence = {
+        "papers": [],
+        "alternative_data": [],
+        "errors": [],
+        "excluded_papers": [],
+    }
     cache = state / "campaign_evidence.json"
     # Persist discovery separately: a completed campaign can replay with no network.
     identity = {
+        "relevance_policy": "finance_and_pod_scope_v1",
         "online_papers": application.get("online_papers", False),
         "papers_per_query": application.get("papers_per_query", 2),
         "queries": application.get("paper_queries", []),
@@ -62,7 +91,15 @@ def discover_evidence(config, state, *, papers=None, carbon=None):
     }
     if cache.exists():
         previous = json.loads(cache.read_text())
-        if previous.get("identity") == identity:
+        failed = previous.get("errors") or any(
+            r.get("status") in {"failed", "uncertain", "remote_not_configured"}
+            for r in previous.get("alternative_data", [])
+        )
+        if (
+            previous.get("identity") == identity
+            and not failed
+            and not config["research_campaign"].get("refresh_evidence", False)
+        ):
             return previous, carbon
     cutoff = dt.datetime.combine(
         dt.date.fromisoformat(config["training_lab"]["end"]),
@@ -75,9 +112,27 @@ def discover_evidence(config, state, *, papers=None, carbon=None):
             result = papers.search(
                 query["query"],
                 as_of=cutoff,
-                limit=application.get("papers_per_query", 2),
+                limit=min(12, application.get("papers_per_query", 2) * 4),
             )
-            cards.extend((query["namespace"], c) for c in result.cards)
+            relevant = []
+            for card in result.cards:
+                if paper_relevant(
+                    query["namespace"], card.title, card.abstract
+                ):
+                    relevant.append(card)
+                else:
+                    evidence["excluded_papers"].append(
+                        {
+                            "paper_id": card.paper_id,
+                            "title": card.title,
+                            "namespace": query["namespace"],
+                            "reason": "outside_finance_or_pod_scope",
+                        }
+                    )
+            cards.extend(
+                (query["namespace"], card)
+                for card in relevant[: application.get("papers_per_query", 2)]
+            )
         except Exception as exc:
             evidence["errors"].append(
                 {
@@ -141,7 +196,10 @@ def discover_evidence(config, state, *, papers=None, carbon=None):
         try:
             evidence["alternative_data"].append(
                 carbon.discover_stock(
-                    discovery["namespace"], discovery["request"]
+                    discovery["namespace"],
+                    discovery["request"],
+                    retry_failed=True,
+                    max_attempts=3,
                 )
             )
         except Exception as exc:
@@ -229,10 +287,25 @@ def load_reporting_benchmarks(path, dates):
     The legacy container is an explicitly named reporting-only input. IBES,
     FINRA and other rows cannot cross this projection/filter boundary.
     """
-    source = pd.read_parquet(path, columns=["table", "series", "date", "value"])
-    source = source.loc[
-        (source["table"] == "fred") & source.series.isin(["TB3MS", "SP500"])
-    ].copy()
+    chunks = []
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(
+        columns=["table", "series", "date", "value"], batch_size=32768
+    ):
+        selected = batch.filter(
+            pc.and_(
+                pc.equal(batch.column("table"), "fred"),
+                pc.is_in(
+                    batch.column("series"),
+                    value_set=pa.array(["TB3MS", "SP500"]),
+                ),
+            )
+        )
+        if len(selected):
+            chunks.append(selected.to_pandas())
+    if not chunks:
+        raise ValueError("Official benchmark series are absent")
+    source = pd.concat(chunks, ignore_index=True)
     source["date"] = pd.to_datetime(source.date)
     dates = pd.DatetimeIndex(dates)
     source = source.loc[source.date <= dates.max()]
@@ -242,6 +315,12 @@ def load_reporting_benchmarks(path, dates):
         .value.dropna()
         .astype(float)
         .sort_index()
+    )
+    # The challenge benchmark uses the rate for the SAME return month. It is
+    # an ex-post reporting reference, never an alpha input. Cash accrual uses
+    # a separate lagged observable proxy so capital sizing stays causal.
+    reference = rate.reindex(dates.to_period("M").to_timestamp()).set_axis(
+        dates
     )
     # Monthly observations become known on the first day of the following month.
     rate.index = rate.index + pd.offsets.MonthBegin(1)
@@ -261,4 +340,9 @@ def load_reporting_benchmarks(path, dates):
     market = prices.pct_change(fill_method=None).reindex(dates)
     if cash.isna().any():
         raise ValueError("TB3MS reporting coverage is incomplete")
-    return pd.DataFrame({"tb3ms": cash, "sp_return": market}, index=dates)
+    if reference.isna().any():
+        raise ValueError("Same-month official benchmark rates are incomplete")
+    return pd.DataFrame(
+        {"tb3ms": cash, "reference_tb3ms": reference, "sp_return": market},
+        index=dates,
+    )

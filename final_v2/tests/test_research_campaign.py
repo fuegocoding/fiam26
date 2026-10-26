@@ -1,7 +1,9 @@
 """Real columnar integration plus causal and financial boundary regressions."""
 
 import datetime as dt
+import importlib.util
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -276,6 +278,15 @@ def test_entire_campaign_codes_revises_owns_funds_executes_replays_and_reports(
     assert report["edge_selection_uses_capital"] is False
     assert report["capital_grid_used"] is False
     assert (campaign.output / "actual_holdings.parquet").exists()
+    verifier_spec = importlib.util.spec_from_file_location(
+        "campaign_replay_verifier",
+        Path(__file__).parents[1] / "verify_campaign.py",
+    )
+    verifier = importlib.util.module_from_spec(verifier_spec)
+    verifier_spec.loader.exec_module(verifier)
+    review = verifier.verify(campaign.output / "campaign_report.json")
+    assert review["headline_metrics_recomputed"]
+    assert review["ineligible_actual_short_increases"] == 0
     assert any(
         row["funded"]
         for row in json.loads(
@@ -346,3 +357,265 @@ def test_heavy_job_lock_rejects_overlapping_work_and_releases(tmp_path):
                 pytest.fail("A second job acquired the same lock")
     with research_job_lock(tmp_path):
         pass
+
+
+@pytest.mark.parametrize(
+    "scores",
+    [
+        [1.0, 0.8, 0.6, np.nan, np.nan, np.nan],
+        [1.0, 0.0, 0.0, 0.0, 0.0, -0.5],
+    ],
+)
+def test_projection_preserves_missing_and_threshold_membership(scores):
+    from pod_platform.research.strategy_code import unit_schedule
+
+    scores = np.asarray(scores)
+    panel = SimpleNamespace(
+        mask=np.ones((1, 6), bool),
+        frames=[
+            pd.DataFrame(
+                {
+                    "me": [20000.0] * 6,
+                    "gics": ["10"] * 6,
+                    "beta_60m": np.arange(6),
+                }
+            )
+        ],
+    )
+    weights = unit_schedule(
+        strategy(controls="sector_beta"),
+        {1: (0, scores)},
+        panel,
+        {"gross_limit": 2.0, "single_name_limit": 0.5, "universe_size": 6},
+        6,
+    )[1]
+    excluded = ~np.isfinite(scores) | (scores == 0)
+    np.testing.assert_array_equal(weights[excluded], 0)
+
+
+def test_daily_cache_keys_universe_dates_and_detects_tampering(tmp_path):
+    from pod_platform.research.training_data import read_daily
+
+    source = tmp_path / "daily.csv"
+    pd.DataFrame(
+        {
+            "permno": [1, 2, 1, 2],
+            "date": [20200102, 20200102, 20200103, 20200103],
+            "prc": 10.0,
+            "daily_return": 0.01,
+        }
+    ).to_csv(source, index=False)
+    first = read_daily(
+        source,
+        [1],
+        pd.Timestamp("2020-01-01"),
+        pd.Timestamp("2020-12-31"),
+        tmp_path / "cache.parquet",
+    )
+    second = read_daily(
+        source,
+        [1, 2],
+        pd.Timestamp("2020-01-01"),
+        pd.Timestamp("2020-12-31"),
+        tmp_path / "cache.parquet",
+    )
+    assert set(first.permno) == {1}
+    assert set(second.permno) == {1, 2}
+    cache = next(
+        p
+        for p in tmp_path.glob("cache_*.parquet")
+        if len(pd.read_parquet(p)) == 4
+    )
+    changed = pd.read_parquet(cache)
+    changed["daily_return"] = 1.0
+    changed.to_parquet(cache, index=False)
+    with pytest.raises(ValueError, match="digest changed"):
+        read_daily(
+            source,
+            [1, 2],
+            pd.Timestamp("2020-01-01"),
+            pd.Timestamp("2020-12-31"),
+            tmp_path / "cache.parquet",
+        )
+
+
+def _excessive_array_fixture(features, history, daily):
+    return np.ones(100_000_000)
+
+
+def test_numerical_worker_enforces_hard_extra_memory_limit():
+    from pod_platform.research.score_worker import ScoreWorker
+
+    with ScoreWorker(_excessive_array_fixture, extra_memory_mib=32) as worker:
+        with pytest.raises(ValueError, match="resource boundary|MemoryError"):
+            worker.score({}, {}, np.zeros((1, 4)))
+
+
+def test_python_container_repetition_is_rejected_before_execution():
+    for expression in ("[0] * 10000 * 10000", "'cash_at' * 10000 * 10000"):
+        code = f"def score(features, history, daily):\n    x = {expression}\n    return features['cash_at']\n"
+        with pytest.raises(ValueError):
+            compile_strategy(code, {"cash_at"})
+
+
+@pytest.mark.parametrize("hedge_policy", ["paired_signal", "liquid_sector"])
+def test_exact_monthly_concentration_matches_native_unit_gross_replay(
+    tmp_path, hedge_policy
+):
+    from pod_platform.research.edge_capacity import measure_edge
+    from pod_platform.research.forecast_construction import (
+        monthly_concentration,
+    )
+    from pod_platform.research.strategy_code import unit_schedule
+    from pod_platform.research.training_data import prepare_panel
+    from pod_platform.research.training_tactical import (
+        daily_market,
+    )
+
+    panel_path, daily_path, _ = _files(tmp_path)
+    settings = load_config()["training_lab"]
+    settings.update(
+        start="2017-01-01",
+        daily_warmup_start="2016-01-01",
+        min_positions=20,
+        universe_size=60,
+        filings_research_enabled=False,
+        compact_storage=True,
+        cost_bps_one_way=0,
+        large_cap_borrow_bps=0,
+        other_borrow_bps=0,
+    )
+    panel = prepare_panel(
+        panel_path, daily_path, settings, tmp_path / "unit_daily.parquet"
+    )
+    market = daily_market(panel, settings)
+    plan = strategy(
+        signal_update_months=3,
+        weighting="equal_tail",
+        hedge_policy=hedge_policy,
+        controls="sector",
+    )
+    _, decisions = code_signals(plan, panel, market)
+    curve = monthly_concentration(plan, decisions, panel, market, settings)
+    weights = unit_schedule(plan, decisions, panel, settings, 20)
+    daily = measure_edge(market, weights, settings)
+    # Concentration labels span execution-to-execution intervals, while fund
+    # headlines use calendar months. Reconcile the same valuation clocks.
+    actual = np.array(
+        [
+            np.prod(
+                1
+                + daily["gross"][
+                    (market.dates > execution) & (market.dates <= settlement)
+                ]
+            )
+            - 1
+            for execution, settlement in zip(
+                panel.execution_dates, panel.settlement_dates
+            )
+        ]
+    )
+    expected = curve.loc[curve.names == 20, "controlled_spread"].to_numpy()
+    np.testing.assert_allclose(actual, expected, atol=2e-7)
+
+
+def test_supported_constructor_preserves_ranked_signs_and_exact_controls():
+    from pod_platform.research.forecast_construction import (
+        prepare_forecast,
+        supported_target,
+    )
+    from pod_platform.research.pod_plans import construction_designs
+
+    rng = np.random.default_rng(194)
+    names = 200
+    frame = pd.DataFrame(
+        {
+            "me": np.full(names, 20000.0),
+            "gics": np.repeat(["10", "20"], names // 2),
+            "beta_60m": rng.uniform(0.5, 1.5, names),
+        }
+    )
+    panel = SimpleNamespace(mask=np.ones((1, names), bool), frames=[frame])
+    score = rng.normal(size=names)
+    score[:10] = np.nan
+    score[10:20] = 0
+    design = construction_designs(panel, "sector_beta")[0]
+    prepared = prepare_forecast(score, design)
+    weights = supported_target(
+        score,
+        design,
+        {"gross_limit": 2.0, "single_name_limit": 0.05},
+        maximum=100,
+        weighting="equal_tail",
+        prepared=prepared,
+    )
+    np.testing.assert_array_equal(weights[:20], 0)
+    np.testing.assert_allclose(design.matrix.T @ weights, 0, atol=1e-7)
+    indices, _, ranked, _ = prepared
+    assert np.all(weights[indices] * ranked >= -1e-10)
+    assert np.count_nonzero(weights) <= 100
+
+
+def test_local_array_mask_assignment_and_finite_methods_preserve_inputs():
+    from pod_platform.research.score_worker import ScoreWorker
+
+    code = "def score(features, history, daily):\n    value = features['cash_at'].copy()\n    mask = np.isnan(value)\n    value[mask] = 0\n    return value - value.mean()\n"
+    function = compile_strategy(code, {"cash_at"})
+    source = np.array([1.0, np.nan, -1.0, 2.0])
+    with ScoreWorker(function) as worker:
+        actual = worker.score({"cash_at": source}, {}, np.zeros((1, 4)))
+    np.testing.assert_allclose(actual, [0.5, -0.5, -1.5, 1.5])
+    assert np.isnan(source[1])
+    alias = compile_strategy(
+        "def score(features, history, daily):\n    x = features['cash_at']\n    x[0] = 5\n    return x\n",
+        {"cash_at"},
+    )
+    with ScoreWorker(alias) as worker:
+        with pytest.raises(ValueError, match="read-only"):
+            worker.score({"cash_at": source}, {}, np.zeros((1, 4)))
+
+
+def test_paper_scope_excludes_physics_and_labor_earnings_from_stock_research():
+    from pod_platform.application.campaign_sources import paper_relevant
+
+    assert not paper_relevant(
+        "pod_dynamics",
+        "Minimal momentum estimation in noncommutative phase space",
+    )
+    assert not paper_relevant(
+        "pod_fundamentals",
+        "Heterogeneous Earnings Effects of the Job Corps by Gender Earnings",
+    )
+    assert paper_relevant(
+        "pod_dynamics",
+        "Returns to Buying Winners and Selling Losers: Implications for Stock Market Efficiency",
+        "Momentum stock returns and trading strategies",
+    )
+    assert paper_relevant(
+        "pod_fundamentals",
+        "Do Stock Prices Fully Reflect Information in Accruals and Cash Flows About Future Earnings?",
+    )
+    assert paper_relevant(
+        "pod_events",
+        "Post earnings announcement drift",
+        "Stock returns after earnings announcements",
+    )
+
+
+def test_same_month_benchmark_does_not_inherit_lagged_cash_accrual():
+    dates = pd.bdate_range("2019-01-02", "2019-02-28")
+    reference = np.where(dates.month == 1, 1.0, 3.0)
+    benchmark = pd.DataFrame(
+        {
+            "tb3ms": 0.0,
+            "reference_tb3ms": reference,
+            "sp_return": np.linspace(-0.001, 0.002, len(dates)),
+        },
+        index=dates,
+    )
+    report, daily, monthly = competition_report(
+        dates, np.zeros(len(dates)), benchmark, returns_include_cash=True
+    )
+    np.testing.assert_allclose(daily.cash, reference / 25200)
+    np.testing.assert_allclose(monthly.cash, [1 / 1200, 3 / 1200])
+    assert report["daily"]["annualized_alpha_se"] is not None

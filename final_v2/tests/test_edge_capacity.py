@@ -174,3 +174,181 @@ def test_adaptive_orders_use_previous_nav_and_fixed_decision_dollars():
         before["execution_targets"][2] * first_nav,
         changed["execution_targets"][2] * second_nav,
     )
+
+
+def test_expired_reversal_can_close_but_cannot_open_opposite_position():
+    market, settings = _fixture()
+    market.frames[0]["dolvol_126d"] = 20.0
+    settings.update(
+        strategy_capital_usd=100.0,
+        single_name_limit=0.5,
+        order_ttl_sessions=2,
+        execution_no_trade_band=0,
+        execution_gross_buffer=1,
+    )
+    # Initial fill completes in two days. A later opposite target expires while
+    # reducing the original book: the old position can finish closing only.
+    result = replay_daily(
+        market,
+        {0: np.array([0.04, -0.04]), 2: np.array([-0.05, 0.05])},
+        settings,
+        keep_holdings=True,
+    )
+    assert result["holdings"][3, 0] >= -1e-10
+    assert np.min(result["holdings"][4:, 0]) >= -1e-10
+
+
+def test_native_sleeve_updates_preserve_other_pending_order_expiry_and_replay():
+    from pod_platform.research.sleeve_execution import (
+        RecordedInstruction,
+        SleeveExecutionBook,
+    )
+
+    market, settings = _fixture()
+    frame = pd.concat([market.frames[0], market.frames[0]], ignore_index=True)
+    frame["dolvol_126d"] = 20.0
+    market.frames = [frame]
+    market.returns = np.zeros((len(market.dates), 4))
+    market.tradable = np.ones_like(market.returns, bool)
+    settings.update(
+        strategy_capital_usd=100.0,
+        single_name_limit=0.5,
+        order_ttl_sessions=2,
+        execution_no_trade_band=0,
+        execution_gross_buffer=1,
+    )
+    book = SleeveExecutionBook(4)
+    schedule = {
+        0: lambda nav, carried: book.set_targets(
+            0, {"monthly": np.array([10.0, -10.0, 0.0, 0.0])}
+        ),
+        1: lambda nav, carried: None,  # An unfunded daily research review.
+        3: lambda nav, carried: book.set_targets(
+            3, {"daily": np.array([0.0, 0.0, 2.0, -2.0])}
+        ),
+    }
+    result = replay_daily(
+        market,
+        schedule,
+        {**settings, "execution_observer": book},
+        keep_holdings=True,
+    )
+    assert set(result["execution_targets"]) == {0, 3}
+    np.testing.assert_allclose(
+        result["holdings"][2:, :2],
+        np.tile([0.04, -0.04], (len(market.dates) - 2, 1)),
+    )
+    replay = replay_daily(
+        market,
+        {
+            day: RecordedInstruction(
+                target, result["execution_renewal_masks"][day]
+            )
+            for day, target in result["execution_targets"].items()
+        },
+        settings,
+        keep_holdings=True,
+    )
+    np.testing.assert_array_equal(result["net"], replay["net"])
+    np.testing.assert_array_equal(result["holdings"], replay["holdings"])
+    np.testing.assert_allclose(
+        sum(book.positions.values()),
+        result["holdings"][-1] * result["execution"]["final_nav_usd"],
+        atol=1e-6,
+    )
+
+
+def test_daily_component_returns_reconcile_cash_positions_and_costs():
+    market, settings = _fixture()
+    market.cash_returns = np.repeat(0.0001, len(market.dates))
+    market.returns[2:] = [0.001, -0.002]
+    settings.update(cost_bps_one_way=10, large_cap_borrow_bps=50)
+    result = replay_daily(market, {1: np.array([0.04, -0.04])}, settings)
+    a = result["attribution"]
+    np.testing.assert_allclose(
+        result["net"],
+        a["long_return"]
+        + a["short_return"]
+        + a["cash_return"]
+        - a["trading_cost_return"]
+        - a["borrow_cost_return"],
+        atol=1e-15,
+    )
+
+
+@pytest.mark.parametrize("gross_buffer", [1.0, 0.98])
+def test_shared_symbol_review_cannot_revive_an_expired_other_sleeve_order(
+    gross_buffer,
+):
+    from pod_platform.research.sleeve_execution import (
+        RecordedInstruction,
+        SleeveExecutionBook,
+    )
+
+    market, settings = _fixture()
+    market.frames[0]["dolvol_126d"] = 20.0
+    settings.update(
+        strategy_capital_usd=100.0,
+        single_name_limit=0.5,
+        order_ttl_sessions=2,
+        execution_no_trade_band=0,
+        execution_gross_buffer=gross_buffer,
+    )
+    book = SleeveExecutionBook(
+        2, gross_buffer=gross_buffer, order_ttl_sessions=2
+    )
+    schedule = {
+        0: lambda nav, carried: book.set_targets(
+            0, {"monthly": np.array([10.0, -10.0])}
+        ),
+        3: lambda nav, carried: book.set_targets(
+            3, {"daily": np.array([1.0, -1.0])}
+        ),
+    }
+    result = replay_daily(
+        market,
+        schedule,
+        {**settings, "execution_observer": book},
+        keep_holdings=True,
+    )
+    # The monthly sleeve fills $2 per day for two sessions, then expires. A
+    # new sleeve's order for the same symbols must add only its own dollars.
+    np.testing.assert_allclose(book.positions["monthly"], [4.0, -4.0])
+    np.testing.assert_allclose(
+        book.positions["daily"], np.array([1.0, -1.0]) * gross_buffer
+    )
+    np.testing.assert_allclose(result["holdings"][2], [0.04, -0.04])
+    expected = np.array([4.0 + gross_buffer, -4.0 - gross_buffer]) / 100.0
+    np.testing.assert_allclose(
+        result["holdings"][3:],
+        np.tile(expected, (len(market.dates) - 3, 1)),
+        atol=1e-8,
+    )
+    replay = replay_daily(
+        market,
+        {
+            day: RecordedInstruction(
+                target, result["execution_renewal_masks"][day]
+            )
+            for day, target in result["execution_targets"].items()
+        },
+        settings,
+        keep_holdings=True,
+    )
+    np.testing.assert_array_equal(result["net"], replay["net"])
+    np.testing.assert_array_equal(result["holdings"], replay["holdings"])
+
+
+@pytest.mark.parametrize(
+    ("desired", "retained"), [(5.0, 5.0), (-5.0, 0.0), (20.0, 10.0)]
+)
+def test_expired_sleeve_target_preserves_reductions_and_cancels_new_risk(
+    desired, retained
+):
+    from pod_platform.research.sleeve_execution import SleeveExecutionBook
+
+    book = SleeveExecutionBook(1, gross_buffer=0.98, order_ttl_sessions=2)
+    book.set_targets(0, {"monthly": np.array([desired / 0.98])})
+    book.positions["monthly"][:] = 10.0
+    book.expire(2)
+    np.testing.assert_allclose(book.targets["monthly"] * 0.98, [retained])

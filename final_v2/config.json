@@ -8,23 +8,25 @@
     "paper_queries": [
       {
         "namespace": "pod_fundamentals",
-        "query": "earnings surprise"
+        "query": "stock prices accruals cash flows future earnings"
       },
       {
         "namespace": "pod_events",
-        "query": "equity issuance"
+        "query": "post earnings announcement drift equity stock returns"
       },
       {
         "namespace": "pod_valuation",
-        "query": "value stock"
+        "query": "value profitability equity stock returns"
       },
       {
         "namespace": "pod_dynamics",
-        "query": "momentum reversal"
+        "query": "stock returns momentum buying winners selling losers"
       }
     ],
     "papers_per_query": 2,
-    "paper_ids": [],
+    "paper_ids": [
+      "doi:10.1111/j.1540-6261.1993.tb04702.x"
+    ],
     "manifest": "${project_root}/final_v2/.pod_state/platform_live_v5/competition_training.json",
     "dataset_id": "comp_chars_training",
     "papers_db": "${project_root}/final_v2/.pod_state/year_trial_2025/papers.sqlite",
