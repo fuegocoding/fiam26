@@ -62,6 +62,14 @@ any unresolved limit failure remains in the daily audit. Sleeve accounting
 attributes these observed-price risk trims to the positions being reduced.
 A successful run is research evidence, not a claim of admitted or investable alpha.
 
+An explicit `research_campaign.evaluation_period` separates the portfolio return
+window from the earlier observations needed for model fitting. Portfolio reviews
+then use each month's first available session. `portfolio_evidence_scope` defaults
+to `prior_settled`; the optional `retrospective_evaluation_period` uses the complete
+declared window for selection and funding and marks the report as in-sample.
+The disclosed 2021–2022 comparison and its recorded-response reproduction
+configuration are in [the saved results](../results/2021_2022/RESULTS.md).
+
 Reports and regenerable caches are written under the configured `.pod_state`
 directory. API spending quotas and spending ledgers are not used. Provider rate
 limits, bounded retries, and request/response size limits remain transport rules.

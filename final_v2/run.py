@@ -15,6 +15,7 @@ def main():
         "integrated_campaign_completed",
         "research_completed_agent_stage_degraded",
         "research_completed_pool_incomplete",
+        "recorded_campaign_replayed",
     }:
         result = {
             k: result[k]

@@ -135,6 +135,11 @@ A failed tweak returns for diagnosis: try a defensible correction, request data,
 open a different research_topic or retain when exhausted. Repeated proposals or
 requests add no evidence. Provider failures are unresolved. There is no campaign
 round ceiling; five supported candidates is neither forced acceptance nor a stop.
+When measured corrections fail to improve the common-date chronological edge,
+state the remaining falsifiable lead before proposing another child. A coefficient
+tweak without a new economic prediction is not a lead. If no distinct test or
+newly obtainable evidence can resolve the weakness, retain this tested topic and
+explain the stopping reason. Later settled observations may justify reopening it.
 
 @@ campaign.scope_contract
 Declare universe={rationale,min_market_cap_usd,max_market_cap_usd,gics_prefixes,

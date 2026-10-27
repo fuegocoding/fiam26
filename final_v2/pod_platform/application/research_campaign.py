@@ -118,6 +118,16 @@ class ResearchCampaign:
             if key in self.settings:
                 self.settings[key] = str(config_path(self.settings[key]))
         self.policy = config["research_campaign"]
+        self.evaluation_period = self.policy.get("evaluation_period")
+        self.portfolio_evidence_scope = self.policy.get("portfolio_evidence_scope", "prior_settled")
+        if self.portfolio_evidence_scope not in {"prior_settled", "retrospective_evaluation_period"}:
+            raise ValueError("Unknown portfolio evidence scope")
+        if self.evaluation_period:
+            begin, end = (pd.Timestamp(self.evaluation_period[k]) for k in ("start", "end"))
+            if begin > end or begin < pd.Timestamp(self.settings["start"]) or end > pd.Timestamp(self.settings["end"]):
+                raise ValueError("Evaluation period must be ordered and inside the supplied data prefix")
+        elif self.portfolio_evidence_scope != "prior_settled":
+            raise ValueError("Retrospective evidence requires an explicit evaluation period")
         self.state = config_path(config["application"]["state_dir"])
         self.state.mkdir(parents=True, exist_ok=True)
         self.providers = providers
@@ -353,8 +363,8 @@ class ResearchCampaign:
                 schedule,
                 self.settings,
                 keep_holdings=False,
-                snapshot_days=[int(self.market.dates.searchsorted(date))
-                               for date in self.panel.execution_dates],
+                snapshot_days=sorted(set([int(self.market.dates.searchsorted(date))
+                               for date in self.panel.execution_dates]) | set(self._first_session_reviews())),
             )
             edge["prior_holdings"] = spill_schedule(
                 self.output / (stem + "_cio_prior_holdings.npy"),
@@ -1326,6 +1336,15 @@ class ResearchCampaign:
                 },
             )
 
+    def _first_session_reviews(self):
+        if not self.evaluation_period:
+            return {}
+        eligible = (self.market.dates >= pd.Timestamp(self.evaluation_period["start"])) & (
+            self.market.dates <= pd.Timestamp(self.evaluation_period["end"]))
+        days = np.flatnonzero(eligible)
+        first = ~self.market.dates[days].to_period("M").duplicated()
+        return {int(d): int(self.market.formation[d]) for d in days[first]}
+
     def _construct(self):
         decisions, allocation_log = {}, []
         book = SleeveExecutionBook(
@@ -1337,12 +1356,16 @@ class ResearchCampaign:
             int(self.market.dates.searchsorted(d)): t
             for t, d in enumerate(self.panel.execution_dates)
         }
+        if self.evaluation_period:
+            review_days = self._first_session_reviews()
         # Union of native strategy reviews and monthly CIO reviews; the latest
         # formation date is the only context for limits and settled outcomes.
         native_days = {
             d for trial in self.trials.values() for d in trial["schedule"]
         }
         days = sorted(native_days | set(review_days))
+        if self.evaluation_period:
+            days = [d for d in days if pd.Timestamp(self.evaluation_period["start"]) <= self.market.dates[d] <= pd.Timestamp(self.evaluation_period["end"])]
         for day in days:
             formation = review_days.get(
                 day, int(self.market.formation[day])
@@ -1353,6 +1376,10 @@ class ResearchCampaign:
                 unit_return_month_ends(self.panel)
                 <= self.panel.dates[formation]
             )
+            if self.portfolio_evidence_scope == "retrospective_evaluation_period":
+                outcomes = unit_return_month_ends(self.panel)
+                known = np.flatnonzero((outcomes >= pd.Timestamp(self.evaluation_period["start"]))
+                    & (outcomes <= pd.Timestamp(self.evaluation_period["end"])))
             ownership = {
                 p: select_roster(self.trials, p, known, min_months,
                     uncertainty_haircut=self.policy["edge_uncertainty_haircut"])
@@ -1473,6 +1500,7 @@ class ResearchCampaign:
                         ),
                         "execution_date": str(self.market.dates[day].date()),
                         "nav_usd": nav,
+                        "portfolio_evidence_scope": self.portfolio_evidence_scope,
                         "owned": ownership,
                         "funded": [
                             {
@@ -1781,6 +1809,8 @@ class ResearchCampaign:
         )
         fund, allocations, replay_difference = self._construct()
         active = self.market.dates >= self.panel.execution_dates[0]
+        if self.evaluation_period:
+            active = (self.market.dates >= pd.Timestamp(self.evaluation_period["start"])) & (self.market.dates <= pd.Timestamp(self.evaluation_period["end"]))
         dates = self.market.dates[active]
         benchmark = self.reporting_benchmark.reindex(dates)
         metrics, daily, monthly = competition_report(
@@ -1861,7 +1891,9 @@ class ResearchCampaign:
             p["blocked"] for p in self.research_loop.pods.values())
         pool_complete = all(row["target_met"] for row in research_pool.values())
         report = {
-            "status": "integrated_campaign_completed"
+            "status": "recorded_campaign_replayed" if (
+                self.policy.get("research_pods") == [] and self.policy.get("recorded_code_proposals"))
+            else "integrated_campaign_completed"
             if agent_stage_complete and pool_complete
             else ("research_completed_agent_stage_degraded" if not agent_stage_complete
                   else "research_completed_pool_incomplete"),
@@ -1879,6 +1911,9 @@ class ResearchCampaign:
             "owned_strategy_counts": {p: len(v) for p, v in owned.items()},
             "edge_selection_uses_capital": False,
             "capital_grid_used": False,
+            "evaluation_period": self.evaluation_period,
+            "portfolio_evidence_scope": self.portfolio_evidence_scope,
+            "evaluation_is_in_sample": self.portfolio_evidence_scope == "retrospective_evaluation_period",
             "fund": metrics,
             "execution": fund["execution"],
             "constraints": constraint_report,
