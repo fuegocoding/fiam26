@@ -80,11 +80,11 @@ def known_at(frame):
 class FilingResearchStore:
     """Page through all authorized filings without loading the text corpus at once."""
 
-    def __init__(self, path, *, training_end="2020-12-31", start="2011-01-01"):
+    def __init__(self, path, *, training_end, start="2011-01-01"):
         self.path = Path(path)
         self.cutoff = as_of_timestamp(training_end)
-        if self.cutoff > as_of_timestamp("2020-12-31"):
-            raise ValueError("Research filing access must stop before 2021")
+        if as_of_timestamp(start) > self.cutoff:
+            raise ValueError("Filing research start must not follow its declared cutoff")
         self.start = pd.Timestamp(start).date()
         self._metadata = None
 

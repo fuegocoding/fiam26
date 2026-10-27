@@ -14,6 +14,7 @@ def main():
     if result.get("status") in {
         "integrated_campaign_completed",
         "research_completed_agent_stage_degraded",
+        "research_completed_pool_incomplete",
     }:
         result = {
             k: result[k]
@@ -23,10 +24,13 @@ def main():
                 "attempts",
                 "successful_strategies",
                 "owned_strategy_counts",
+                "research_pool_target_met",
                 "constraints_pass",
                 "new_model_call_attempts",
             )
-        } | {"report": str(Path(result["output_dir"]) / "campaign_report.json")}
+        } | {"report": str(Path(result["output_dir"]) / "campaign_report.json"),
+             "supported_strategy_counts": {p: row["supported_count"]
+                 for p, row in result["research_pool"].items()}}
     print(json.dumps(result, sort_keys=True, default=str))
 
 

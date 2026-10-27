@@ -94,7 +94,6 @@ class PaperService:
         timeout: float = DEFAULT_TIMEOUT,
         max_body_bytes: int = DEFAULT_MAX_BYTES,
         max_text_chars: int = 2_000_000,
-        max_version_lookups: int = 12,
     ):
         self.store = (
             store if isinstance(store, PaperStore) else PaperStore(store)
@@ -105,10 +104,7 @@ class PaperService:
         if not set(self.providers) <= {"arxiv", "openalex"}:
             raise PaperValidationError("unknown provider")
         self.timeout, self.max_body = float(timeout), int(max_body_bytes)
-        self.max_text_chars, self.max_lookups = (
-            int(max_text_chars),
-            int(max_version_lookups),
-        )
+        self.max_text_chars = int(max_text_chars)
         if self.timeout <= 0 or self.max_body <= 0 or self.max_text_chars <= 0:
             raise PaperValidationError(
                 "timeout and size limits must be positive"
@@ -266,15 +262,9 @@ class PaperService:
             return None
         if latest.version_date and latest.version_date <= as_of:
             return latest
-        lo, hi, lookups = 1, latest.version or 1, 0
+        lo, hi = 1, latest.version or 1
         while hi - lo > 1:  # version dates are monotone in version number
-            if lookups >= self.max_lookups:
-                self.warnings.append(
-                    f"{pid}: version lookup budget exhausted; excluded"
-                )
-                return None
             mid = (lo + hi) // 2
-            lookups += 1
             if self._arxiv_version(base, mid).version_date <= as_of:
                 lo = mid
             else:

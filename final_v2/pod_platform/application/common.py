@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, NoReturn
 
+from ..prompts import PROMPTS_PATH
 from ..contracts.base import canonical_digest, require_aware
 from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
 
@@ -155,3 +156,14 @@ def fail(code: ErrorCode, summary: str, stop: str, **kwargs: Any) -> NoReturn:
             summary=summary, code=code, stop_condition=stop, **kwargs
         )
     )
+
+
+def source_digest():
+    root = Path(__file__).parents[1]
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*.py")):
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(path.read_bytes())
+    digest.update(b"prompts.txt")
+    digest.update(PROMPTS_PATH.read_bytes())
+    return digest.hexdigest()

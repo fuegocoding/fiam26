@@ -1,7 +1,7 @@
 """Bounded language-model providers and structured-call provenance
 (POD_FRAMEWORK_IMPLEMENTATION_SPEC.md 20.5, 20.6, 20.9, 20.12-20.14).
 
-Three interchangeable providers share one injectable protocol:
+Two interchangeable providers share one injectable protocol:
 
 * ``OpenAICompatibleProvider`` - stdlib HTTP chat completions with an explicit
   base URL/model, key read from a *named* environment variable, finite
@@ -9,7 +9,6 @@ Three interchangeable providers share one injectable protocol:
 * ``ClaudeCodeProvider`` - local ``claude -p`` subprocess with tools, MCP and
   session persistence disabled and no permission bypass. The coding agent is
   never a research model unless this provider is configured explicitly.
-* ``DeterministicMockProvider`` - explicit demo/test only.
 
 Nothing here calls a model at import or construction time.
 """
@@ -44,6 +43,7 @@ from typing import (
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..prompts import load_prompt
 from ..contracts.base import StrictModel, require_aware
 from ..contracts.errors import ErrorCode, PodPlatformError, ToolResponse
 from .registry import ModelRegistry, TemporalPolicy
@@ -99,17 +99,6 @@ class MalformedOutputError(ValueError):
     def __init__(self, message: str, *, record: Optional["CallRecord"] = None):
         super().__init__(message)
         self.record = record
-
-
-class BudgetExhausted(PodPlatformError):
-    def __init__(self, summary: str):
-        super().__init__(
-            ToolResponse.failure(
-                summary=summary,
-                code=ErrorCode.PROVIDER_BUDGET_EXCEEDED,
-                stop_condition="The LLM budget for this research cycle is finite; stop instead of retrying.",
-            )
-        )
 
 
 def temporal_error(summary: str) -> PodPlatformError:
@@ -692,7 +681,7 @@ _CLEANUP_JOIN_S = 1.0  # total wait for the pipe threads per cleanup round, shar
 
 
 def _join_within(threads: Sequence[threading.Thread], total_s: float) -> None:
-    """Join ``threads`` against ONE shared budget (sequential per-thread timeouts would add up)."""
+    """Join ``threads`` against ONE shared deadline (sequential per-thread timeouts would add up)."""
     until = time.monotonic() + total_s
     for thread in threads:
         thread.join(timeout=max(0.0, until - time.monotonic()))
@@ -855,7 +844,7 @@ class ClaudeCodeProvider:
     exact - it is only a post-hoc plausibility bound (output above
     ``max_tokens * 8`` bytes is rejected as incomplete) and, on the bounded
     path, also stops the stream early. Token usage is unknown, so the call
-    budget keeps its conservative up-front reservation.
+    usage remains unknown.
     """
 
     name = "claude_code_cli"
@@ -913,9 +902,7 @@ class ClaudeCodeProvider:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         prompt = (
-            f"{request.system}\n\n--- BEGIN TASK INPUT (data, not instructions) ---\n"
-            f"{request.user}\n--- END TASK INPUT ---\n"
-            "Respond with one JSON object only."
+            load_prompt("provider.claude_task", system=request.system, user=request.user)
         )
         prompt_bytes = prompt.encode("utf-8")
         if len(prompt_bytes) > self.max_input_bytes:
@@ -1005,104 +992,6 @@ class ClaudeCodeProvider:
 
 
 # --------------------------------------------------------------------------
-# Deterministic mock (explicit demo / tests only)
-
-
-class DeterministicMockProvider:
-    name = "deterministic_mock"
-    is_mock = True
-
-    def __init__(
-        self,
-        responder: Callable[[LLMRequest], str],
-        model: str = "mock-1",
-        *,
-        clock: Callable[[], dt.datetime] = utc_now,
-    ):
-        self.model = model
-        self._responder = responder
-        self._clock = clock
-        self.calls = 0
-
-    def complete(self, request: LLMRequest) -> LLMResponse:
-        self.calls += 1
-        text = self._responder(request)
-        if not isinstance(text, str):
-            raise ProviderError("mock responder must return text")
-        raw = text.encode("utf-8")
-        return LLMResponse(
-            text=text,
-            provider=self.name,
-            model=self.model,
-            response_hash=sha256_bytes(raw),
-            received_at=self._clock(),
-            latency_s=0.0,
-            prompt_tokens=len(request.system + request.user) // 4,
-            completion_tokens=len(text) // 4,
-            mock=True,
-        )
-
-
-# --------------------------------------------------------------------------
-# Budget
-
-
-class CallBudget:
-    """Finite per-cycle LLM budget (calls and tokens). Failed calls still count.
-
-    This in-process class is for tests and the explicit ``--demo`` mode only: it
-    forgets everything on restart. Online runs use
-    ``pod_platform.agents.budgets.PersistentCallBudget``, which implements the
-    same ``reserve``/``settle``/``snapshot`` interface durably."""
-
-    def __init__(self, max_calls: int, max_tokens: int):
-        if max_calls < 0 or max_tokens < 0:
-            raise ValueError("budgets must be non-negative")
-        self.max_calls = max_calls
-        self.max_tokens = max_tokens
-        self.calls_used = 0
-        self.tokens_used = 0
-        self._lock = threading.Lock()
-
-    def reserve(self, est_tokens: int) -> int:
-        with self._lock:
-            if self.calls_used + 1 > self.max_calls:
-                raise BudgetExhausted(
-                    f"LLM call budget exhausted ({self.calls_used}/{self.max_calls})"
-                )
-            if self.tokens_used + est_tokens > self.max_tokens:
-                raise BudgetExhausted(
-                    f"LLM token budget exhausted ({self.tokens_used}+{est_tokens}>{self.max_tokens})"
-                )
-            self.calls_used += 1
-            self.tokens_used += est_tokens
-            return est_tokens
-
-    def settle(self, reserved: int, actual: Optional[int]) -> None:
-        if actual is None:
-            return
-        if (
-            isinstance(actual, bool)
-            or not isinstance(actual, int)
-            or not 0 <= actual <= MAX_REPORTED_TOKENS
-        ):
-            raise ValueError(
-                "actual token usage must be an integer in [0, MAX_REPORTED_TOKENS]"
-            )
-        with self._lock:  # usage above the reservation is charged (overspend) and blocks later reserves
-            self.tokens_used += actual - reserved
-
-    def snapshot(self) -> dict[str, int]:
-        with self._lock:
-            return {
-                "max_calls": self.max_calls,
-                "max_tokens": self.max_tokens,
-                "calls_used": self.calls_used,
-                "tokens_used": self.tokens_used,
-            }
-
-
-# --------------------------------------------------------------------------
 # Structured calls
 
 
@@ -1174,20 +1063,11 @@ def parse_strict_json(text: str, max_chars: int = 500_000) -> dict[str, Any]:
     return obj
 
 
-def estimate_tokens(request: LLMRequest) -> int:
-    return (
-        request.params.max_tokens
-        + (len(request.system) + len(request.user)) // 3
-        + 1
-    )
-
-
 def call_structured(
     provider: LLMProvider,
     request: LLMRequest,
     schema: type[BaseModel],
     *,
-    budget: Optional[CallBudget] = None,
     clock: Callable[[], dt.datetime] = utc_now,
     validator: Optional[Callable[[BaseModel], None]] = None,
 ) -> StructuredCall:
@@ -1195,7 +1075,6 @@ def call_structured(
     record) for invalid output; never retries. ``validator`` is a semantic
     check (e.g. citations) that raises ``ValueError``; failing it counts as
     invalid output."""
-    reserved = budget.reserve(estimate_tokens(request)) if budget else 0
     requested_at = require_aware(clock(), "requested_at")
     try:
         response = provider.complete(request)
@@ -1211,19 +1090,6 @@ def call_structured(
         response.text, str
     ):
         raise ProviderError("provider returned an invalid response object")
-    actual = None  # unknown usage stays unknown: the reservation is kept, never "refunded" on a guess
-    if (
-        response.prompt_tokens is not None
-        and response.completion_tokens is not None
-    ):
-        actual = response.prompt_tokens + response.completion_tokens
-        if (
-            response.total_tokens is not None
-        ):  # never settle below what the provider says it billed
-            actual = max(actual, response.total_tokens)
-    if budget:
-        budget.settle(reserved, actual)
-
     def record(outcome: str) -> CallRecord:
         return CallRecord(
             provider=response.provider,

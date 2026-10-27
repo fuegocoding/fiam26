@@ -124,7 +124,7 @@ def compute_desk_metrics(
     """Summarizes supplied net returns without reconstructing missing history.
 
     Args:
-        net_returns: Chronological, equally spaced simple returns after costs.
+        net_returns: Chronological, equally spaced simple returns.
             Missing periods must be resolved by the caller, never dropped.
         periods_per_year: Explicit number of observations in one year.
         trial_sharpes: All observed, nonannualized trial Sharpe ratios.

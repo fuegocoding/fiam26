@@ -53,7 +53,6 @@ def discover_evidence(config, state, *, papers=None, carbon=None):
         if application.get("online_papers")
         else None,
         timeout=15,
-        max_version_lookups=2,
     )
     policy = config["carbon"]
     carbon = carbon or CarbonArcRequests(

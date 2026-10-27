@@ -1,39 +1,67 @@
-# Strategy pod platform
+# Strategy research campaign
 
-The governing design is [POD_FRAMEWORK_IMPLEMENTATION_SPEC.md](POD_FRAMEWORK_IMPLEMENTATION_SPEC.md).
-Settings live in [config.json](config.json). Run `python final_v2/run.py` from the
-repository root after installing `pip install -e './final_v2[research,test]'`.
-Set `application.mode` to `demo` for synthetic source-to-book acceptance,
-or `research` for configured data requests, multi-paper research and experiments.
+Install the runtime with `pip install -e './final_v2[research]'`, then run
+`python final_v2/run.py` from the repository root.
 
-Four private pods combine paper excerpts, original hypotheses and alternative
-measurements through a reviewed feature graph. Carbon entity/metric discovery
-lets a pod select its own stocks; recorded selections become bounded extraction
-requests. Data receipts preserve missingness, source identity and receipt time.
-Today's vendor response does not establish historical vintages.
+`run.py` is the only entrypoint. It reads [config.json](config.json) and runs the
+research campaign from evidence discovery and dated inputs through strategy
+proposals, measured feedback, pod ownership, capital allocation, observed-price
+fills, daily NAV, attribution, and reporting.
 
-Configure `models.roles` and enable `models.online` for actual inference. Roles
-share persistent budgets and cached typed responses. Source metadata and public
-quotes enter prompts; raw licensed observations, outcomes and credentials stay
-local. Configure `research.measurement_grants`, `proposals` or `compositions`, and
-hash-pinned `observation_sources` to run the actual registered graph evaluator.
-Missing core measurements wait for data; missing optional controls are recorded.
+Configuration has five sections: `application`, `models`, `carbon`, `training_lab`
+(the shared market and research settings), and `research_campaign`. Supplied data
+and credentials remain in the repository's existing data and local directories.
+The runtime does not import an earlier fitted portfolio.
+The research pool starts empty. Only evaluated agent proposals can become
+strategies; there are no built-in controls, seeded strategies, default feature
+models, or trading fallbacks.
 
-An explicit `financial_reviews` mapping freezes the exact graph, targets, costs
-and independent data snapshots. The existing integrity service decides admission.
-Only admitted graphs can publish forecasts; actual market/risk inputs in
-`portfolio` use the existing covariance, duplicate detection, shared hedge,
-execution and accounting services. No real strategy is currently admitted.
+Research requests up to three distinct hypotheses per pod at a time, repairs
+invalid proposals with their exact failures, and feeds measured returns, IC,
+uncertainty, attribution and training feature diagnostics into further rounds.
+The search targets at least five supported, distinct candidates per pod; it
+selects up to three for ownership using the same evidence criteria as funding.
+Renamed duplicates and valid but unsupported code do not satisfy the pool target.
+Each pod first plans several economic topics. The host explores each before
+tuning, compares refinements with their parents on common chronological windows,
+and continues branches that improve measured evidence. There is no campaign
+round ceiling. Exhausted branches and unresolved provider failures are recorded
+separately; neither the candidate count nor a time/call allowance forces acceptance.
 
-`python -m pod_platform.services.app` starts the fixed pod configured in `mcp`.
-Tools include paper discovery, multi-paper investigation/composition, alternative
-data discovery and stock-specific requests. Tool arguments cannot grant financial
-authority or choose a caller namespace. Utility scripts use matching config
-sections and accept settings mappings when embedded; they do not parse flags.
+Every new strategy declares its target cap band, GICS sectors/industries and
+optional observable filters, with an economic rationale. Fitting, diagnostics
+and trading use that same formation-time cohort. Each strategy chooses its
+recent model/evidence lookback and chronological evaluation window. Long-only
+proposals remain long-only. Adaptive training windows are robustness checks;
+final validation and test outcomes do not enter model feedback.
+Fitted forecasts may use agent-specified ridge or XGBoost models. Both refit
+monthly on settled labels within the declared cohort and lookback. XGBoost
+requires explicit features, regularization, tree parameters and a rank/return
+target; no fitted model is selected automatically.
+Scope and history declarations are mandatory for every proposal. A failed tweak
+returns for diagnosis and another defensible test. Empty cohorts report aggregate
+raw-feature ranges so that source-unit mistakes can be corrected explicitly.
 
-Verify with `python -m pytest final_v2/tests -q -p no:cacheprovider` and
-`ruff check final_v2/pod_platform final_v2/scripts final_v2/run.py`.
-Formatting uses 80 columns, Google docstring conventions and module-level imports.
-Private state is inside `final_v2/.pod_state`; the old root location is a
-compatibility link for immutable historical receipt paths. Shared competition
-inputs and credentials remain in the original repository data/local locations.
+An interrupted campaign can restore its topic frontier at the same data cutoff
+after its recorded agent programs are restored. Later monthly research can
+continue from a completed initial plan using a recorded per-pod research decision
+and concrete agent-proposed topics. Continuations retain earlier measured parents
+when revisiting a topic. New topics receive their own numerical evaluation.
+
+All model instructions live in [prompts.txt](prompts.txt). Callers read their named
+`@@ section` and supply any `{{field}}` values. Prompts are included in run hashes
+and saved source snapshots.
+
+Orders fill immediately in full at the first supplied observed quote on or after
+the decision date. Performance uses observed returns and posted cash interest.
+Portfolio limits, source timing, missing-data
+handling, and accounting reconciliation are enforced in the normal workflow.
+A successful run is research evidence, not a claim of admitted or investable alpha.
+
+Reports and regenerable caches are written under the configured `.pod_state`
+directory. API spending quotas and spending ledgers are not used. Provider rate
+limits, bounded retries, and request/response size limits remain transport rules.
+
+Development checks, tests, experiments, and diagnostic scripts belong in `/tmp`.
+The repository keeps the production workflow; see [AGENTS.md](AGENTS.md) for this
+working rule. Campaign details are in [docs/RESEARCH_CAMPAIGN.md](docs/RESEARCH_CAMPAIGN.md).

@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .pod_plans import construction_designs
+from .strategy_scope import scoped_design, scoped_panel
 
 
 def prepare_forecast(score, design):
@@ -26,7 +27,6 @@ def supported_target(
     maximum,
     weighting="score",
     prepared=None,
-    sizing_factors=None,
 ):
     """One supported, sign-preserving constructor for diagnostics and trading."""
     output = np.zeros(len(score), dtype=np.float32)
@@ -45,8 +45,6 @@ def supported_target(
     desired = (
         np.abs(alpha[chosen]) if weighting == "score" else np.ones(len(chosen))
     )
-    if sizing_factors is not None:
-        desired *= sizing_factors[chosen]
     if (
         desired[: len(longs)].sum() <= 1e-12
         or desired[len(longs) :].sum() <= 1e-12
@@ -65,7 +63,9 @@ def supported_target(
         value = desired[free] - local @ (np.linalg.pinv(local) @ desired[free])
         wrong = value * signs[free] < -1e-12
         if not wrong.any():
-            final[free] = value
+            # The projection can leave signed roundoff near zero. Restore the
+            # declared side exactly so a -1e-18 long cannot become a tiny short.
+            final[free] = np.where(value * signs[free] < 0, 0, value)
             break
         remaining = np.flatnonzero(free)
         free[remaining[wrong]] = False
@@ -91,6 +91,7 @@ def monthly_concentration(strategy, decisions, panel, market, settings):
     """
     if strategy.review != "monthly":
         return None
+    panel = scoped_panel(panel, strategy.universe)
     designs = construction_designs(panel, strategy.controls)
     by_month = {formation: score for _, (formation, score) in decisions.items()}
     prepared = {
@@ -164,15 +165,13 @@ def liquid_hedged_target(score, design, frame, settings, *, maximum):
     longs = indices[np.argsort(-values, kind="stable")][: maximum // 2]
     sectors = frame.gics.fillna("unknown").astype(str).str[:2].to_numpy()
     cap = frame.me.fillna(0).to_numpy(dtype=float)
-    adv = frame.dolvol_126d.fillna(0).to_numpy(dtype=float)
     eligible = (
         design.mask
-        & (cap >= settings["large_cap_borrow_threshold_usd"] / 1e6)
-        & (adv >= 20_000_000)
+        & (cap >= settings["liquid_hedge_min_market_cap_usd"] / 1e6)
     )
     eligible[longs] = False
     hedge = np.flatnonzero(eligible)
-    hedge = hedge[np.argsort(-adv[hedge], kind="stable")][: maximum // 2]
+    hedge = hedge[np.argsort(-cap[hedge], kind="stable")][: maximum // 2]
     if not len(hedge):
         return output
     # Allocate each long sector only when a matched liquid hedge exists. This
@@ -182,11 +181,6 @@ def liquid_hedged_target(score, design, frame, settings, *, maximum):
     if not len(longs):
         return output
     alpha_weight = np.ones(len(longs))
-    # Smooth capacity/cost construction: every ranked long remains eligible,
-    # while a tiny ADV name cannot absorb the same dollars as a liquid one.
-    alpha_weight *= np.minimum(
-        1, np.sqrt(np.maximum(adv[longs], 0) / 20_000_000)
-    )
     if alpha_weight.sum() <= 0:
         return output
     alpha_weight /= alpha_weight.sum()
@@ -214,31 +208,22 @@ def liquid_hedged_target(score, design, frame, settings, *, maximum):
 def construct_target(
     strategy, score, design, frame, settings, maximum, prepared=None
 ):
+    design = scoped_design(design, frame, strategy.universe)
+    if strategy.hedge_policy == "long_only":
+        output = np.zeros(len(score), dtype=np.float32)
+        longs = np.flatnonzero(design.mask & np.isfinite(score) & (score > 1e-12))
+        longs = longs[np.argsort(-score[longs], kind="stable")][:maximum]
+        if not len(longs):
+            return output
+        weights = score[longs].astype(float) if strategy.weighting == "score" else np.ones(len(longs))
+        weights /= weights.sum()
+        scale = min(1.0, settings["gross_limit"], settings["single_name_limit"] / weights.max())
+        output[longs] = weights * scale
+        return output
     if strategy.hedge_policy == "liquid_sector":
         return liquid_hedged_target(
             score, design, frame, settings, maximum=maximum
         )
-    sizing_factors = None
-    if strategy.construction in {"liquidity_tilt", "liquidity_borrow_tilt"}:
-        prepared = (
-            prepare_forecast(score, design) if prepared is None else prepared
-        )
-        indices = prepared[0]
-        adv = frame.dolvol_126d.fillna(0).to_numpy(float)[indices]
-        sizing_factors = np.clip(adv / 20_000_000, 0, 1)
-        if strategy.construction == "liquidity_borrow_tilt":
-            cap = frame.me.fillna(0).to_numpy(float)[indices] * 1e6
-            fees = np.where(
-                cap >= settings["large_cap_borrow_threshold_usd"],
-                settings["large_cap_borrow_bps"],
-                settings["other_borrow_bps"],
-            )
-            penalty = np.divide(
-                max(settings["large_cap_borrow_bps"], 1), np.maximum(fees, 1)
-            )
-            sizing_factors[prepared[2] < 0] *= np.minimum(
-                1, penalty[prepared[2] < 0]
-            )
     return supported_target(
         score,
         design,
@@ -246,5 +231,4 @@ def construct_target(
         maximum=maximum,
         weighting=strategy.weighting,
         prepared=prepared,
-        sizing_factors=sizing_factors,
     )

@@ -173,7 +173,7 @@ class ModelRegistry:
                 ToolResponse.failure(
                     summary=f"no eligible {role} checkpoint at {simulated_at.isoformat()}",
                     code=ErrorCode.ASOF_VIOLATION,
-                    stop_condition="Use the deterministic fallback; a release-gated route rejects checkpoints published after the simulated date.",
+                    stop_condition="Return unavailable: no checkpoint meets the simulated-date release policy.",
                 )
             )
         latest = max(candidates, key=lambda r: r.effective_start)

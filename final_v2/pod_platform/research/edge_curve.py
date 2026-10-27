@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .pod_plans import construction_designs, plan_signal
+from .pod_plans import construction_designs
 
 
 def mean_evidence(values):
@@ -44,17 +44,15 @@ def mean_evidence(values):
     }
 
 
-def signal_prefixes(plan, panel, *, signal=None):
+def signal_prefixes(plan, panel, *, signal):
     """Compare symmetric long/short tails for every available integer count.
 
     Future realized returns are used only to score a previously formed signal.
     Residual returns benchmark the declared controls; they are not forecasts,
-    executable portfolio returns or after-cost alpha. Short tails respect the
+    executable portfolio returns or alpha. Short tails respect the
     $500m formation floor. All supplied eligible stocks enter the ranking.
     """
     # Discover predictive strength before fitting entry/exit or book size.
-    if signal is None:
-        signal = plan_signal(plan, panel, apply_thresholds=False)
     designs = construction_designs(panel, plan.controls)
     rows, information = [], []
     for t, date in enumerate(panel.dates[:-1]):
@@ -64,7 +62,7 @@ def signal_prefixes(plan, panel, *, signal=None):
         # name after seeing the execution session's quote availability.
         valid = mask & np.isfinite(signal[t])
         indices = np.flatnonzero(valid)
-        if len(indices) < 5:
+        if len(indices) < 2:
             continue
         raw = panel.returns[t, indices].astype(float)
         if not np.isfinite(raw).all():
@@ -107,6 +105,17 @@ def signal_prefixes(plan, panel, *, signal=None):
         short = np.flatnonzero((forecasts < -1e-12) & shortable)
         long = long[np.argsort(-forecasts[long], kind="stable")]
         short = short[np.argsort(forecasts[short], kind="stable")]
+        if getattr(plan, "hedge_policy", None) == "long_only":
+            if len(long):
+                counts = np.arange(1, len(long) + 1)
+                rows.append(pd.DataFrame({"formation_date": date,
+                    "execution_date": panel.execution_dates[t],
+                    "settlement_date": panel.settlement_dates[t], "names": counts,
+                    "controlled_spread": np.cumsum(realized[long]) / counts,
+                    "gross_spread": np.cumsum(raw[long]) / counts,
+                    "controlled_long_mean": np.cumsum(realized[long]) / counts,
+                    "controlled_short_mean": np.zeros(len(long))}))
+            continue
         pairs = min(len(long), len(short))
         if pairs == 0:
             continue
@@ -202,11 +211,14 @@ def broad_positive_regions(curve, minimum_months=24):
     return regions
 
 
-def freeze_prefix_choice(candidates, cutoff, minimum_months=24):
+def freeze_prefix_choice(candidates, cutoff, minimum_months=24, *, lookback_months=None):
     """Select a broad supported prefix using only outcomes settled by cutoff."""
     eligible = []
     for identity, prefixes in candidates.items():
         prior = prefixes.loc[prefixes.settlement_date <= cutoff]
+        if lookback_months is not None:
+            settled = np.sort(prior.settlement_date.unique())[-lookback_months:]
+            prior = prior.loc[prior.settlement_date.isin(settled)]
         curve = summarize_prefixes(prior)
         regions = broad_positive_regions(curve, minimum_months)
         for region in regions:

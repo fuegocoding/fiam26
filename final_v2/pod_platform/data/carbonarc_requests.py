@@ -1,8 +1,8 @@
 """Host-bounded Carbon Arc extraction requests, receipts and research-only tables.
 
 A pod selects registered dataset/entity/metric IDs; it cannot supply a tool,
-question, URL, credential or path. Budgets count attempted calls (not guessed
-vendor dollar prices). No import/construction operation makes a network call.
+question, URL, credential or path. Receipts track request provenance without
+spending quotas. No import/construction operation makes a network call.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import asyncio
 import csv
 import datetime as dt
 import fcntl
-import importlib.util
 import json
 import math
 import re
@@ -47,14 +46,10 @@ CREATE TRIGGER IF NOT EXISTS carbon_request_no_delete BEFORE DELETE ON carbon_re
 
 
 class CarbonArcPolicy(StrictModel):
-    """Immutable host limits; analytical attempts default to zero."""
+    """Immutable response-size and requested-history limits."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     allow_remote: bool = False
-    max_analytical_calls: int = Field(default=0, ge=0, le=100)
-    max_metadata_calls: int = Field(default=20, ge=0, le=1000)
-    max_calls_per_pod: int = Field(default=3, ge=0, le=100)
-    max_requests: int = Field(default=100, ge=1, le=1000)
     max_rows: int = Field(default=5000, ge=1, le=20000)
     max_days: int = Field(default=366, ge=1, le=3660)
     max_response_bytes: int = Field(default=2_000_000, ge=1000, le=10_000_000)
@@ -276,12 +271,8 @@ class CarbonArcOAuthTransport:
             "search_insights",
         ):
             raise ValueError("unreviewed Carbon Arc tool")
-        spec = importlib.util.spec_from_file_location(
-            "carbonarc_request_host_transport",
-            self.root / "final_v2/scripts/carbonarc/download.py",
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        from .carbonarc_oauth import connect
+
         token = None
         env_file = self.root / "local/carbonarc-api.env"
         if env_file.is_file():
@@ -308,7 +299,7 @@ class CarbonArcOAuthTransport:
         )
 
         async def call():
-            async with module.connect(connection, interactive=False) as session:
+            async with connect(connection, interactive=False) as session:
                 return (
                     await session.call_tool(tool_name, arguments)
                 ).model_dump(mode="json", by_alias=True)
@@ -406,7 +397,7 @@ class CarbonArcRequests:
     def discover_stock(
         self, namespace, request, *, retry_failed=False, max_attempts=2
     ):
-        """Discover entities and metrics chosen by a pod, charging free-call caps."""
+        """Discover entities and metrics chosen by a pod and retain provenance."""
         _namespace(namespace)
         request = CarbonArcSearch.model_validate(request)
         if any(
@@ -456,15 +447,6 @@ class CarbonArcRequests:
                 if charged and retry_failed and attempt + 1 < max_attempts:
                     continue
                 break
-            used = [
-                json.loads(r[0])
-                for r in conn.execute(
-                    "SELECT payload FROM carbon_request_events WHERE kind='reservation'"
-                )
-            ]
-            count = sum(
-                r.get("calls", 1) for r in used if r["call_kind"] == "metadata"
-            )
             if charged:
                 return {
                     "status": "uncertain",
@@ -473,11 +455,6 @@ class CarbonArcRequests:
                 }
             if not self.policy.allow_remote or self.transport is None:
                 return {"status": "remote_not_configured", "discovery_id": key}
-            if (
-                count + 3 > self.policy.max_metadata_calls
-                or len(used) + 3 > self.policy.max_requests
-            ):
-                return {"status": "budget_exhausted", "discovery_id": key}
             self._put(
                 conn,
                 "reserve:" + key,
@@ -506,7 +483,7 @@ class CarbonArcRequests:
                     or len(json.dumps(raw)) > self.policy.max_response_bytes
                 ):
                     raise ValueError(
-                        "Provider discovery failed or exceeded the response budget."
+                        "Provider discovery failed or exceeded the response size limit."
                     )
                 answers[kind] = response.get("data", [])[:10]
             result = {
@@ -614,14 +591,14 @@ class CarbonArcRequests:
         )
 
     def describe(self, namespace, capability_id):
-        """Retrieve documented metadata within the frozen free-call allowance."""
+        """Retrieve documented metadata for the caller's registered capability."""
         capability = self._capability(namespace, capability_id)
         if capability is None:
             raise ValueError("unknown capability in caller namespace")
         return self._execute(namespace, capability, None, "describe")
 
     def request(self, namespace, request):
-        """Extract a registered native series, reusing a counted identical result."""
+        """Extract a registered native series, reusing an identical prior result."""
         request = CarbonArcRequest.model_validate(request)
         capability = self._capability(namespace, request.capability_id)
         if capability is None:
@@ -631,7 +608,7 @@ class CarbonArcRequests:
             or (request.end - request.start).days + 1 > self.policy.max_days
         ):
             raise ValueError(
-                "request is future-dated or exceeds the frozen window budget"
+                "request is future-dated or exceeds the requested history limit"
             )
         return self._execute(namespace, capability, request, "timeseries")
 
@@ -678,12 +655,6 @@ class CarbonArcRequests:
                 ).fetchone()
                 is not None
             )
-            reservations = [
-                json.loads(r[0])
-                for r in conn.execute(
-                    "SELECT payload FROM carbon_request_events WHERE kind='reservation'"
-                )
-            ]
             refused = None
             if cap.access == "blocked":
                 refused = "entitlement_blocked"
@@ -691,31 +662,6 @@ class CarbonArcRequests:
                 not self.policy.allow_remote or self.transport is None
             ):
                 refused = "remote_not_configured"
-            elif not interrupted:
-                used = sum(
-                    r.get("calls", 1)
-                    for r in reservations
-                    if r["call_kind"] == call_kind
-                )
-                pod_used = sum(
-                    r["call_kind"] == "analytical"
-                    and r["namespace"] == namespace
-                    for r in reservations
-                )
-                limit = (
-                    self.policy.max_metadata_calls
-                    if call_kind == "metadata"
-                    else self.policy.max_analytical_calls
-                )
-                if (
-                    len(reservations) >= self.policy.max_requests
-                    or (call_kind != "local" and used >= limit)
-                    or (
-                        call_kind == "analytical"
-                        and pod_used >= self.policy.max_calls_per_pod
-                    )
-                ):
-                    refused = "budget_exhausted"
             if not refused and not interrupted:
                 self._put(
                     conn,
@@ -769,7 +715,7 @@ class CarbonArcRequests:
                 if len(body.encode()) > self.policy.max_response_bytes:
                     receipt.update(
                         status="oversized_response",
-                        reason="Response exceeds immutable host byte budget.",
+                        reason="Response exceeds immutable host size limit.",
                     )
                 else:
                     directory = self.state_dir / "artifacts" / request_id
@@ -839,7 +785,7 @@ class CarbonArcRequests:
             diagnostic,
             re.I,
         ):
-            return "vendor_budget_blocked"
+            return "provider_credit_unavailable"
         if response.get("isError") or meta.get("error"):
             return "provider_error"
         frameworks = meta.get("frameworks") or []
@@ -905,7 +851,7 @@ class CarbonArcRequests:
         if not isinstance(rows, list) or not rows:
             return {"status": "empty_response"}
         if len(rows) > self.policy.max_rows:
-            return {"status": "row_budget_exceeded"}
+            return {"status": "response_row_limit_exceeded"}
         selected, keys, missing = [], set(), 0
         for raw in rows:
             if (

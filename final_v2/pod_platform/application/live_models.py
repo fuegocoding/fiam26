@@ -1,4 +1,4 @@
-"""Construct paced, globally budgeted model providers from runtime settings."""
+"""Construct paced model providers with transient-error retries."""
 
 from __future__ import annotations
 
@@ -11,19 +11,18 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ..agents.budgets import PersistentCallBudget
 from ..agents.provider import (
     LLMProvider,
     LLMRequest,
     LLMResponse,
     OpenAICompatibleProvider,
+    ClaudeCodeProvider,
     ProviderError,
-    estimate_tokens,
     urllib_transport,
     utc_now,
 )
 from .configuration import config_path
-from .research_loop import RoleProviders
+from ..agents.roles import RoleProviders
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -93,20 +92,19 @@ class _UnconfiguredProvider:
         raise ProviderError("Online model providers are disabled.")
 
 
-class _BudgetedProvider:
-    """Charge a shared durable budget before every uncached HTTP completion."""
+class _RetryingProvider:
+    """Retry transient provider failures without imposing spending quotas."""
 
     def __init__(
         self,
         provider: LLMProvider,
-        budget: PersistentCallBudget,
         *,
         retry_attempts: int = 0,
         retry_delay_seconds: float = 30,
         sleep: Callable[[float], None] = time.sleep,
     ):
         self.provider = provider
-        self.budget = budget
+        self.calls = 0
         self.name = provider.name
         self.model = provider.model
         self.is_mock = provider.is_mock
@@ -118,11 +116,10 @@ class _BudgetedProvider:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         for attempt in range(self.retry_attempts + 1):
-            reservation = self.budget.reserve(estimate_tokens(request))
+            self.calls += 1
             try:
                 response = self.provider.complete(request)
             except BaseException as exc:
-                self.budget.settle(reservation, None)
                 if (
                     not isinstance(exc, ProviderError)
                     or not exc.retryable
@@ -131,39 +128,15 @@ class _BudgetedProvider:
                     raise
                 self.sleep(min(60, self.retry_delay_seconds * 2**attempt))
                 continue
-            self.budget.settle(reservation, response.total_tokens)
             return response
         raise AssertionError("Provider retry loop exhausted without a result")
 
 
 def create_live_models(
     settings: Mapping[str, Any],
-    state: str | Path,
-    runid: str,
     clock: Callable[[], dt.datetime] = utc_now,
-) -> tuple[RoleProviders, PersistentCallBudget]:
-    """Build explicit role providers backed by one persistent global budget.
-
-    All roles and pods share one account stored at the configured ``budget_path``
-    (or ``state/global_llm_budget.sqlite``). Its cycle defaults to ``runid`` and
-    may use a stable configured ``budget_id`` across runs. Environment file
-    values stay in private per-provider mappings and are never copied into
-    process globals or returned in metadata.
-    """
-    budget_path = config_path(
-        settings.get("budget_path", Path(state) / "global_llm_budget.sqlite")
-    )
-    budget_cycle = str(settings.get("budget_id", runid))
-    budget = PersistentCallBudget(
-        budget_path,
-        budget_id="global_llm",
-        pod="*",
-        cycle=budget_cycle,
-        max_calls=int(settings.get("global_max_calls", 24)),
-        max_tokens=int(settings.get("global_max_tokens", 1_000_000)),
-        raise_limits=bool(settings.get("raise_budget_limits", False)),
-        clock=clock,
-    )
+) -> RoleProviders:
+    """Build explicit providers; credentials remain in private mappings."""
     roles = settings.get("roles")
     if not isinstance(roles, Mapping):
         raise ValueError("models.roles must be an object")
@@ -193,6 +166,13 @@ def create_live_models(
         assert isinstance(role, Mapping)
         if not online:
             provider = _UnconfiguredProvider(role_name)
+        elif role.get("provider") == "claude_code":
+            provider = ClaudeCodeProvider(
+                model=role.get("model"),
+                executable=str(role.get("executable", "claude")),
+                timeout_s=float(settings.get("generation", {}).get("timeout_s", 180)),
+                clock=clock,
+            )
         else:
             if role.get("provider") != "openai":
                 raise ValueError(
@@ -209,9 +189,8 @@ def create_live_models(
                 reasoning_effort=role.get("reasoning_effort"),
                 clock=clock,
             )
-        providers[role_name] = _BudgetedProvider(
+        providers[role_name] = _RetryingProvider(
             provider,
-            budget,
             retry_attempts=int(settings.get("retry_attempts", 0)),
             retry_delay_seconds=float(settings.get("retry_delay_seconds", 30)),
         )
@@ -221,4 +200,4 @@ def create_live_models(
         extractor=providers["extractor"],
     )
     result.identities()
-    return result, budget
+    return result

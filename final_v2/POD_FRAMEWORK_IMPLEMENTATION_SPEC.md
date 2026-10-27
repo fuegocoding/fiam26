@@ -1,3 +1,7 @@
+> Current runtime: the candidate pool starts empty, strategies come only from evaluated agent responses, and API spending quotas are removed. No deterministic trading defaults or fixed-rule counterfactuals from this background document apply.
+
+> Implementation scope: `run.py` is the sole entrypoint. This document records design background; the active campaign is described in README.md. Standalone tests, checks and experiments belong in `/tmp` under the user's current instructions.
+
 # Stochastic Pirates: Complete Pod Framework and Implementation Specification
 
 **Version:** 1.1  
@@ -108,9 +112,9 @@ The following require implementation-time configuration before evaluation:
 
 - Risk tolerances tighter than the official limits.
 - Portfolio breadth within the allowed range.
-- Research budgets and candidate quotas.
+- Research evidence targets and search rounds.
 - Model families, lookbacks, refit schedules, and numerical promotion rules.
-- Cost parameters and the treatment of missing market data.
+- The treatment of missing market data.
 - Agent models, release dates, and documented training cutoffs.
 
 Every numerical default in this document is a proposed build choice unless explicitly identified as an official constraint or a directly inspected catalogue fact.
@@ -172,7 +176,7 @@ Judge the platform on four separate dimensions:
 
 1. **Forecast quality:** Does it predict the declared target better than an appropriate baseline?
 2. **Investment quality:** Does the forecast identify executable residual returns?
-3. **Portfolio quality:** Does the combined book improve after costs and under the mandate?
+3. **Portfolio quality:** Does the combined book improve under the mandate?
 4. **Research quality:** Can another person reproduce the result and see all attempted alternatives?
 
 A model may pass the first dimension and fail the others. The system must report that outcome rather than forcing it into production.
@@ -241,10 +245,10 @@ Arrows represent permitted information flows, not permission to inspect another 
 | Literature and Methods | Evidence retrieval, replication specifications, method implementations | Treat a paper's result as proof on our universe |
 | Experiment Engineering | Implement and run registered experiments | Change specifications silently after seeing results |
 | Research Integrity | Evaluation access, registries, admission decisions, audit | Generate favorable results for a preferred strategy |
-| Allocation | Forecast integration, target holdings, pod risk budgets | Trade directly or overrule Risk's hard envelope |
+| Allocation | Forecast integration, target holdings, pod risk limits | Trade directly or overrule Risk's hard envelope |
 | Risk | Independent exposure review, stress, limits, emergency policy | Rewrite a strategy's economic thesis or silently invent alpha forecasts |
-| Execution | Order construction, timing, partial fills, trade-cost estimates | Invent a strategic view or change approved risk limits |
-| Accounting | Positions, cash, fees, NAV, returns, attribution inputs | Substitute targets for actual holdings |
+| Execution | Order construction, timing, partial fills | Invent a strategic view or change approved risk limits |
+| Accounting | Positions, cash, NAV, returns, attribution inputs | Substitute targets for actual holdings |
 
 ### 3.3 Central research support and strategy isolation
 
@@ -389,7 +393,7 @@ An unsigned or ambiguous event label does not automatically supply a direction.
 
 **Indicative horizons:** Several weeks to several months. The final implementation must still comply with the permitted rebalance frequency.
 
-**Cheapest baselines:** Sector-relative value, quality, profitability, and investment controls using the same tradable universe and costs.
+**Cheapest baselines:** Sector-relative value, quality, profitability, and investment controls using the same tradable universe.
 
 **Admission standard:** Must establish value beyond simply repackaging those common styles. Existing historical failures of panel-based styles are evidence to consider, not a prohibition on all future research.
 
@@ -420,7 +424,7 @@ Return targets are allowed for this strategy. Requiring every model to forecast 
 
 **Indicative horizons:** Days to weeks.
 
-**Cheapest baselines:** Lagged returns, sector/industry momentum, simple reversal, and liquidity-conditioned versions under identical costs.
+**Cheapest baselines:** Lagged returns, sector/industry momentum, simple reversal, and liquidity-conditioned versions.
 
 **Typical failure modes:** Market microstructure artifacts, same-day return leakage, untradeable turnover, stale ownership snapshots, inferred flows mistaken for observed transactions.
 
@@ -558,7 +562,7 @@ Use a gateway with:
 - Dataset and evaluation-partition permissions.
 - Input schemas.
 - Output schemas and artifact references.
-- Query limits, provider budgets, and cache policy.
+- Provider rate limits and cache policy.
 - Correlation IDs linking tool calls to a hypothesis, experiment, or decision.
 
 Load detailed tool groups on demand. Do not give every agent hundreds of almost identical dataset-specific tools.
@@ -594,7 +598,7 @@ The names below are **interfaces to implement**, not claims about tools already 
 | `forecasts.publish` | admitted model version, forecast batch | Validated immutable publication ID |
 | `portfolio.propose` | published forecast set, current holdings | CIO target artifact and construction diagnostics |
 | `risk.review` | proposed/actual book, risk snapshot | Limit results, stress, review decision, remedy constraints |
-| `execution.plan` | reviewed target, actual book, liquidity snapshot | Orders, schedules, expected costs, unresolved feasibility |
+| `execution.plan` | reviewed target, actual book, liquidity snapshot | Orders, schedules, unresolved feasibility |
 | `decisions.explain` | position/decision/date | Evidence-linked historical decision dossier |
 
 Separate service ownership from tool visibility. For example, a strategy may request its diagnostic report but cannot invoke CIO allocation with arbitrary rival forecasts.
@@ -684,7 +688,7 @@ Use keyword and semantic retrieval together. An embedding match is a discovery a
 | Ownership | 13F, 13D/G, fund holdings, common owners | Concentration, neglect, institutional positioning |
 | Flows | ETF creations/redemptions, fund flows, index changes | Mechanical demand and potential price pressure |
 | Insiders/governance | Form 4, management changes, votes, compensation | Alignment, governance transitions, event interpretation |
-| Shorting constraints | Borrow cost, utilization, recalls, short interest | Short eligibility, implementation risk, crowding |
+| Shorting constraints | Lendable supply, utilization, recalls, short interest | Short eligibility, implementation risk, crowding |
 | Derivatives | Option prices, skew, term structure, open interest | Uncertainty and positioning proxies |
 | Credit/capital structure | Debt prices, maturities, refinancing, issuance | Financing fragility and credit/equity disagreement |
 | Demand | Card spend, traffic, transactions, app usage | Revenue and customer behavior |
@@ -1032,7 +1036,7 @@ Verified examples at design time:
 - arXiv official API documentation: `https://info.arxiv.org/help/api/user-manual.html`.
 - Community arXiv MCP example: `https://github.com/blazickjp/arxiv-mcp-server`.
 
-These are integration options. This document does not install them or certify a third-party implementation. Verify current authentication, budgets, schemas, and repository behavior during implementation.
+These are integration options. This document does not install them or certify a third-party implementation. Verify current authentication, rate limits, schemas, and repository behavior during implementation.
 
 ### 10.2 Paper retrieval pipeline
 
@@ -1246,7 +1250,6 @@ Every serious candidate needs a record of:
 - A competing economic explanation.
 - Timing sensitivity.
 - Coverage sensitivity.
-- Cost sensitivity.
 - Incremental contribution versus the current authorized baseline.
 
 The challenge is substantive. A second agent saying “looks sound” is not negative evidence.
@@ -1276,7 +1279,6 @@ Do not retrain or redesign automatically after every loss.
 |---|---|
 | Target forecast is wrong | Missing measurement, wrong relationship, or inadequate method? |
 | Target forecast is right, returns are absent | Already priced, wrong horizon, or wrong return bridge? |
-| Gross returns work, net returns fail | Turnover, timing, capacity, borrow, or cost model? |
 | Standalone result adds little | Duplicate information or conflicting construction? |
 | Performance changes with coverage | Mapping, selection, survivorship, or composition drift? |
 | P&L arrives before permissible entry | Timing defect or non-executable effect? |
@@ -1299,21 +1301,10 @@ Each item records:
 - Decision deadline.
 - What would change if the experiment succeeds or fails.
 
-### 12.4 Research budgets
+### 12.4 Research termination
 
-Budget separately:
-
-- LLM calls/tokens.
-- Provider queries and credits.
-- CPU/GPU hours.
-- Human review.
-- Statistical exposure to development and check data.
-
-The budget is finite per research cycle. Reserve work for simple baselines, challenges, and replication instead of spending everything on new candidates.
-
-A possible initial quota is a small fixed number of candidates per mechanism family and cycle. The team must set and freeze the actual counts before a research run.
-
-Do not claim an unmeasured “expected value of information” number. Start with auditable qualitative priorities and measured resource costs.
+Research ends on evidence targets or configured rounds. API spending quotas and
+spending ledgers are not part of the runtime. Provider rate limits remain.
 
 ### 12.5 Learning from failure
 
@@ -1332,7 +1323,7 @@ A retry with changed data, target, sample, timing, or model is a new variant. In
 
 Return sanitized own-strategy feedback:
 
-- Contribution after implementation costs.
+- Contribution to the combined book.
 - Forecasts that became holdings and those that did not.
 - Capacity/risk constraints that blocked allocation.
 - Broad redundancy or concentration category.
@@ -1347,7 +1338,7 @@ Pause a research line when:
 - Required data cannot be made historically usable.
 - The effect exists only outside the tradable universe.
 - The simple baseline explains the proposed improvement.
-- The declared variant budget is exhausted.
+- The configured research rounds finish.
 - The mechanism is unsupported by the observed field semantics.
 
 Retain the record so another agent does not rediscover the same failed line under different wording.
@@ -1368,25 +1359,40 @@ Registration must fix:
 - Entry/holding/exit rules.
 - Baselines.
 - Primary metric.
-- Cost, borrow, and liquidity assumptions.
+- Borrow availability and liquidity assumptions.
 - Statistical comparison and dependence treatment.
 - Promotion and failure conditions.
-- Variant budget and sensitivity set.
+- Research rounds and sensitivity set.
 
 A registered experiment is immutable. Amendments create new IDs linked to parents and state what was learned.
 
 ### 13.2 Partition plan
 
-Proposed historical partitions:
+Initial research partitions (updated by the team's October 25 instruction):
 
 | Partition | Dates | Purpose |
 |---|---|---|
-| Design | 2015–2018 | Feature/model design and parameter selection |
-| Check | 2019–2020 | Registered limited evaluation |
+| Design | 2015–2019 | Explore the full available development history |
+| Validation | 2020 | Freeze graphs and policy before one reserved evaluation |
 | Historical replay | 2021–August 2026 | Frozen chronological portfolio replay; label as previously seen |
 | Prospective | Outcomes after a genuine commitment time | Forward evidence where inputs and outcomes are available |
 
 The team has already inspected portions of the pre-2021 history as well. Do not relabel any previously used interval as untouched. Research Integrity records actual exposure, not just intended split names.
+
+Existing 2015–2018 design and 2019–2020 check grants retain their original
+boundaries and exposure ledgers. The new split requires a new host-authorized
+manifest and run. Target maturity determines the purge at both boundaries;
+three-month targets cannot use late-2019 training formations or late-2020
+validation formations whose labels resolve in the following partition.
+
+Development reports include all attempted variants, return and turnover,
+drawdown and tail losses, probabilistic Sharpe, Deflated Sharpe,
+dependence-aware Sharpe uncertainty and subperiod stability. Deflated Sharpe
+requires the actual same-frequency trial Sharpe
+distribution and a complete attempt count; unavailable trials remain visible
+and make the estimate unavailable. These diagnostics do not authorize trading.
+Changing a strategy after reading validation outcomes makes those outcomes
+development evidence and requires fresh validation for the amended strategy.
 
 Within development, use blocked chronological folds and declared refit schedules. Company holdouts can be supplementary but share market history; they are weaker than a new time period and can leak through related companies.
 
@@ -1425,7 +1431,7 @@ Each candidate faces appropriate comparisons:
 2. A simple public-information forecast.
 3. Each component alone for a proposed combination.
 4. The current admitted model in the same domain.
-5. A tradable portfolio using identical timing, costs, and constraints.
+5. A tradable portfolio using identical timing and constraints.
 6. The combined fund with and without the candidate.
 
 Do not compare a candidate's liquid, sector-neutral book with an unconstrained baseline on a different universe.
@@ -1438,8 +1444,8 @@ Do not compare a candidate's liquid, sector-neutral book with an unconstrained b
 | Predict an event | Proper scoring rule, calibration, precision/recall at usable coverage |
 | Rank investments | Rank IC and tradable-tail spreads |
 | Improve return magnitude estimates | Calibration against realized horizon returns |
-| Improve the portfolio | Paired net returns, risk, drawdowns, turnover, capacity |
-| Improve execution | Implementation cost and foregone-alpha comparison on the same desired trades |
+| Improve the portfolio | Paired returns, risk, drawdowns, turnover, capacity |
+| Improve execution | Fill-rate and foregone-alpha comparison on the same desired trades |
 
 R-squared, ranking quality, and profitable portfolio returns are different properties.
 
@@ -1479,13 +1485,13 @@ Examples:
 - Missingness-only features.
 - Timing shifts that should remove the economic interpretation.
 - Placebo peer links matched on simple group structure.
-- A simple random/grammar candidate generator under comparable budget.
+- A simple random/grammar candidate generator under comparable research rounds.
 - Synthetic planted signals to test whether the machinery has power.
 - Deliberately future-dated features that the eligibility checks must reject.
 
 Design permutations or shifts to preserve relevant dependence where possible. A naive shuffle can create an unrealistically easy null.
 
-Placebo portfolio returns need not be zero after turnover and borrow costs. Compare candidates with matched controls and account for both gross and net behavior.
+Compare candidates with matched placebo controls.
 
 ### 13.10 Promotion rule
 
@@ -1561,7 +1567,7 @@ Predefine:
 - Data-quality suspension conditions.
 - Forecast calibration checks.
 - Contribution and capacity diagnostics.
-- Risk budget reduction policy.
+- Risk limit reduction policy.
 - Model review/refit dates.
 
 Differentiate a data incident, a risk emergency, ordinary forecast noise, and evidence that the economic mechanism has changed.
@@ -1607,7 +1613,7 @@ Allocation needs:
 
 Use basis points or decimal returns consistently. Store units explicitly.
 
-For a long-return forecast `alpha = -0.004`, a short position has positive gross expected contribution before borrow, costs, and risk. Do not reverse the sign twice.
+For a long-return forecast `alpha = -0.004`, a short position has positive expected contribution before risk. Do not reverse the sign twice.
 
 ### 15.3 Bridge from beliefs to returns
 
@@ -1676,7 +1682,7 @@ Classify disagreement:
 - Different valuation of the same forecast.
 - Different expected timing.
 - Different data reliability.
-- Different exposure/cost consequences.
+- Different exposure consequences.
 
 Allocation can respond through size, timing, or abstention. It should not resolve all disagreements by averaging numerical scores with incompatible meanings.
 
@@ -1702,8 +1708,8 @@ At each allocation decision, the CIO receives:
 - Approved security eligibility.
 - Risk model exposures and covariance estimates.
 - Risk's current envelope.
-- Expected trade costs, borrow, and liquidity.
-- Existing model/strategy risk budgets.
+- Borrow availability and liquidity.
+- Existing model/strategy risk limits.
 
 It does not need access to private strategy code or experimental feedback.
 
@@ -1715,8 +1721,6 @@ A practical initial objective is:
 maximize:
     expected excess return over horizon H
   - risk penalty over H
-  - expected cost of changing the current portfolio
-  - expected borrow/funding cost over H
 
 subject to:
     official limits
@@ -1729,20 +1733,15 @@ Illustrative mathematical form:
 
 ```text
 max_w  a_H' w - (lambda / 2) w' Sigma_H w
-       - TC_H(w - w_pre) - Borrow_H(w) - Funding_H(w)
 ```
 
 Here:
 
 - `a_H` is a signed excess-return forecast over horizon H.
 - `Sigma_H` is covariance over the same horizon.
-- `w_pre` is the marked portfolio carried into the decision.
-- Costs are percentages of NAV, with consistent units and horizon.
 - Risk aversion and penalties are development choices frozen before evaluation.
 
 Do not claim this objective directly maximizes the competition information ratio. Evaluate the actual resulting fund against its benchmark.
-
-Transaction/borrow parameters belong in construction and execution, not inside the economic target label or belief forecast.
 
 ### 16.3 Covariance and exposures
 
@@ -1780,7 +1779,7 @@ The risk model must preserve actual beta signs. Missing or unreliable exposures 
 
 Arcana can validate exposures and attribution. Use its historical analytics for formation only if account access and point-in-time semantics are established. An ex-post risk report is not automatically an eligible historical input.
 
-### 16.4 Strategy budgets
+### 16.4 Strategy limits
 
 A defensible initial policy is conservative risk allocation across admitted strategies, with caps reflecting capacity and evidence quality.
 
@@ -1819,7 +1818,7 @@ Configure beta, sector/industry, style, issuer, liquidity, event, and strategy l
 
 For example, a tighter net band than ±50% is a possible internal policy. It must be stated as our choice rather than an official rule.
 
-Use tolerances and solver feasibility checks. “Neutralize scores, then rescale” is not sufficient: later sizing, caps, costs, and partial fills can reintroduce exposures.
+Use tolerances and solver feasibility checks. “Neutralize scores, then rescale” is not sufficient: later sizing, caps, and partial fills can reintroduce exposures.
 
 Recheck final target weights after all modifications.
 
@@ -1843,7 +1842,7 @@ Hedges must be permitted instruments and included in:
 
 - Position count.
 - Gross/net exposure.
-- Costs and turnover.
+- Turnover.
 - Capacity.
 - Contribution reporting.
 
@@ -1869,7 +1868,7 @@ A holding-size screen at inception is not sufficient. Success increases position
 
 Evaluate an admitted strategy through:
 
-- Its shadow/virtual book under declared costs.
+- Its shadow/virtual book.
 - Its forecasts' use in the actual fund.
 - A fund-level removal comparison, rerunning the same frozen construction policy.
 - Exposure and stress changes.
@@ -1925,7 +1924,7 @@ Risk checks:
 - After target construction.
 - After agent recommendations.
 - During order planning.
-- After simulated/actual fills and costs.
+- After simulated/actual fills.
 - At each observed portfolio mark.
 
 Market moves can cause a breach between observations. Use headroom and prompt remediation, but report observed breaches honestly. A system cannot guarantee continuous neutrality through unobserved gaps.
@@ -1955,8 +1954,8 @@ Include:
 - Industry shocks.
 - Earnings disappointment or surprise clusters.
 - Correlated short squeezes.
-- Lower volume and wider spreads.
-- Increased borrow fees and restricted availability.
+- Lower volume and liquidity.
+- Restricted borrow availability.
 - Source outage or stale-feed conditions.
 - Crowded liquidation.
 
@@ -1970,8 +1969,8 @@ Passing the market-cap rule does not establish a locate or actual lendable suppl
 
 Where security/date-level borrow data is absent:
 
-- Use a disclosed fee proxy.
-- Stress availability and fee assumptions.
+- Use a disclosed availability proxy (market-cap and ADV inventory caps).
+- Stress availability assumptions.
 - Report the omission.
 - Do not claim executable locates.
 
@@ -2002,162 +2001,45 @@ A strategy agent cannot appeal by changing its confidence estimate after seeing 
 
 ---
 
-## 18. Execution and liquidity research
+## 18. Orders at observed prices
 
-### 18.1 Execution inputs
+### 18.1 Inputs and fill convention
 
-Execution receives:
+The order path receives reviewed target weights, current quantities and cash,
+the decision timestamp, and the supplied observed price for each security.
+Every nonzero target change fills immediately and in full at that price.
+Quantity equals signed order dollars divided by the observed price.
+A missing or invalid price cannot supply an invented transaction.
 
-- Reviewed target weights.
-- Current actual quantities, cash, and pending orders.
-- Decision and eligibility timestamps.
-- Price/liquidity forecasts known before the trade.
-- Alpha horizon/decay metadata.
-- Risk limits and allowed trading instruments.
-- Cost-model version.
+Orders use the supplied observed price and fill in full.
 
-It produces orders and fills, not a replacement set of economic forecasts.
+### 18.2 Timing and accounting
 
-### 18.2 Fixed-rule execution baseline
+Use only information available at the decision. A fill earns returns after its
+observed price timestamp; it does not earn the return leading into that price.
+After each complete batch, update quantities and cash, recompute NAV, and check
+portfolio limits. Forecast review frequency and holding periods remain strategy
+choices; they do not introduce modeled fill delays.
 
-Implement a transparent baseline with configurable:
+### 18.3 Portfolio limits
 
-- Incumbent retention/no-trade region.
-- Minimum economically worthwhile resize.
-- Entry edge compared with expected round-trip implementation cost.
-- Daily participation limit.
-- Order expiry.
-- Treatment of partially completed entries and exits.
-- Risk-reducing order priority.
+Enforce the mandate's gross, net, name-count and per-name limits in construction
+and risk review. The $500 million short market-cap floor remains a mandate rule.
+Trading volume and assumed lendable inventory do not change fills or capital
+allocation. Portfolio risk limits remain independent of this fill convention.
 
-The older proposal of 10% ADV participation and skipping resizes below 25% of target can be initial research configurations, but neither is an official requirement or established optimum.
+### 18.4 Initialization, exits and reversals
 
-### 18.3 Cost model
+Establish initial positions using the same full observed-price convention.
+An exit closes in full at the observed price. A reversal closes the old position
+and establishes the eligible opposite position in the same batch. Mark remaining
+positions consistently at the evaluation endpoint. Missing-return handling uses
+the declared last-observed-price exit convention.
 
-An illustrative model:
+### 18.5 Agent comparison
 
-```text
-cost_rate_i =
-    half_spread_i
-  + eta * sigma_daily_i * sqrt(abs(order_dollars_i) / ADV_dollars_i)
-  + explicit_fees_i
-
-NAV_cost_i = abs(order_dollars_i) / NAV * cost_rate_i
-```
-
-Requirements:
-
-- All inputs available before the decision.
-- Volatility in decimal return units.
-- Order and ADV in the same currency and units.
-- No unlimited order size hidden behind a capped impact rate.
-- Orders exceeding participation limits are split into feasible daily fills.
-- Sell/cover trades pay costs too.
-- Sensitivities include materially worse implementation.
-
-Half-spread tiers, impact coefficient, and fee schedules are proposed assumptions to configure and disclose. They are not observed historical execution.
-
-### 18.4 Daily data limitations
-
-With only close-to-close data:
-
-- Use the official close execution convention.
-- Model fills and costs as assumptions.
-- Do not claim order-book realism or intraday execution accuracy.
-- Do not use realized same-day full volume to determine a trade that was supposedly committed before that volume was known.
-
-Use realized volume afterward to evaluate a liquidity forecast, not to leak future capacity into the order plan.
-
-### 18.5 Liquidity forecasting
-
-A later execution experiment can forecast volume or other measurable liquidity from past observations and known event context.
-
-Compare:
-
-1. Static/trailing-liquidity baseline.
-2. Liquidity-aware deterministic planning.
-3. The same planner with an exception-triggered agent.
-
-Hold economic forecasts and initial desired trades constant where possible. Report foregone alpha as well as cost savings.
-
-The research motivation is supported by Goyenko et al., “Trading Volume Alpha,” which studies the portfolio value of volume prediction. It does not establish our own attainable benefit.
-
-### 18.6 Alpha decay and trading frequency
-
-Each strategy measures the payoff after permissible entry across a small declared horizon set.
-
-Execution considers:
-
-- Remaining expected payoff.
-- Expected cost.
-- Time required to build the position.
-- Risk of missing the event.
-- Incremental turnover.
-
-Do not choose daily trading solely because daily data exists.
-
-### 18.7 Partial fills and the actual book
-
-The target book is not the actual book.
-
-After each fill:
-
-1. Update quantities and cash.
-2. Charge modeled cost.
-3. Recompute NAV and weights.
-4. Check official and internal limits.
-5. Update pending orders.
-6. Verify name count and short eligibility.
-
-Uneven fills can introduce directional or sector exposure. The planner must jointly schedule trades or reduce the corresponding heavy side under a documented policy.
-
-No forced trade may assume impossible liquidity simply to make the end-of-day report look compliant.
-
-### 18.8 Initialization
-
-At the evaluation start:
-
-- Use forecasts available before the first formation cutoff.
-- Establish actual initial positions using the same fill/cost rules.
-- Charge entry costs.
-- Satisfy the position-count rule with genuine positions.
-- Allow lower gross if needed for feasible initial deployment.
-
-Do not begin with a cost-free, fully invested target portfolio that would have required several unreported days to build.
-
-The initialization convention must align with the official start of the NAV series. If the organizer supplies an explicit inception convention, it overrides our proposed one.
-
-For a closing-batch simulation, validate the initial book after the entire simultaneous inception fill batch and its costs. This is an explicit initialization convention, not permission to report a multi-day sub-200-name buildup as compliant. Subsequent entry/exit sequencing must preserve the observed name-count limits; open valid replacements before completing exits where needed and feasible.
-
-### 18.9 Exits, reversals, and final liquidation
-
-An exit can take several days. Keep its returns and costs until the position actually closes.
-
-A long-to-short reversal contains an exit plus a new short entry, with fresh eligibility checks.
-
-At the evaluation endpoint:
-
-- Mark remaining holdings consistently.
-- Report ending NAV under the required convention.
-- Also disclose a liquidation-cost estimate or a declared terminal-unwind sensitivity.
-- Do not erase pending orders or liabilities.
-
-### 18.10 Agent twin
-
-The agent may, within a registered scope:
-
-- Skip or defer a discretionary resize.
-- Select among precomputed feasible schedules.
-- Escalate an anomaly.
-
-It cannot:
-
-- Change a strategy's alpha.
-- Invent unavailable liquidity.
-- Override official limits.
-- Change an experiment's cost assumptions.
-
-Run the identical starting strategy with and without the agent. Cache both paths and report the full-period comparison, including losses caused by the agent.
+Agent and fixed-rule comparison books use the same prices and full-fill rule.
+Agents may alter an authorized portfolio decision; they do not model execution.
 
 ---
 
@@ -2172,8 +2054,6 @@ Maintain:
 - Cash and collateral assumptions.
 - Short liabilities.
 - Dividends/distributions or total-return treatment.
-- Trade fees and impact.
-- Borrow and funding accrual.
 - Realized/unrealized P&L.
 - NAV.
 
@@ -2187,16 +2067,11 @@ Under a stated self-financing convention with the remaining cash balance earning
 R_portfolio,t =
     r_f,t
   + sum_i [w_i,t- * (R_i,t - r_f,t)]
-  - trading_cost_t
-  - borrow_cost_t
-  - additional_funding_cost_t
 ```
 
 This is equivalent to summing stock contributions plus the return on cash weight `1 - sum(w_i)` when the financing assumptions match.
 
 Do not add a full cash return twice or credit unrestricted short proceeds while separately crediting the same collateral.
-
-If broker funding/rebate conventions differ, implement and disclose the corresponding cash ledger rather than forcing the identity above onto incompatible assumptions.
 
 ### 19.3 Stock returns and distributions
 
@@ -2208,16 +2083,6 @@ Determine whether the supplied returns are total returns or price returns.
 - Corporate actions must not create artificial profits or losses.
 
 If distributions or terminal returns are unavailable, disclose the limitation and its sensitivity.
-
-### 19.4 Borrow accrual
-
-For each held short, accrue fees against actual borrowed notional using a documented day-count convention.
-
-A trading-day approximation may use annual rate divided by 252. A calendar-day convention must accrue weekends and holidays appropriately. Do not mix conventions without disclosure.
-
-The brief gives a conservative alternative example of 50 bp for large caps and 5% for the rest. A large-cap threshold such as USD 10 billion is our modeling choice unless officially specified.
-
-Store base, conservative-alternative, and stress schedules as versioned configuration.
 
 ### 19.5 Weight drift and turnover
 
@@ -2306,17 +2171,14 @@ Produce strategy and benchmark values where applicable:
 19. Holding period.
 20. Average position size in USD millions.
 21. Short-book median market cap.
-22. Annual trading cost as percent of NAV.
-23. Annual borrow cost as percent of NAV.
-24. Information ratio net of all modeled costs.
 
-The brief repeats IR with an explicit net-cost label. Make the cost basis obvious rather than showing two ambiguously different headline ratios.
+Performance uses supplied observed returns and posted cash interest.
 
 ### 19.10 Required exhibits
 
 - Cumulative active-return exhibit, with benchmark and S&P context.
 - Rolling 252-day beta.
-- Calendar-year returns gross/net and benchmark.
+- Calendar-year returns and benchmark.
 - Gross/net exposure and name count through time.
 - Top/bottom ten average holdings.
 - Largest positive/negative contributors.
@@ -2334,7 +2196,7 @@ Define whether cumulative active return means compounded active increments or re
 - Payoff/alpha-decay curves after executable entry.
 - Coverage and missingness.
 - Stress concentration.
-- Cost, borrow, liquidity, and delay sensitivities.
+- Borrow availability, liquidity, and delay sensitivities.
 - Agent versus fixed-rule twin.
 
 Forecast and portfolio evaluation are both necessary. A high belief IC alone is not a headline fund result.
@@ -2377,7 +2239,7 @@ Inputs:
 - Known limitations.
 - Relevant prior work from the authorized namespace.
 - Available tools.
-- Resource budget.
+- Resource requirements.
 - Structured output schema.
 
 Outputs:
@@ -2460,13 +2322,13 @@ For a material agent layer, define a fixed-rule replacement with the same inputs
 
 Compare:
 
-- Net information ratio and return.
-- Turnover and costs.
+- Information ratio and return.
+- Turnover.
 - Drawdown and stress.
 - Breaches and incidents.
 - Resource usage.
 
-Where data allow, evaluate research agents against a simple candidate generator under similar budgets. Replicating known effects is not evidence of discovering previously unknown alpha.
+Where data allow, evaluate research agents against a simple candidate generator under similar research rounds. Replicating known effects is not evidence of discovering previously unknown alpha.
 
 ### 20.9 Failure policy
 
@@ -2474,7 +2336,7 @@ An unavailable or malformed agent response cannot bypass a financial rule.
 
 Fallbacks:
 
-- Research: mark the task failed/retry within budget.
+- Research: mark the task failed/retry transient failures.
 - Allocation/risk: use the approved deterministic path or stop new discretionary risk.
 - Execution: use the fixed-rule planner for feasible approved orders.
 
@@ -2643,7 +2505,7 @@ The original T0 and FLAN-era models should be assessed for bounded QA, extractio
 - **Qwen2.5-32B-Instruct:** Candidate for structured research and tool orchestration in the late-2024/early-2025 period. Pair with a cheaper 7B model for routine work.
 - **Gemma-2-9B-IT:** A smaller different-family challenger. Treat its criticism as a source of tests, not a superior authority over a larger researcher.
 - **Qwen3-32B:** Candidate hybrid reasoning/instruction lead before the July thinking upgrade.
-- **Qwen3-30B-A3B-Thinking-2507:** Candidate deep-research lead for the later period; its card explicitly describes thinking-only behavior. Avoid spending that reasoning budget on every routine record.
+- **Qwen3-30B-A3B-Thinking-2507:** Candidate deep-research lead for the later period; its card explicitly describes thinking-only behavior. Avoid using that reasoning mode on every routine record.
 - **gpt-oss-20b:** Different-family challenger with configurable reasoning effort and documented tool-oriented capabilities. The 120b version is a larger alternative to benchmark, not an assumed improvement for this workload.
 - **Qwen3-8B:** Candidate inexpensive extractor/router with an explicit non-thinking mode.
 - **Qwen3.6-35B-A3B:** A 2026 candidate for research/agent tasks. Its inclusion is provisional on our benchmark; the published card does not establish that it is the best model for financial reasoning.
@@ -2664,7 +2526,7 @@ Optional research candidates:
 | Research Integrity | Optional interpretation of an unusual issue | Challenger proposes disconfirming tests | Access control, trial counts, evaluation, certificates |
 | CIO | Explain forecast conflicts and feasible choices | Challenger reviews exceptional integration decisions | Optimization and hard constraints |
 | Risk | Investigate triggered anomalies | Challenger examines scenarios or alternative explanations | Exposure measurement, limits, incident rules |
-| Execution | Review difficult schedules | Extractor builds bounded evidence packets | Orders, participation, fills, accounting |
+| Execution | Review difficult schedules | Extractor builds bounded evidence packets | Observed-price orders, fills and accounting |
 | Reporting | Optional explanation of a complex case | Extractor drafts evidence-grounded text | Calculated metrics and reconciliation |
 
 The numerical forecasting layer is separate. Use registered conventional models such as regularized regressions, suitable tree models, event models, and approved alternatives fitted on past data. A language model proposing a method is not the fitted return predictor.
@@ -2854,7 +2716,6 @@ The broker must reject formation use of this example card.
     "No stable improvement versus the primary baseline",
     "Apparent effect explained by source composition changes"
   ],
-  "variant_budget": 3,
   "experiment_spec_id": "exp_example_margin_001"
 }
 ```
@@ -2873,12 +2734,11 @@ Required groups:
 | Sample | Universe, eligibility, applicable business models |
 | Time | Training cutoff, label maturity, partitions, purge/embargo |
 | Model | Method, hyperparameter space, seed policy |
-| Portfolio | Entry, exit, horizon, construction and hedge policy |
-| Costs | Trade, borrow, liquidity and funding versions |
+| Portfolio | Entry, exit, horizon, construction, hedge and liquidity policy |
 | Comparisons | Baselines, paired comparison, permitted sensitivities |
 | Statistics | Dependence handling, uncertainty method, selection accounting |
 | Admission | Coverage, effect, stability, implementation requirements |
-| Budget | Compute, provider, LLM and evaluation-access bounds |
+| Search termination | Evidence targets and configured research rounds |
 
 ### 21.6 Forecast example
 
@@ -2935,9 +2795,8 @@ Required:
 - Current-book snapshot ID.
 - NAV and price snapshots.
 - Risk-envelope and covariance versions.
-- Cost-model version.
 - Selected securities with signed target weights.
-- Predicted risk/cost/return diagnostics.
+- Predicted risk/return diagnostics.
 - Official and internal constraint results.
 - Solver status and relaxations.
 - Attribution map from forecasts to target construction.
@@ -2961,26 +2820,11 @@ Execution cannot accept a book from an expired risk review or a changed target w
 
 ### 21.9 Order and fill contracts
 
-An order includes:
-
-- Order ID, target-book ID, security ID.
-- Signed quantity or dollar intent and conversion snapshot.
-- Allowed execution interval.
-- Participation and risk bounds.
-- Expiry and cancellation condition.
-- Expected cost.
-- Strategy/forecast provenance.
-
-A fill includes:
-
-- Fill ID and order ID.
-- Actual/simulated flag.
-- Execution time, quantity, price.
-- Cost breakdown.
-- Liquidity assumption/evidence.
-- Accounting event ID.
-
-Unfilled quantity remains pending or is explicitly cancelled. It never becomes an assumed holding.
+An order records its order, target-book and security IDs, signed quantity or
+dollar intent, conversion snapshot, decision interval, risk bounds, and forecast
+provenance. A fill records its order ID, timestamp, full quantity, observed price,
+currency and accounting event ID. Order dollars divided by the observed price
+determine the full quantity; there are no partial fills or pending remainders.
 
 ### 21.10 Decision event
 
@@ -3031,7 +2875,6 @@ The record needs an auditable explanation, not an unverifiable transcript of hid
 - `PORTFOLIO_INFEASIBLE`.
 - `RISK_REVIEW_REQUIRED`.
 - `LIQUIDITY_UNAVAILABLE`.
-- `PROVIDER_BUDGET_EXCEEDED`.
 - `TRANSIENT_PROVIDER_FAILURE`.
 - `ACCOUNTING_RECONCILIATION_FAILED`.
 
@@ -3119,7 +2962,6 @@ pod_platform/
     incidents.py
   execution/
     planner.py
-    costs.py
     liquidity.py
     fills.py
     pending_orders.py
@@ -3127,7 +2969,6 @@ pod_platform/
   accounting/
     ledger.py
     marks.py
-    funding.py
     returns.py
     reconciliation.py
   agents/
@@ -3309,7 +3150,7 @@ At an execution/mark event:
 
 1. Apply returns to previously held quantities.
 2. Process eligible orders using the declared fill model.
-3. Charge costs and update cash.
+3. Update cash.
 4. Reconcile NAV and positions.
 5. Check actual exposures and record breaches/remedies.
 6. Update pending orders.
@@ -3326,7 +3167,7 @@ After forecast cohorts mature:
 3. Classify errors using Section 12.
 4. Propose a small research queue.
 5. Challenge the proposed explanation.
-6. Allocate the cycle's research budget.
+6. Set the cycle's evidence targets and research rounds.
 7. Develop challengers without altering champion history.
 
 ### 23.5 Risk and execution exception cycle
@@ -3440,25 +3281,13 @@ These examples illustrate behavior. They are not predictions, backtest results, 
 - The horizons may differ.
 - There may be no disagreement about the underlying business.
 
-**Possible action:** Lower immediate size, defer entry, or hold no position until expected payoff clears costs. The action follows the frozen integration policy, not an ad hoc conversation among agents.
+**Possible action:** Lower immediate size, defer entry, or hold no position. The action follows the frozen integration policy, not an ad hoc conversation among agents.
 
-### 24.6 Execution benefit versus missed alpha
+### 24.6 Observed-price fill example
 
-**Synthetic desired order:** USD 4 million.
-
-**Synthetic trailing ADV:** USD 20 million.
-
-At a proposed 10% daily participation cap, no more than USD 2 million can be filled per day under the baseline model.
-
-The engine cannot fill USD 4 million immediately while pricing impact as if participation were 10%.
-
-Compare:
-
-- A two-day fixed schedule.
-- A liquidity-aware schedule based on forecasts available before trading.
-- A permitted agent choice among feasible schedules.
-
-Measure both cost and return missed while waiting.
+For a USD 4 million order at an observed price of USD 50, acquire 80,000 shares
+in one batch and debit USD 4 million from cash. Trading volume does not alter
+the quantity or price. Subsequent observed price changes determine its P&L.
 
 ### 24.7 Position dossier
 
@@ -3473,7 +3302,7 @@ The system retrieves:
 5. Risk review.
 6. Orders and fills.
 7. Realized target outcome.
-8. P&L, costs, and relevant attribution.
+8. P&L and relevant attribution.
 9. Fixed-rule counterfactual if an agent intervened.
 
 The narrative is generated from stored records; the underlying facts remain independently inspectable.
@@ -3497,7 +3326,7 @@ The narrative is generated from stored records; the underlying facts remain inde
 | Illiquid exit | Keep holding and exposure visible | Work order; stress unresolved risk |
 | Missing terminal return | Suspense/conservative declared policy | Resolve from permitted evidence; report sensitivity |
 | Accounting mismatch | Stop publishing performance | Reconcile ledger before resuming |
-| Provider budget exhausted | Stop further paid/limited requests | Use cache or wait for authorized budget renewal |
+| Provider rate limited | Retry with backoff | Respect the provider response |
 
 ### 25.1 Incident record
 
@@ -3577,8 +3406,6 @@ Use synthetic portfolios with hand-checkable outcomes:
 - One long with no leverage reconciles to its stock and cash contributions.
 - A dollar-neutral long/short book has the correct long, short, and collateral economics.
 - A stock rally produces a loss on its short.
-- Short borrow accrues on actual notional.
-- Entry, resize, exit, reversal, and terminal costs are charged.
 - Corporate actions conserve the correct economic value.
 - Missing returns do not delete liabilities.
 - NAV equals marked assets plus cash minus liabilities.
@@ -3588,13 +3415,12 @@ Use synthetic portfolios with hand-checkable outcomes:
 Verify:
 
 - Official limits after final sizing.
-- Constraints after fees reduce NAV.
-- Risk after uneven partial fills.
+- Risk after the full observed-price fill batch.
 - Name count through entry/exit transitions.
 - No order fills before eligibility.
-- Participation applies to actual daily order dollars.
-- No fill is assumed merely because a target exists.
-- Compound NAV tightens capacity as dollars grow.
+- Every order fills in full at its observed price.
+- Every fill requires an observed positive price.
+- Compound NAV changes order dollars without modeled capacity limits.
 - A below-floor new short is rejected.
 - An infeasible request produces an explicit failure rather than a fabricated solution.
 
@@ -3619,7 +3445,6 @@ Verify:
 ### 26.7 Reporting reconciliation
 
 - Contributions reconcile to total P&L within a numerical tolerance.
-- Gross/net costs reconcile to the fee ledger.
 - Holdings exports reproduce reported returns under the declared convention.
 - Turnover uses pre-trade drifted holdings.
 - Daily/monthly return aggregation is consistent.
@@ -3683,7 +3508,7 @@ A broad simple baseline can validate plumbing even if it produces no useful alph
 | W07 | Accounting and fill ledger | W01 | Hand-checked financial fixtures |
 | W08 | Risk envelope and deterministic constraints | W01, W07 | Feasible/infeasible and post-fill tests |
 | W09 | CIO integration and construction | W06, W08 | Forecast-to-target with complete diagnostics |
-| W10 | Execution planner and cost model | W07–W09 | Partial fills, participation, costs, pending orders |
+| W10 | Observed-price orders | W07–W09 | Full fills, exact quantities and cash accounting |
 | W11 | Full reporting and holdings export | W07–W10 | Reconciled table/exhibits |
 | W12 | Paper/method service | W01, W05 | Search/read/source-grounded replication spec |
 | W13 | Research diagnostics and private memory | W05–W06 | Error classification and prior-failure retrieval |
@@ -3765,7 +3590,7 @@ The supplied brief explicitly emphasizes:
 - Alpha decay.
 - Earnings versus ex-earnings behavior.
 - Stress/scenario behavior.
-- Costs, capacity, and implementation.
+- Capacity and implementation.
 - Agent versus fixed-rule counterfactual.
 
 The system should generate these views as routine outputs.
@@ -3803,7 +3628,7 @@ Use these as evidence of relevant professional concerns. The actual final brief 
 3. **One failed trade:** what the model believed, what happened, and what was learned.
 4. **Research funnel:** all attempts and survivors.
 5. **Incremental portfolio evidence:** baselines, strategy contribution, and redundancy.
-6. **Implementation evidence:** decay, liquidity, turnover, borrow and cost sensitivity.
+6. **Implementation evidence:** decay, liquidity, turnover and borrow availability.
 7. **Agent evidence:** full counterfactual and a worked harmful/helpful case.
 8. **Official statistics and exhibits.**
 9. **Position-level dossier lookup.**
@@ -3834,7 +3659,7 @@ Prepare full exhibits in the appendix/Arcana. Rehearse the required reporting so
 - What happens if one strategy is removed?
 - What is the worst shared stress across strategies?
 - Why this holding period and trading frequency?
-- Where is the short-book contribution after borrow?
+- Where is the short-book contribution?
 - How much money did the agent add or lose?
 - What data was unavailable or unreliable?
 - Why was this position held on this date?
@@ -3959,14 +3784,10 @@ risk:
   style_limit_policy_id: null
   liquidity_limit_policy_id: null
   gross_headroom_policy_id: null
-  validate_after_fills_and_costs: true
+  validate_after_fills: true
 
 execution:
-  proposed_max_daily_participation: 0.10
-  proposed_resize_fraction_of_target: 0.25
-  partial_fills: true
-  cost_model_id: null
-  borrow_model_id: null
+  fill_convention: full_order_at_observed_price
   price_staleness_policy_id: null
   agent_intervention: exceptions_only
   require_fixed_rule_twin: true
@@ -3979,33 +3800,11 @@ reproducibility:
   reject_mutated_registered_specifications: true
 ```
 
-The internal beta, sector, net, participation, resize, and breadth settings are **proposed development defaults**, not validated optimal choices. They may create infeasibility; handle that explicitly rather than relaxing official constraints.
+The internal beta, sector, net and breadth settings are **proposed development defaults**, not validated optimal choices. They may create infeasibility; handle that explicitly rather than relaxing official constraints.
 
 Null fields required by an enabled formation component are deliberate blockers. They must be selected, justified, versioned, and frozen before the relevant evaluation. Development of unrelated services and deterministic baselines can proceed.
 
 The model router defaults to the release-gated reference. A separately labelled cutoff-qualified retrospective run can enable Policy B only with per-checkpoint evidence and certificates. The proposed dates in Section 20.15 are not a frozen roster or blanket permission to route earlier dates to later checkpoints.
-
-### 29.3 Cost assumptions to configure
-
-Possible baseline research model:
-
-- Half-spread tiers by market cap.
-- Square-root participation impact.
-- Explicit fees.
-- A borrow schedule plus the brief's conservative alternative.
-- Funding assumptions.
-
-Freeze:
-
-- Tier boundaries.
-- Rates and impact coefficient.
-- Volatility/ADV lookbacks.
-- Day-count conventions.
-- Trade delays.
-- Borrow availability policy.
-- Stress multipliers.
-
-A small fixed sensitivity set is preferable to searching cost assumptions for a favorable result.
 
 ### 29.4 Decisions required before formation replay
 
@@ -4020,7 +3819,7 @@ A small fixed sensitivity set is preferable to searching cost assumptions for a 
 | Delisting/missing-return policy | Accounting / Risk | NAV and short-book integrity |
 | Model/bridge admission rules | Strategy / Integrity | Avoid post-result selection |
 | Covariance and risk tolerances | Risk / CIO | Feasible construction |
-| Cost/borrow/funding assumptions | Execution / Accounting | Net result |
+| Borrow availability assumptions | Execution / Risk | Short-book feasibility |
 | Agent models/cutoffs and trigger scope | Research / Risk / Execution | Reproducibility and memory disclosure |
 | Language-model roster, temporal policy and adoption gate | Research Integrity / Platform | Distinguish checkpoint release, corpus cutoff, later tuning and proposed adoption |
 | Final holdout exposure record | Integrity | Honest evaluation claims |
@@ -4124,7 +3923,7 @@ External interfaces and policies can change. Pin integration versions and rechec
 - [ ] Calibrate beliefs and explicit return bridges.
 - [ ] Integrate forecasts through the CIO.
 - [ ] Validate final targets and actual fills through independent Risk.
-- [ ] Implement realistic execution and cost/borrow accounting.
+- [ ] Implement realistic execution and accounting.
 - [ ] Add one useful agent intervention and its fixed-rule twin.
 - [ ] Produce the official statistics, exhibits, and holdings export.
 - [ ] Demonstrate an arbitrary historical position dossier.

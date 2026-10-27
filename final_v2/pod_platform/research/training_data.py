@@ -1,4 +1,4 @@
-"""Formation-time panel and next-session execution data for development."""
+"""Formation-time panel and observed-price return intervals for development."""
 
 from __future__ import annotations
 
@@ -134,8 +134,8 @@ def read_panel(path: Path, settings: dict) -> pd.DataFrame:
     """Read authorized development rows, never projecting forward labels."""
     start = pd.Timestamp(settings["start"])
     end = pd.Timestamp(settings["end"])
-    if start > end or end > pd.Timestamp("2020-12-31"):
-        raise ValueError("Development dates must end by 2020-12-31")
+    if start > end:
+        raise ValueError("Development start must not follow its declared cutoff")
     columns = list(
         dict.fromkeys(
             ["permno", "eom", "me", "prc", "gics", "beta_60m", "dolvol_126d"]
@@ -243,7 +243,7 @@ def read_daily(path, securities, start, end, cache, *, compact=False):
 
 
 def interval_returns(daily, dates, securities, end):
-    """Execute next session; earn from the following session to next execution.
+    """Fill at the first observed close on or after the decision date.
 
     A missing held quote/return triggers exit at the last known price and cash
     for the rest of the interval, following the operator's existing exit rule.
@@ -257,9 +257,9 @@ def interval_returns(daily, dates, securities, end):
     returns = returns.reindex(index=calendar, columns=securities).to_numpy()
     executions, settlements, realized, exits, entries = [], [], [], [], []
     for day in dates:
-        begin = calendar.searchsorted(day, side="right")
+        begin = calendar.searchsorted(day, side="left")
         next_formation = day + pd.offsets.MonthEnd(1)
-        finish = calendar.searchsorted(next_formation, side="right")
+        finish = calendar.searchsorted(next_formation, side="left")
         finish = min(finish, len(calendar) - 1)
         if begin >= finish or calendar[finish] > end:
             raise ValueError("Insufficient post-execution development sessions")
@@ -285,9 +285,9 @@ def interval_returns(daily, dates, securities, end):
 def prepare_panel(panel_path, daily_path, settings, cache):
     """Select each month's universe using only contemporaneous characteristics."""
     compact = settings.get("compact_storage", False)
+    if pd.Timestamp(settings["start"]) > pd.Timestamp(settings["end"]):
+        raise ValueError("Development start must not follow its declared cutoff")
     if compact:
-        if pd.Timestamp(settings["end"]) > pd.Timestamp("2020-12-31"):
-            raise ValueError("Development dates must end by 2020-12-31")
         context_columns = [
             "permno",
             "eom",
@@ -449,7 +449,9 @@ def prepare_panel(panel_path, daily_path, settings, cache):
             training_end=settings["end"],
             start=settings["start"],
         )
-        raw_filings = store.feature_arrays(dates, securities)
+        raw_filings = store.feature_arrays(
+            dates.tz_localize("America/New_York"), securities
+        )
         for name, values in raw_filings.items():
             features[name] = (
                 pd.DataFrame(values)
@@ -501,6 +503,7 @@ def prepare_panel(panel_path, daily_path, settings, cache):
         entries,
         {
             "available_start": str(observed_start.date()),
+            "raw_characteristic_source": str(Path(panel_path).resolve()),
             "source_stock_month_rows": source_rows,
             "source_unique_stocks": source_names,
             "rows_without_required_execution_context": source_rows
@@ -514,7 +517,7 @@ def prepare_panel(panel_path, daily_path, settings, cache):
             "universe_max": int(counts.max()),
             "unique_securities": len(securities),
             "evaluation_outcomes_used": False,
-            "label": "supplied_daily_total_return_after_next_session_execution",
+            "label": "supplied_daily_total_return_after_observed_price_fill",
             "missing_return_rule": "exit_at_last_known_price_then_cash",
             "missing_entry_quotes": int((mask[:-1] & ~entries).sum()),
             "terminal_exit_observations": int((mask[:-1] & exits).sum()),

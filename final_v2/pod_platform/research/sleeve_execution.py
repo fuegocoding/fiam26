@@ -6,11 +6,10 @@ import numpy as np
 
 
 class ComposedInstruction:
-    """New reviewed dollars plus carried pending quantities of other sleeves."""
+    """New reviewed dollars plus carried positions of other sleeves."""
 
-    def __init__(self, book, updated_mask):
+    def __init__(self, book):
         self.book = book
-        self.updated_mask = updated_mask
 
     def resolve(self, current_nav):
         self.book.compress(current_nav)
@@ -25,46 +24,33 @@ class SleeveExecutionBook:
         self,
         names,
         *,
-        gross_buffer=1.0,
-        order_ttl_sessions=10,
         maximum_positions=None,
     ):
-        if not 0 < gross_buffer <= 1 or order_ttl_sessions < 1:
-            raise ValueError("Positive gross buffer and order TTL are required")
         self.names = names
         self.maximum_positions = maximum_positions
         self.compression_events = []
         self.positions, self.targets, self.updated = {}, {}, {}
         self.capital = {}
-        self.gross_buffer = gross_buffer
-        self.order_ttl_sessions = order_ttl_sessions
         self.pnl = {}
         self.reconciliation_max_usd = 0.0
 
     def set_targets(self, day, changes, capital=None):
-        self.expire(day)
-        mask = np.zeros(self.names, bool)
         for identity, target in changes.items():
             target = np.asarray(target, float).copy()
             old = self.targets.get(identity, np.zeros(self.names))
             position = self.positions.setdefault(identity, np.zeros(self.names))
-            mask |= (
-                (np.abs(old) > 1e-8)
-                | (np.abs(target) > 1e-8)
-                | (np.abs(position) > 1e-8)
-            )
             self.targets[identity] = target
             self.updated[identity] = day
         if capital is not None:
             self.capital = dict(capital)
-        return ComposedInstruction(self, mask)
+        return ComposedInstruction(self)
 
     def compress(self, nav):
         """Net sleeves first, then select actual fund slots without new signs.
 
-        Compression is an explicit construction overlay, not an alteration of
-        the research forecast. Kept long/short dollars are scaled only downward
-        to preserve dollar neutrality, and all removed exposure is recorded.
+        Compression is an explicit construction overlay. Keep the largest
+        aggregate positions and scale only downward, preserving the intended
+        long/short notional ratio. Directional books retain their funded side.
         """
         if self.maximum_positions is None or not self.targets:
             return
@@ -76,20 +62,27 @@ class SleeveExecutionBook:
             np.flatnonzero(combined > 1e-8),
             np.flatnonzero(combined < -1e-8),
         )
-        half = self.maximum_positions // 2
-        chosen_long = longs[np.argsort(-combined[longs], kind="stable")][:half]
-        chosen_short = shorts[np.argsort(combined[shorts], kind="stable")][
-            :half
-        ]
+        indices = np.flatnonzero(active)
+        chosen = indices[np.argsort(-np.abs(combined[indices]), kind="stable")][:self.maximum_positions]
+        if len(longs) and len(shorts) and len(chosen) >= 2:
+            for side in (longs, shorts):
+                if not np.isin(chosen, side).any():
+                    replacement = side[np.argmax(np.abs(combined[side]))]
+                    chosen[np.argmin(np.abs(combined[chosen]))] = replacement
+        chosen_long = chosen[combined[chosen] > 0]
+        chosen_short = chosen[combined[chosen] < 0]
         scale = np.zeros(self.names)
         long_sum, short_sum = (
             combined[chosen_long].sum(),
             -combined[chosen_short].sum(),
         )
-        common = min(long_sum, short_sum)
-        if common > 0:
-            scale[chosen_long] = common / long_sum
-            scale[chosen_short] = common / short_sum
+        full_long, full_short = combined[longs].sum(), -combined[shorts].sum()
+        if full_long > 0 and full_short > 0:
+            retained = min(long_sum / full_long, short_sum / full_short)
+            if long_sum > 0:scale[chosen_long] = retained * full_long / long_sum
+            if short_sum > 0:scale[chosen_short] = retained * full_short / short_sum
+        else:
+            scale[chosen] = 1.0
         removed = float(np.abs(combined * (1 - scale)).sum())
         for target in self.targets.values():
             target *= scale
@@ -101,27 +94,6 @@ class SleeveExecutionBook:
                 "nav_usd": nav,
             }
         )
-
-    def expire(self, day):
-        """Cancel expired sleeve entries before unrelated orders are netted.
-
-        Actual positions are buffered dollars, while targets precede the fund's
-        gross buffer. Keep reductions executable, including a reversal's close
-        to zero, but never revive an expired entry through a shared symbol.
-        """
-        for identity, target in self.targets.items():
-            if day - self.updated[identity] < self.order_ttl_sessions:
-                continue
-            position = self.positions.get(identity, np.zeros(self.names))
-            desired = target * self.gross_buffer
-            same_side = desired * position >= 0
-            retained = np.where(
-                same_side,
-                np.sign(desired)
-                * np.minimum(np.abs(desired), np.abs(position)),
-                0,
-            )
-            target[:] = retained / self.gross_buffer
 
     def mark(self, day, raw, valid, nav, carried):
         growth = np.where(valid, 1 + np.nan_to_num(raw), 0)
@@ -142,7 +114,6 @@ class SleeveExecutionBook:
         self.positions.setdefault("risk_overlay", np.zeros(self.names))[:] += (
             gap
         )
-        self.expire(day)
 
     def fills(self, day, nav, carried, fills, after):
         identities = sorted(set(self.positions) | set(self.targets))
@@ -153,7 +124,7 @@ class SleeveExecutionBook:
         )
         desired = np.array(
             [
-                self.targets.get(i, np.zeros(self.names)) * self.gross_buffer
+                self.targets.get(i, np.zeros(self.names))
                 for i in identities
             ]
         )
@@ -189,14 +160,3 @@ class SleeveExecutionBook:
         self.positions.setdefault("risk_overlay", np.zeros(self.names))[:] += (
             discrepancy
         )
-
-
-class RecordedInstruction:
-    """A saved close instruction with the exact per-name order renewal mask."""
-
-    def __init__(self, target, updated_mask):
-        self.target = target
-        self.updated_mask = updated_mask
-
-    def resolve(self, current_nav):
-        return self.target
