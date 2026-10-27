@@ -5,6 +5,34 @@ from __future__ import annotations
 import numpy as np
 
 
+def trim_observed_risk(target, tradable, settings):
+    """Scale observed holdings down at the close to respect fund risk limits."""
+    adjustable = np.asarray(tradable, bool)
+    fixed, variable = target[~adjustable], target[adjustable]
+    upper = 1.0
+    gross = np.abs(variable).sum()
+    if gross:
+        upper = min(upper, (settings.get("gross_limit", 2.0) - np.abs(fixed).sum()) / gross)
+    largest = np.abs(variable).max(initial=0)
+    if largest:
+        upper = min(upper, settings.get("single_name_limit", .05) / largest)
+    fixed_net, variable_net = fixed.sum(), variable.sum()
+    lower = 0.0
+    if abs(variable_net) > 1e-14:
+        bounds = sorted(((-.5-fixed_net)/variable_net, (.5-fixed_net)/variable_net))
+        lower, upper = max(lower, bounds[0]), min(upper, bounds[1])
+    # Missing quotes cannot be used to invent a feasible rebalance. Any
+    # remaining fixed-position breach is reported by the normal daily audit.
+    if upper < max(0.0, lower):
+        return target, 1.0
+    scale = min(1.0, max(0.0, upper))
+    if scale >= 1.0 - 1e-12:
+        return target, 1.0
+    result = target.copy()
+    result[adjustable] *= scale
+    return result, scale
+
+
 def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False):
     """Mark carried shares, then fill scheduled targets in full at the close.
 
@@ -40,6 +68,7 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
     observer = settings.get("execution_observer")
     active_from = min(schedule, default=days)
     rejected_shorts = unavailable_quotes = 0
+    risk_trim_sessions = 0
     cash_income = 0.0
     previous_date = market.dates[0] if days else None
     for day, date in enumerate(market.dates):
@@ -98,8 +127,14 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
                 ineligible = (target < 0) & (cap < 500e6)
                 rejected_shorts += int(ineligible.sum())
                 target[ineligible] = 0
-            if recorded is not None:
-                recorded[day] = target.copy()
+        original_target = target
+        target, risk_scale = trim_observed_risk(target, market.tradable[day], settings)
+        if risk_scale < 1:
+            risk_trim_sessions += 1
+            if observer is not None and hasattr(observer, "risk_adjustment"):
+                observer.risk_adjustment(day, nav, original_target, target)
+        if recorded is not None and (decision is not None or risk_scale < 1):
+            recorded[day] = target.copy()
         if day == days - 1 and settings.get("liquidate_at_end", False):
             target[market.tradable[day]] = 0
             if recorded is not None:
@@ -173,6 +208,7 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
             ).sum()),
             "rejected_ineligible_short_observations": rejected_shorts,
             "unavailable_quote_observations": unavailable_quotes,
+            "risk_trim_sessions": risk_trim_sessions,
             "open_positions_marked_at_training_end": True,
         },
     }

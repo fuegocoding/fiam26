@@ -115,6 +115,13 @@ class SleeveExecutionBook:
             gap
         )
 
+    def risk_adjustment(self, day, nav, before, after):
+        """Attribute observed-price risk trims to the sleeves being reduced."""
+        scale = np.divide(after, before, out=np.ones(self.names), where=np.abs(before)>1e-14)
+        for identity, target in self.targets.items():
+            target *= scale
+            self.updated[identity] = day
+
     def fills(self, day, nav, carried, fills, after):
         identities = sorted(set(self.positions) | set(self.targets))
         if not identities:

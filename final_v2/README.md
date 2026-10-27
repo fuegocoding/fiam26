@@ -56,6 +56,10 @@ Orders fill immediately in full at the first supplied observed quote on or after
 the decision date. Performance uses observed returns and posted cash interest.
 Portfolio limits, source timing, missing-data
 handling, and accounting reconciliation are enforced in the normal workflow.
+At each observed close, gross, net and name-risk drift can reduce tradable
+positions proportionally. Missing quotes are never replaced by invented fills;
+any unresolved limit failure remains in the daily audit. Sleeve accounting
+attributes these observed-price risk trims to the positions being reduced.
 A successful run is research evidence, not a claim of admitted or investable alpha.
 
 Reports and regenerable caches are written under the configured `.pod_state`
