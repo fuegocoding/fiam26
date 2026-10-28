@@ -14,7 +14,12 @@ import config
 MODELS = ('openai/gpt-oss-120b', 'openai/gpt-oss-20b')
 # Free local fallback once both hosted models reach their daily token limits.
 LOCAL_MODEL = 'qwen3:8b'
-LOCAL_URL = 'http://localhost:11434/v1/chat/completions'
+# Ollama's default context silently drops the start of long prompts (the
+# instructions), so the native API is called with an explicit window. The cache
+# key names that window, so answers from a truncated prompt are never replayed.
+LOCAL_CONTEXT = 16384
+LOCAL_CACHE_KEY = f'{LOCAL_MODEL}@ctx{LOCAL_CONTEXT}'
+LOCAL_URL = 'http://localhost:11434/api/chat'
 SIZES = ['mega', 'large', 'small', 'micro', 'nano']
 SECTORS = ['10', '15', '20', '25', '30', '35', '40', '45', '50', '55', '60']
 
@@ -46,6 +51,7 @@ def charters():
 
 def parse(raw):
     raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.S)  # local reasoning models
+    raw = re.sub(r'(:\s*)\+(\d)', r'\1\2', raw)  # the prompt's "+1" written as a JSON number
     return json.loads(re.sub(r'^\s*```(?:json)?\s*|\s*```\s*$', '', raw))
 
 
@@ -65,7 +71,7 @@ class Provider:
     def call(self, messages):
         prompt = json.dumps(messages, sort_keys=True, ensure_ascii=False)
         paths = [(model, self.cache_dir / (hashlib.sha256((model + prompt).encode()).hexdigest() + '.json'))
-                 for model in (*MODELS, LOCAL_MODEL)]
+                 for model in (*MODELS, LOCAL_CACHE_KEY)]
         # Prefer any complete cached response even if 120b is usable today.
         for model, path in paths:
             if path.exists():
@@ -115,15 +121,19 @@ class Provider:
     def _local(self, messages, prompt, path):
         """Answer with the local model, announced so the switch is never silent."""
         print(f'Discovery provider: hosted models at daily limit; using local {LOCAL_MODEL}', flush=True)
-        body = json.dumps(dict(model=LOCAL_MODEL, messages=messages, temperature=0)).encode()
+        body = json.dumps(dict(model=LOCAL_MODEL, messages=messages, stream=False,
+                               options=dict(num_ctx=LOCAL_CONTEXT, temperature=0))).encode()
         request = urllib.request.Request(LOCAL_URL, data=body, headers={'Content-Type': 'application/json'})
         try:
-            with urllib.request.urlopen(request, timeout=600) as response:
-                raw = json.load(response)['choices'][0]['message']['content']
+            with urllib.request.urlopen(request, timeout=900) as response:
+                reply = json.load(response)
         except (urllib.error.URLError, OSError) as exc:
             raise RuntimeError(f'Discovery providers exhausted and local model unavailable: {exc}') from None
+        if reply.get('prompt_eval_count', 0) >= LOCAL_CONTEXT:
+            raise RuntimeError(f'Local prompt filled the {LOCAL_CONTEXT}-token window; it may be truncated')
+        raw = reply['message']['content']
         temporary = path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(dict(model=LOCAL_MODEL, prompt=prompt, response=raw)))
+        temporary.write_text(json.dumps(dict(model=LOCAL_CACHE_KEY, prompt=prompt, response=raw)))
         temporary.replace(path)
         return raw
 

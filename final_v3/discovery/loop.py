@@ -34,8 +34,8 @@ def validate(proposal, pod, sources, names, specs):
     required = {'name', 'pod', 'hypothesis', 'mechanism', 'expected_direction', 'inputs', 'cohort'}
     if not isinstance(proposal, dict) or set(proposal) != required:
         raise ValueError('Proposal must have exactly: ' + ', '.join(sorted(required)))
-    if proposal['pod'] != pod:
-        raise ValueError('Wrong pod')
+    # The desk assigns the pod; models often echo the charter's long name instead.
+    proposal['pod'] = pod
     name = proposal['name']
     if not isinstance(name, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', name) or name in names:
         raise ValueError('Invalid or duplicate name')
@@ -239,7 +239,8 @@ def run(work_dir, years=None, provider=None, sources=None, carbon=None):
             validation_start='2015-02', validation_end=f'{year-1}-12', proposals=admitted)))
         (folder / 'transcript.md').write_text('\n\n'.join(transcript) + '\n')
         yearly = [r for r in summaries if r['year'] == year]
-        print(f"Discovery {year}: {sum(r['proposed'] for r in yearly)} proposed, {len(admitted)} admitted: "
+        print(f"Discovery {year}: {sum(r['proposed'] for r in yearly)} proposed, "
+              f"{sum(r['valid'] for r in yearly)} valid, {len(admitted)} admitted: "
               + (', '.join('desk_' + p['name'] for p in admitted) or '(none)'), flush=True)
     pd.DataFrame(summaries).to_csv(work_dir / 'discovery_summary.csv', index=False)
     request_frame = pd.DataFrame(requests).assign(fake=fake)
