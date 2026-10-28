@@ -30,6 +30,7 @@ __pycache__/
 /.autohand/
 /skills-lock.json
 /.runpod/
+/.playwright-mcp/
 
 # Local opencode tooling config and Carbon Arc API token
 opencode.json
