@@ -7,7 +7,7 @@ import pandas as pd
 SECTORS = ('10','15','20','25','30','35','40','45','50','55','60')
 SECTOR_LIMIT = .20
 VOLATILITY_LIMIT = .12
-NEUTRALITY = 'Hard sector net bounds +/-20% NAV and >=5 sectors; underlying selection count-matches sectors, then beta-tilts notionals. Exact dollar neutrality is not enforced.'
+NEUTRALITY = 'Hard sector net bounds +/-20% NAV and >=5 sectors; final formation-beta limits, when configured in optimizer settings, are checked separately after risk and turnover sizing. Exact dollar neutrality is not enforced. Formation beta and Arcana predicted beta use different estimators.'
 
 
 def sector_checks(positions):

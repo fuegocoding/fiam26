@@ -13,6 +13,8 @@ import timing
 import part2
 import deployment
 import turnover
+import neutrality
+import config
 from config import NAV
 
 # Every dollar limit derives from NAV (config.py) or a stock's ADV.
@@ -53,6 +55,7 @@ SHORT_ME_FLOOR = 500.0
 # Long and short notionals are scaled so their 60-month betas offset; each
 # side stays within BETA_TILT of half the gross, keeping net exposure small.
 BETA_NEUTRAL = True
+MAX_ABS_BETA = 0.05  # Hard daily AND monthly S&P 500 forecast-beta bands after turnover.
 BETA_TILT = 0.25
 BETA_BOUNDS = (0.2, 3.0)
 
@@ -70,6 +73,9 @@ _ATTRIBUTES = [
     "dolvol_126d",
     "sector",
     "beta_60m",
+    *neutrality.COLUMNS,
+    'beta_sp500_daily_observations', 'beta_sp500_monthly_observations',
+    'beta_sp500_daily_source', 'beta_sp500_monthly_source', 'beta_information_cutoff',
 ]
 
 
@@ -131,7 +137,9 @@ def optimize(
     """
     timing.validate_predictions(predictions)
     frame = scored_for_nav(predictions, nav)
-    frame["return_month"] = pd.to_datetime(frame.return_month).dt.to_period("M")
+    frame = neutrality.attach(frame,panel_path,config.DATA_DIR,config.WORK_DIR)
+    if not isinstance(frame.return_month.dtype,pd.PeriodDtype):
+        frame["return_month"] = pd.to_datetime(frame.return_month).dt.to_period("M")
     if short_interest is not None:
         crowded = short_interest[["permno", "return_month", "short_pct"]].copy()
         crowded["return_month"] = pd.to_datetime(crowded.return_month).dt.to_period("M")
@@ -176,14 +184,15 @@ def optimize(
         if MAX_TREASURY_WEIGHT is not None:
             long_target = 1.0 - MAX_TREASURY_WEIGHT + 1e-8
             initial = pd.Series(weights, dtype=float)
-            beta = current.set_index('permno').beta_60m.fillna(1.0).clip(*BETA_BOUNDS).reindex(initial.index)
+            beta = neutrality.matrix(current,initial.index).mean(axis=1).clip(*BETA_BOUNDS)
             lb = float((initial.clip(lower=0)*beta).sum()/initial.clip(lower=0).sum())
             sb = float((-initial.clip(upper=0)*beta).sum()/-initial.clip(upper=0).sum())
             hedge_target = long_target*lb/sb if BETA_NEUTRAL else long_target
             short_target = float(np.clip(hedge_target, .50, 2.0-long_target-1e-8))
             weights = deployment.resize(weights, current, capital, long_target, short_target,
                 long_participation=LONG_ADV_PARTICIPATION, short_participation=SHORT_ADV_PARTICIPATION,
-                execution_days=EXECUTION_DAYS)
+                execution_days=EXECUTION_DAYS,
+                beta_limit=MAX_ABS_BETA if BETA_NEUTRAL else None)
             before_risk = pd.Series(weights, dtype=float)
         weights, squeeze, rules = risk.protect(weights, month, panel, scores, cache=cached_features)
         if MAX_TREASURY_WEIGHT is not None:
@@ -199,7 +208,8 @@ def optimize(
             short_target = max(long_target-.5+1e-8, -sum(v for v in weights.values() if v < 0))
             weights = deployment.resize(weights, current, capital, long_target, short_target,
                 long_participation=LONG_ADV_PARTICIPATION, short_participation=SHORT_ADV_PARTICIPATION,
-                execution_days=EXECUTION_DAYS, short_caps=safe_caps)
+                execution_days=EXECUTION_DAYS, short_caps=safe_caps,
+                beta_limit=MAX_ABS_BETA if BETA_NEUTRAL else None)
             squeeze['risk_multiplier'] = pd.Series(weights)/before_risk
             rules.update(treasury_cap=MAX_TREASURY_WEIGHT, global_cash_scaling_applied=False,
                 treasury_weight=max(1-sum(v for v in weights.values() if v>0),0),
@@ -241,13 +251,15 @@ def optimize(
                             risk.MAX_SHORT_MULTIPLE*shorts.mean())*expanded.loc[negative,'runup_factor'])
                     try:
                         weights,turn_rules = turnover.constrain(weights,reference,current,drift,limits,
-                            preferred_budget,N_PER_SIDE)
+                            preferred_budget,N_PER_SIDE,
+                            beta_limit=MAX_ABS_BETA if BETA_NEUTRAL else None)
                         turn_rules['turnover_reserve_fallback'] = False
                     except ValueError as error:
                         if 'infeasible' not in str(error).lower() and 'no feasible book' not in str(error).lower():
                             raise
                         weights,turn_rules = turnover.constrain(weights,reference,current,drift,limits,
-                            hard_budget,N_PER_SIDE,minimize_trades=True)
+                            hard_budget,N_PER_SIDE,minimize_trades=True,
+                            beta_limit=MAX_ABS_BETA if BETA_NEUTRAL else None)
                         turn_rules['turnover_reserve_fallback'] = True
                     squeeze = expanded.reindex(pd.Index(weights)).copy()
                     squeeze['risk_reference_weight'] = basis.reindex(squeeze.index)
@@ -260,6 +272,13 @@ def optimize(
             part2.enforce_book(current, weights)
             if sum(v>0 for v in weights.values()) != N_PER_SIDE or sum(v<0 for v in weights.values()) != N_PER_SIDE:
                 raise ValueError(f'{month}: Treasury sizing lacks {N_PER_SIDE} names on each leg')
+        final_beta = neutrality.enforce(weights, current,
+            MAX_ABS_BETA if BETA_NEUTRAL else None)
+        rules.update(final_beta_limit=MAX_ABS_BETA if BETA_NEUTRAL else None,
+                     final_beta_source=neutrality.SOURCE,
+                     final_beta_daily_prior_names=int(current.set_index('permno').beta_sp500_daily_source.reindex(list(weights)).ne('stock_regression').sum()),
+                     final_beta_monthly_prior_names=int(current.set_index('permno').beta_sp500_monthly_source.reindex(list(weights)).ne('stock_regression').sum()),
+                     beta_exposure_monthly=float(neutrality.exposures(weights,current)['beta_sp500_monthly']))
         attributes = current.set_index("permno")[_ATTRIBUTES]
         for permno, weight in weights.items():
             row = attributes.loc[permno]
@@ -277,6 +296,9 @@ def optimize(
                     "size_grp": row.size_grp,
                     "sector": row.sector,
                     "beta_60m": float(row.beta_60m),
+                    **{name:row[name] for name in [*neutrality.COLUMNS,
+                       'beta_sp500_daily_observations','beta_sp500_monthly_observations',
+                       'beta_sp500_daily_source','beta_sp500_monthly_source','beta_information_cutoff']},
                     "dolvol_126d": float(row.dolvol_126d),
                     "final_score": float(row.final_score),
                     "target_weight": weight,
@@ -299,9 +321,7 @@ def optimize(
                 "short_notional": float(-book[book < 0].sum()),
                 "net_exposure": float(book.sum()),
                 "sector_net_abs": float(book.groupby(sectors).sum().abs().sum()),
-                "beta_exposure": float(
-                    (book * attributes.beta_60m.reindex(book.index).fillna(1.0)).sum()
-                ),
+                "beta_exposure": final_beta,
                 "turnover_nav": float(traded),
                 **coverage,
                 **rules,
@@ -362,8 +382,13 @@ def write(
         "short_me_floor_musd": SHORT_ME_FLOOR,
         "micro_sleeves_max_nav": MICRO_SLEEVES_MAX_NAV,
         "micro_sleeve_switch_enabled": ENABLE_MICRO_SLEEVE_SWITCH,
-        "parameter_source": "committed_fixed_recipe_with_timing_and_liquidation_fixes",
+        "parameter_source": "fixed_recipe_with_user_requested_final_formation_beta_band",
         "beta_neutral": BETA_NEUTRAL,
+        "max_abs_beta": MAX_ABS_BETA if BETA_NEUTRAL else None,
+        "beta_constraint_source": neutrality.SOURCE,
+        "beta_constraint_windows": {
+            'daily_sessions':neutrality.DAILY_WINDOW,'daily_minimum':neutrality.DAILY_MIN,
+            'monthly_observations':neutrality.MONTHLY_WINDOW,'monthly_minimum':neutrality.MONTHLY_MIN},
         "risk": {
             "peer_top_share": risk.PEER_TOP_SHARE,
             "peer_scale": risk.PEER_SCALE,

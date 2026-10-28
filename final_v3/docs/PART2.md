@@ -8,7 +8,22 @@ At construction, the combined nonzero long/short book must span at least five
 recognised GICS sectors. Signed net exposure in each sector must remain within
 20% of NAV. Unknown classifications and infeasible selections fail explicitly.
 The underlying selector still matches sector name counts and applies its beta
-notional tilt; this is not exact dollar neutrality. This definition is exported.
+notional tilt. The final sizing and turnover solvers enforce separate +/-0.05
+daily and monthly S&P 500 beta forecasts, with a final guard and independent
+report check. At formation, stock excess returns are regressed against the
+same S&P 500 price-index benchmark used in reporting, over the preceding 252
+daily sessions (minimum 126 pairs) and 36 months (minimum 12 pairs). Only
+observations ending before the holding month enter either fit. For risk
+estimation TB3MS is lagged two calendar months to respect publication timing;
+ex-post reporting retains the mandate's contemporaneous rates. Short-history
+stocks use the same-date sector median of observed regressions, or the
+cross-sectional median when no sector estimate exists. Sources and sample
+counts are saved per holding; there is no fixed beta-1 fill in the new mode.
+The old panel `beta_60m` remains a diagnostic and part of the initial selector's
+legacy tilt, but is no longer the final risk constraint. This is not exact
+dollar neutrality or a guarantee about future realized beta or Arcana's
+different predicted-beta model. Infeasibility rejects the book rather than relaxing the beta band,
+annual turnover, sector, liquidity or short-safety bounds. This definition is exported.
 
 Reporting exports `sector_exposures.csv`, `sector_exposures.png`, the
 `standardised_performance.csv` table and a `part2_review.html` draft. Daily

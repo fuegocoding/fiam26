@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import Bounds, LinearConstraint, linprog, milp
 from scipy.sparse import lil_matrix, vstack
+import neutrality
 
 
 class AnnualBudget:
@@ -56,7 +57,8 @@ def calendar_totals(ledger, exempt_initial=True):
     return charged.groupby(charged.index.year).sum()
 
 
-def constrain(target, reference, frame, drift, caps, limit, names_per_side, *, minimize_trades=False):
+def constrain(target, reference, frame, drift, caps, limit, names_per_side, *,
+              minimize_trades=False, beta_limit=None):
     """Keep target sector name counts and select/sizes names within a hard budget.
 
     reference includes eligible incumbents as well as the desired new names.
@@ -94,6 +96,13 @@ def constrain(target, reference, frame, drift, caps, limit, names_per_side, *, m
     add({i:1 for i in range(n) if signs[i]>0}, long_target, long_target)
     short_target = -sum(v for v in target.values() if v<0)
     add({i:1 for i in range(n) if signs[i]<0}, short_target, short_target)
+    if beta_limit is not None:
+        if not np.isfinite(beta_limit) or beta_limit <= 0:
+            raise ValueError('Final beta limit must be positive and finite')
+        for column in neutrality.matrix(frame,ids).columns:
+            beta = neutrality.matrix(frame, ids)[column].to_numpy() * signs
+            add({i:float(beta[i]) for i in range(n)},
+                -beta_limit+1e-8, beta_limit-1e-8)
     target_series = pd.Series(target, dtype=float)
     sectors = meta.sector.astype(str).to_numpy()
     for sector in sorted(set(sectors)):
@@ -139,6 +148,8 @@ def constrain(target, reference, frame, drift, caps, limit, names_per_side, *, m
         or abs(-w.clip(upper=0).sum()-short_target)>1e-9
         or (w.abs()>caps.reindex(w.index)+1e-9).any()):
         raise ValueError('Turnover solver violated book or individual capacity bounds')
+    if beta_limit is not None:
+        neutrality.enforce(weights, frame, beta_limit)
     return weights, {'rebalance_one_way_turnover':traded/2,
         'turnover_solver_status':int(result.status),
         'turnover_solver_gap':float(result.mip_gap)}

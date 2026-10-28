@@ -65,6 +65,27 @@ This reruns construction, chronological NAV settlement and reporting. It skips a
 preparation, XGBoost fitting and neural-network fitting. It is the appropriate
 path for controlled construction experiments on the fixed historical forecasts.
 
+The user-requested causal daily/monthly S&P 500 beta bands can be rebuilt from the latest
+annual-turnover checkpoint without retraining. Training imports are lazy, so
+CPU replay needs NumPy, pandas, PyArrow, SciPy and Matplotlib, not Torch/XGBoost.
+If the archived I/B/E/S training container is unavailable but the four original
+competition inputs and a local Treasury/S&P reporting file are present, use
+the explicit replay-only mode:
+
+```bash
+python final_v3/main.py --from-predictions final_v3/checkpoints/annual_turnover_400pct_20261028_v2 --replay-with-local-reporting --device cpu --no-discovery --data-dir data --reporting-file external_data/fred_reporting.parquet --output-dir final_v3/sp500_beta_005_output
+```
+
+Extract the committed `.tar.gz` checkpoint to its named directory first. Every
+archived payload and all four competition inputs still require matching
+content hashes. The unchanged forecasts retain I/B/E/S effects and original
+training provenance; the missing training container is not reopened and is
+not represented as reverified. The execution reporting file and its content
+hash are recorded separately in `replay_provenance.json`. This explicit mode
+does not certify identical original reporting inputs; compare the archived
+weights under the same local reporting file before attributing performance
+changes to construction. Default replay retains strict original-input checks.
+
 Use `--output-dir PATH` for a separate result directory. Checkpoint/output
 overlap is rejected. Explicit nonempty output directories without a recognized
 run marker are not cleared. The checkpoint validates every archived payload and

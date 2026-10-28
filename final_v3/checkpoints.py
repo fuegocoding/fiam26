@@ -45,20 +45,20 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def input_paths(data_dir, external_file, reporting_file):
+def input_paths(data_dir, external_file, reporting_file, *, include_ibes=True):
     data_dir = Path(data_dir)
     paths = {f'data/{name}': data_dir / name for name in (
         config.PANEL_FILE, config.FACTOR_LIST_FILE, config.FILINGS_FILE,
         'dsf_mini_from_2014.csv')}
-    if config.USE_IBES:
+    if config.USE_IBES and include_ibes:
         paths['external_data/external.parquet'] = Path(external_file)
     paths['reporting'] = Path(reporting_file)
     return paths
 
 
-def input_receipts(data_dir, external_file, reporting_file):
+def input_receipts(data_dir, external_file, reporting_file, *, include_ibes=True):
     memo, receipts = {}, {}
-    for name, path in input_paths(data_dir, external_file, reporting_file).items():
+    for name, path in input_paths(data_dir, external_file, reporting_file, include_ibes=include_ibes).items():
         path = path.resolve()
         if not path.is_file():
             raise ValueError(f'Missing checkpoint input: {path}')
@@ -158,7 +158,7 @@ def export(work_dir, destination, data_dir, external_file, reporting_file):
                  'sleeves/xgb_rank/model.py','sleeves/filing_events/model.py','config.py',
                  'sleeves/gap_micro_best/valuation.py','sleeves/gap_micro_best/sleeve.py',
                  'sleeves/runway_micro.py','combiner.py','optimizer.py','deployment.py','turnover.py',
-                 'evaluate.py','official.py','risk.py','main.py','report.py','part2.py'):
+                 'evaluate.py','official.py','risk.py','main.py','report.py','part2.py','neutrality.py'):
         target = dest/'model_code'/name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(config.FINAL/name, target)
@@ -188,7 +188,7 @@ def metadata(directory):
     return saved
 
 
-def load(directory, data_dir, external_file, reporting_file):
+def load(directory, data_dir, external_file, reporting_file, *, local_reporting=False):
     """Verify archived content and identical inputs before loading forecasts."""
     directory = Path(directory).resolve()
     saved = metadata(directory)
@@ -213,7 +213,23 @@ def load(directory, data_dir, external_file, reporting_file):
                          ('xgboost_filing_models','filing_events/model_*_seed*.json')):
         if saved[key] != sum(fnmatch.fnmatch(name,pattern) for name in saved['files']):
             raise ValueError('Checkpoint model count differs from its payloads: '+key)
-    if input_receipts(data_dir, external_file, reporting_file) != saved['inputs']:
+    if local_reporting:
+        # Explicit forecast replay only: training-only I/B/E/S is already
+        # embodied in the hashed forecasts. Required competition inputs still
+        # match exactly; a different reporting source is recorded, not hidden.
+        actual = input_receipts(data_dir, external_file, reporting_file, include_ibes=False)
+        required = {k:v for k,v in saved['inputs'].items() if k.startswith('data/')}
+        if {k:v for k,v in actual.items() if k.startswith('data/')} != required:
+            raise ValueError('Checkpoint competition input contents differ; generate new forecasts')
+        saved['replay_input_verification'] = {
+            'competition_inputs_verified':required,
+            'original_training_inputs_not_reopened':['external_data/external.parquet'] if config.USE_IBES else [],
+            'original_reporting_input':saved['inputs']['reporting'],
+            'execution_reporting_input':actual['reporting'],
+            'execution_reporting_path':str(Path(reporting_file).resolve()),
+            'forecast_payload_sha256':saved['files']['predictions.parquet']['sha256'],
+            'scope':'Frozen forecasts retain original training provenance; local reporting source may differ.'}
+    elif input_receipts(data_dir, external_file, reporting_file) != saved['inputs']:
         raise ValueError('Checkpoint input contents differ; generate new forecasts for changed data')
     predictions = pd.read_parquet(directory/'predictions.parquet')
     timing.validate_predictions(predictions)
@@ -229,8 +245,12 @@ def load(directory, data_dir, external_file, reporting_file):
 def record_replay(work_dir, directory, saved, mode):
     receipt = {'mode':mode, 'checkpoint':str(Path(directory).resolve()),
                'checkpoint_manifest_sha256':digest(Path(directory)/MANIFEST),
-               'original_period':saved['period'], 'verified_content_and_inputs':True,
+               'original_period':saved['period'],
+               'verified_content_and_inputs':'replay_input_verification' not in saved,
                'models_retrained':False,'created_utc':datetime.now(timezone.utc).isoformat()}
+    if 'replay_input_verification' in saved:
+        receipt.update(checkpoint_payloads_verified=True,
+                       replay_input_verification=saved['replay_input_verification'])
     (Path(work_dir)/'replay_provenance.json').write_text(json.dumps(receipt,indent=2)+'\n')
 
 

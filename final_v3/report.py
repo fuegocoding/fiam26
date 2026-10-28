@@ -13,6 +13,7 @@ import official
 import part2
 import optimizer
 import turnover
+import neutrality
 
 FIRST = pd.Period(f"{config.TEST_YEARS[0]}-01", "M")
 LAST = config.LAST_TARGET.to_period("M")
@@ -325,10 +326,10 @@ def compliance(
     return checks
 
 
-def compliance_positions(p: pd.DataFrame) -> dict:
+def compliance_positions(p: pd.DataFrame, beta_limit=None) -> dict:
     """Rules that can only be checked on the positions themselves."""
     short_me = p.loc[p.target_weight < 0, "me"]
-    return {
+    checks = {
         # Instructions 3.1: shortable universe is market cap >= US$500m at
         # formation; `me` is market equity in millions of dollars.
         "short_book_above_500m_floor": bool((short_me >= 500.0).all()),
@@ -340,6 +341,15 @@ def compliance_positions(p: pd.DataFrame) -> dict:
         "single_position_at_most_5pct": bool((p.target_weight.abs() <= 0.05).all()),
         "largest_position_pct_of_capital": float(p.target_weight.abs().max()),
     }
+    if beta_limit is not None:
+        features = ['permno','beta_60m',*[c for c in neutrality.COLUMNS if c in p]]
+        exposures = pd.DataFrame({month:neutrality.exposures(
+            dict(zip(g.permno,g.target_weight,strict=True)),g[features])
+            for month,g in p.groupby('return_month')}).T
+        checks.update(final_formation_beta_within_band=bool(exposures.abs().le(beta_limit+1e-9).to_numpy().all()),
+                      final_formation_beta_limit=float(beta_limit),
+                      final_formation_beta_max_abs=float(exposures.abs().to_numpy().max()))
+    return checks
 
 
 def holding_period(p: pd.DataFrame) -> dict:
@@ -699,7 +709,7 @@ def run(
     contrib.to_csv(out_dir / "contributors.csv", index=False)
     checks = {
         **compliance(r, holdings, predictions),
-        **compliance_positions(p),
+        **compliance_positions(p, settings.get('max_abs_beta')),
         **part2.write_report(p, r, daily_ledger[0] if daily_ledger else None, out_dir, stats),
     }
     if cap is not None:

@@ -8,14 +8,12 @@ import shutil
 import pandas as pd
 
 import checkpoints
-import combiner
 import config
 import evaluate
 import identity
 import optimizer
 import report
 import timing
-from sleeves import base
 
 HEADLINE = [
     "ir",
@@ -37,7 +35,7 @@ HEADLINE = [
 ]
 
 
-def check_inputs() -> None:
+def check_inputs(*, frozen_local_reporting=False) -> None:
     names = [
         config.PANEL_FILE,
         config.FACTOR_LIST_FILE,
@@ -52,12 +50,14 @@ def check_inputs() -> None:
     if not config.REPORTING_FILE.is_file():
         raise SystemExit(f'Missing Treasury/S&P 500 reporting file: {config.REPORTING_FILE}')
     ibes_file = getattr(config, 'IBES_FILE', config.FINAL.parent/'external_data/external.parquet')
-    if config.USE_IBES and not ibes_file.is_file():
+    if config.USE_IBES and not frozen_local_reporting and not ibes_file.is_file():
         raise SystemExit(f'Missing licensed I/B/E/S input for conf_lm_gated: {ibes_file}. No strategy sleeve has been silently removed.')
 
 
 def build_predictions() -> pd.DataFrame:
     """Steps 1-3: monthly stock scores with point-in-time labels."""
+    import combiner
+    from sleeves import base
     context = base.Context(
         chars=base.load_panel(config.DATA_DIR),
         data_dir=config.DATA_DIR,
@@ -119,12 +119,16 @@ def configure_run(argv=None):
     parser.add_argument('--data-dir', type=pathlib.Path, help='Competition input directory')
     parser.add_argument('--external-file', type=pathlib.Path, help='Licensed external input container')
     parser.add_argument('--reporting-file', type=pathlib.Path, help='Treasury/S&P 500 reporting parquet')
+    parser.add_argument('--replay-with-local-reporting', action='store_true',
+        help='Explicit frozen replay: verify competition inputs, retain archived I/B/E/S forecasts without reopening training inputs, and record the supplied local reporting source')
     parser.add_argument('--output-dir', type=pathlib.Path, help='Separate destination for this run')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--save-checkpoint', type=pathlib.Path, help='Archive the completed output, model weights and forecasts; do not run training')
     mode.add_argument('--from-predictions', type=pathlib.Path, help='Rebuild portfolio/report from a verified checkpoint; no model or graph rebuild')
     mode.add_argument('--from-weights', type=pathlib.Path, help='Replay a verified checkpoint portfolio and generate its report; no training or optimization')
     args = parser.parse_args(argv)
+    if args.replay_with_local_reporting and not (args.from_predictions or args.from_weights):
+        parser.error('--replay-with-local-reporting requires --from-predictions or --from-weights')
     if args.no_discovery:
         config.DISCOVERY = False
     config.DEVICE = args.device
@@ -177,11 +181,12 @@ def main() -> None:
                           'holding_months':saved['holding_months']}, indent=2))
         return
     print(f'Run mode: discovery={config.DISCOVERY}, device={config.DEVICE}, I/B/E/S={config.USE_IBES}, Arcana=deferred', flush=True)
-    check_inputs()
+    check_inputs(frozen_local_reporting=args.replay_with_local_reporting)
     replay = args.from_predictions or args.from_weights
     loaded = None
     if replay:
-        loaded = checkpoints.load(replay, config.DATA_DIR, config.IBES_FILE, config.REPORTING_FILE)
+        loaded = checkpoints.load(replay, config.DATA_DIR, config.IBES_FILE, config.REPORTING_FILE,
+                                  local_reporting=args.replay_with_local_reporting)
     if not args.reuse and config.WORK_DIR.exists():
         if args.output_dir and any(config.WORK_DIR.iterdir()) and not any(
             (config.WORK_DIR/name).is_file() for name in (timing.CACHE_FILE, 'replay_provenance.json')
@@ -199,7 +204,8 @@ def main() -> None:
         checkpoints.record_replay(config.WORK_DIR, replay, loaded[0],
             'frozen_weights' if args.from_weights else 'frozen_predictions')
         checkpoints.restore_forecast_assets(config.WORK_DIR, replay, loaded[0])
-    checkpoints.capture_predictions(config.WORK_DIR, config.DATA_DIR, config.IBES_FILE, config.REPORTING_FILE)
+    if not args.replay_with_local_reporting:
+        checkpoints.capture_predictions(config.WORK_DIR, config.DATA_DIR, config.IBES_FILE, config.REPORTING_FILE)
 
     crowded = None
     print("Short-interest crowding screen: not applied (no official short-interest data)", flush=True)

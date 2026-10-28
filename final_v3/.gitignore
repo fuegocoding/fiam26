@@ -8,3 +8,6 @@ turnover_30pct_output/
 turnover_30pct_hedged_output/
 turnover_30pct_reserved_output/
 annual_turnover_400pct_output/
+beta_neutral_005_output/
+beta_neutral_005_baseline/
+sp500_beta_005_output/

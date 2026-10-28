@@ -2,10 +2,12 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import linprog
+import neutrality
 
 
 def resize(weights, frame, nav, long_target, short_target, *,
-           long_participation, short_participation, execution_days, short_caps=None):
+           long_participation, short_participation, execution_days, short_caps=None,
+           beta_limit=None):
     """Resize selected names; never relax liquidity to meet a cash target."""
     w = pd.Series(weights, dtype=float)
     meta = frame.set_index('permno').reindex(w.index)
@@ -37,26 +39,41 @@ def resize(weights, frame, nav, long_target, short_target, *,
             free[fixed] = False
     sectors = meta.sector.astype(str).to_numpy()
     sector_matrix = np.array([(sectors == sector) * signs for sector in sorted(set(sectors))])
+    beta_row = (neutrality.matrix(frame, w.index).to_numpy().T * signs
+                if beta_limit is not None else None)
+    if beta_limit is not None and (not np.isfinite(beta_limit) or beta_limit <= 0):
+        raise ValueError('Final beta limit must be positive and finite')
     # The usual proportional sizing needs no solver. Use a bounded L1
-    # projection only if sector limits require redistribution within the names.
-    if (np.abs(sector_matrix @ target) > .20 - 1e-9).any():
+    # projection if sector or beta limits require redistribution within names.
+    if ((np.abs(sector_matrix @ target) > .20 - 1e-9).any()
+            or (beta_row is not None and (np.abs(beta_row @ target) > beta_limit - 1e-9).any())):
         n = len(w)
         zeros = np.zeros_like(sector_matrix)
         inequalities = np.vstack([np.c_[sector_matrix, zeros], np.c_[-sector_matrix, zeros],
                                    np.c_[np.eye(n), -np.eye(n)], np.c_[-np.eye(n), -np.eye(n)]])
         upper = np.r_[np.full(2*len(sector_matrix), .20 - 1e-8), target, -target]
+        if beta_row is not None:
+            inequalities = np.vstack([inequalities, np.c_[beta_row, np.zeros_like(beta_row)],
+                                       np.c_[-beta_row, np.zeros_like(beta_row)]])
+            upper = np.r_[upper, np.full(2*len(beta_row),beta_limit - 1e-8)]
         equality = np.c_[np.array([signs > 0, signs < 0], dtype=float), np.zeros((2,n))]
         solution = linprog(np.r_[np.zeros(n), np.ones(n)], A_ub=inequalities, b_ub=upper,
             A_eq=equality, b_eq=[long_target, short_target],
-            bounds=[(min(1e-6, cap/2), cap) for cap in caps] + [(0,None)]*n, method='highs')
+            bounds=[(min(1e-6, cap/2), cap) for cap in caps] + [(0,None)]*n, method='highs',
+            options={'primal_feasibility_tolerance':1e-9,'dual_feasibility_tolerance':1e-9})
         if not solution.success:
-            raise ValueError('Treasury cap infeasible under sector/capacity bounds: '+solution.message)
+            raise ValueError('Treasury cap infeasible under sector/capacity/beta bounds: '+solution.message)
         target = solution.x[:n]
     sized = target * signs
     if (target > caps + 1e-9).any() or (target <= 1e-10).any():
-        raise ValueError('Treasury sizing violates capacity or removes selected names')
+        raise ValueError('Treasury sizing violates capacity or removes selected names: '
+                         f'max_cap_excess={float((target-caps).max()):.12g}, '
+                         f'min_weight={float(target.min()):.12g}, min_cap={float(caps.min()):.12g}')
     if target.sum() > 2.0 + 1e-10 or abs(sized.sum()) > .5 + 1e-10:
         raise ValueError('Treasury sizing violates gross/net exposure limits')
     if abs(target[signs > 0].sum() - long_target) > 1e-9:
         raise ValueError('Treasury sizing failed to deploy the required own capital')
-    return dict(zip(w.index, sized, strict=True))
+    result = dict(zip(w.index, sized, strict=True))
+    if beta_limit is not None:
+        neutrality.enforce(result, frame, beta_limit)
+    return result
