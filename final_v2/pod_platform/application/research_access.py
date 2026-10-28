@@ -70,6 +70,8 @@ def describe_research_access(config, panel_metadata=None):
             "Publication timestamps are enforced; orders fill at the first observed quote on or after the decision.",
             "The combined fund must hold 200-500 names when invested and satisfy gross/net/name limits.",
             "Short positions require at least $500m formation market cap.",
+            "At each rebalance the combined fund needs at least five recognized GICS sectors, each with absolute net exposure at most20% of NAV.",
+            "Full OOS daily realized volatility has a12% annualized acceptance ceiling; no volatility targeting is applied.",
             "Filing survivorship and uncertain historical identity maps remain disclosed.",
             "No historical availability is inferred from a current alternative-data receipt.",
         ],

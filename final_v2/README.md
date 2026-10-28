@@ -8,6 +8,13 @@ research campaign from evidence discovery and dated inputs through strategy
 proposals, measured feedback, pod ownership, capital allocation, observed-price
 fills, daily NAV, attribution, and reporting.
 
+The separate [competition configuration](competition_config.json) freezes
+pre-2021 agent recipes and evaluates January 2021–August 2026 through the same
+entrypoint, selected with `FIAM_CONFIG`. Part 2 sector limits, the 12% realised
+volatility acceptance ceiling, local exhibits and submission status are described
+in [the compliance workflow](docs/PART2_COMPLIANCE.md). Arcana is currently
+deferred; research completion does not imply submission readiness.
+
 Configuration has five sections: `application`, `models`, `carbon`, `training_lab`
 (the shared market and research settings), and `research_campaign`. Supplied data
 and credentials remain in the repository's existing data and local directories.

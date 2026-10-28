@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import minimize
 
+from .mandate import GICS, frame_sectors
+
 
 def allocate_jointly(
     edges,
@@ -31,6 +33,8 @@ def allocate_jointly(
     if len(edges) == 0:
         return np.zeros(0), {"status": "no_positive_unit_edge"}
     cap = frame.me.fillna(0).to_numpy(float) * 1e6
+    sectors = frame_sectors(frame, weights.shape[1])
+    sector_targets = np.array([weights[:, sectors == code].sum(axis=1) for code in (*GICS, 'unknown')])
     covariance = np.asarray(covariance, float)
     covariance = (covariance + covariance.T) / 2
     if (
@@ -71,6 +75,10 @@ def allocate_jointly(
             settings["gross_limit"] - np.abs(target).sum(),
             0.5 - target.sum(),
             0.5 + target.sum(),
+            settings.get('sector_net_limit', .2) - sector_targets @ u,
+            settings.get('sector_net_limit', .2) + sector_targets @ u,
+            # Unknown classifications cannot silently provide sector breadth.
+            1e-12 - np.abs(target[sectors == 'unknown']),
         ]
 
     # A feasible positive-edge direction provides an objective check against

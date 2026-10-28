@@ -151,11 +151,21 @@ A pod does not require a permanently running language model or its own server. M
 | Short eligibility | Market capitalization at least USD 500 million at formation |
 | Decision frequency | Daily through monthly; justify the choice |
 | Benchmark | Three-month U.S. Treasury bill rate plus 4% per year |
+| Sector breadth (Part 2) | At least five of eleven recognised GICS sectors at every rebalance, long and short combined |
+| Sector net exposure (Part 2) | Absolute long-minus-short weight in each sector at most 20% of NAV |
+| Realised volatility (Part 2) | Brief ceiling 12–14%; this implementation chooses the conservative 12% full-OOS daily annualised ceiling |
 | Implementation language | Python |
 | Final presentation | Ten minutes |
 | Required submission | Presentation and dated holdings; exact upload format supplied at the event |
 
 Market neutrality is an economic requirement in addition to the explicit gross and net limits. Dollar neutrality alone does not establish beta, sector, or factor neutrality.
+
+Part 2 reporting and the current implementation contract are in
+`docs/PART2_COMPLIANCE.md`. Carbon Arc uses MCP and the team account. Arcana's
+full-history HISTORICAL verification, summary table, ten labelled exhibits and
+more than fifty stress scenarios are required external deliverables; they are
+currently deferred because the user has no credentials. A completed research
+campaign is not a submission-ready portfolio.
 
 ### 2.2 Execution convention
 
@@ -1806,6 +1816,9 @@ net = sum(w_i) in [-0.5, +0.5]
 abs(w_i) <= 0.05 for each name
 200 <= official_position_count <= 500
 new/increased short exposure only where formation market cap >= USD 500M
+recognized_GICS_sectors_with_positions >= 5 at every rebalance
+abs(sum(w_i within each GICS sector)) <= 0.20 at every rebalance
+sample_std(full_OOS_daily_NAV_returns) * sqrt(252) <= 0.12
 ```
 
 Enforce quantity/price/currency consistency and count securities using the official identifier convention.

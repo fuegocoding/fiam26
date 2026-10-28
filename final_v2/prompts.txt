@@ -11,6 +11,13 @@ dates may influence code or scope. All147 characteristics and registered filing
 features are available; use their supplied economic definitions. at_be is book
 leverage and ni_be is ROE; be_me is book-to-market and ni_me earnings-to-price.
 Keep mechanisms below60 words, falsification below40, and code below25 lines.
+The combined fund must cover at least five recognized GICS sectors with absolute
+net weight in each sector at most20% of NAV. The OOS daily realized volatility
+ceiling is12% annualized. These are host-enforced fund rules, not requirements
+that each individual strategy cover five sectors. Propose evidence-backed ideas
+within the declared cohort; never add unsupported names to fill mandate quotas.
+
+
 
 Write def score(features, history, daily): returning one security vector.
 The code JSON string contains the complete function header and indented body;
