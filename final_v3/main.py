@@ -49,6 +49,9 @@ def check_inputs() -> None:
         )
     if not config.REPORTING_FILE.is_file():
         raise SystemExit(f'Missing Treasury/S&P 500 reporting file: {config.REPORTING_FILE}')
+    ibes_file = config.FINAL.parent / 'external_data' / 'external.parquet'
+    if config.USE_IBES and not ibes_file.is_file():
+        raise SystemExit(f'Missing licensed I/B/E/S input for conf_lm_gated: {ibes_file}. No strategy sleeve has been silently removed.')
 
 
 def build_predictions() -> pd.DataFrame:
@@ -101,14 +104,28 @@ def score_column(predictions: pd.DataFrame) -> str:
     return "final_score_liquid" if liquid else "final_score"
 
 
-def main() -> None:
+def configure_run(argv=None):
     parser = argparse.ArgumentParser(description="FIAM 2026 book, data to report.")
     parser.add_argument(
         "--reuse",
         action="store_true",
         help="keep the models and data already in output/ instead of rebuilding",
     )
-    args = parser.parse_args()
+    parser.add_argument('--no-discovery', action='store_true', help='Disable all LLM research/scouting; run existing sleeves only')
+    parser.add_argument('--device', choices=('cpu','cuda'), default=config.DEVICE)
+    parser.add_argument('--official-only', action='store_true', help='Explicitly exclude the licensed I/B/E/S analyst-revision sleeve')
+    args = parser.parse_args(argv)
+    if args.no_discovery:
+        config.DISCOVERY = False
+    config.DEVICE = args.device
+    if args.official_only:
+        config.USE_IBES = False
+    return args
+
+
+def main() -> None:
+    args = configure_run()
+    print(f'Run mode: discovery={config.DISCOVERY}, device={config.DEVICE}, I/B/E/S={config.USE_IBES}, Arcana=deferred', flush=True)
     check_inputs()
     if not args.reuse and config.WORK_DIR.exists():
         shutil.rmtree(config.WORK_DIR)

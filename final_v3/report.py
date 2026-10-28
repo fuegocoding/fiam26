@@ -573,6 +573,8 @@ def run(
     ]
     stats.update(mandate_stats(r, p, nav))
     stats["score_column"] = score
+    stats['discovery_enabled'] = config.DISCOVERY
+    stats['excluded_sleeves'] = [] if config.USE_IBES else ['conf_lm_gated']
     stats["market_benchmark"] = "S&P 500 price index; FRED SP500"
     stats["short_interest_screen"] = ("not applied (no official short-interest data)"
                                        if short_interest is None or short_interest.empty

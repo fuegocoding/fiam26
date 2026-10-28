@@ -34,5 +34,6 @@ if not REPORTING_FILE.exists():
 
 # Discovery uses expanding pre-year evidence and never purchases data.
 DISCOVERY = True
+USE_IBES = True
 DISCOVERY_ROUNDS = 2
 CARBON_PURCHASE_BUDGET_USD = 0

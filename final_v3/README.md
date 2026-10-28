@@ -28,12 +28,19 @@ checked against 12% using the full daily net-return history. Arcana is deferred.
 ```bash
 cd final_v3 && ../.venv/bin/python main.py          # full rebuild into final_v3/output
 cd final_v3 && ../.venv/bin/python main.py --reuse  # resume matching cached stages
+python final_v3/main.py --no-discovery --official-only --device cpu --reuse  # no LLM calls; omit unavailable I/B/E/S
 ```
 
 Inputs: `../data/` (panel, 8-K corpus, factor list, `dsf_mini_from_2014.csv`)
 and `../external_data/external.parquet` (read only for the disclosed exception).
 A full rebuild uses the GPU for the graph model and XGBoost and peaks near 7 GB
 of RAM; run one heavy job at a time on a 16 GB machine.
+
+`--no-discovery` retains the established sleeves and graph training. It makes
+no LLM or Carbon scouting calls. Arcana is already deferred. The I/B/E/S
+analyst-revision sleeve still needs its disclosed input; disabling agents does
+not silently remove that investment signal. Discovery mode is fingerprinted
+in the cache, so enabled and disabled runs cannot reuse each other's results.
 
 ## Result
 

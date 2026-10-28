@@ -87,6 +87,10 @@ def active_sleeves(sleeves: tuple[base.Sleeve, ...], *, announce=False) -> tuple
     """Skip components that cannot enter the endowed book."""
     active = []
     for sleeve in sleeves:
+        if not config.USE_IBES and sleeve.name == 'conf_lm_gated':
+            if announce:
+                print('Sleeve conf_lm_gated: explicitly excluded (--official-only; I/B/E/S unavailable)', flush=True)
+            continue
         if config.NAV > optimizer.MICRO_SLEEVES_MAX_NAV and sleeve.name in MICRO_SLEEVES:
             if announce:
                 print(f"Sleeve {sleeve.name}: skipped (inactive above $50M NAV; would not enter the book)", flush=True)

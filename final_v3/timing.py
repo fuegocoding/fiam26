@@ -97,7 +97,8 @@ def prepare_cache(work_dir: pathlib.Path, data_dir: pathlib.Path, device: str) -
         for name in (config.PANEL_FILE, config.FACTOR_LIST_FILE, config.FILINGS_FILE)
     ]
     inputs.append(data_dir / "dsf_mini_from_2014.csv")
-    inputs.append(config.FINAL.parent / "external_data" / "external.parquet")
+    if config.USE_IBES:
+        inputs.append(config.FINAL.parent / "external_data" / "external.parquet")
     if config.REPORTING_FILE not in inputs:
         inputs.append(config.REPORTING_FILE)
     manifest = {
@@ -111,6 +112,8 @@ def prepare_cache(work_dir: pathlib.Path, data_dir: pathlib.Path, device: str) -
             for path in inputs
         ],
         "device": device,
+        "discovery_enabled": config.DISCOVERY,
+        "ibes_enabled": config.USE_IBES,
         "years": list(config.TEST_YEARS),
         "last_target": str(config.LAST_TARGET),
         "pretrained_forecasts": False,
