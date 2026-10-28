@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 
 import config
 
@@ -24,7 +25,7 @@ class Carbon:
     def _call(self, operation, **arguments):
         if operation not in ('search', 'quote'):
             raise PermissionError('Only free search and quote operations are allowed')
-        payload = dict(operation=operation, adapter_version=2, **arguments)
+        payload = dict(operation=operation, adapter_version=3, **arguments)
         key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         path = self.cache_dir / (key + '.json')
         if path.exists():
@@ -32,7 +33,7 @@ class Carbon:
         if os.environ.get('FIAM_DISCOVERY_OFFLINE') == '1':
             raise RuntimeError('Offline Carbon cache miss: ' + key)
         worker = config.FINAL / 'discovery/carbon_worker.py'
-        python = config.FINAL.parent / 'local/carbonarc-venv/bin/python'
+        python = os.environ.get('FIAM_CARBON_PYTHON', sys.executable)
         result = subprocess.run([str(python), '-B', str(worker)], input=json.dumps(payload),
                                 capture_output=True, text=True, timeout=240)
         if result.returncode:

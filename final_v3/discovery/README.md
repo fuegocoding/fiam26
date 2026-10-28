@@ -24,17 +24,8 @@ Research responses and free Carbon metadata/quotes live in
 scout, search or quote response raises. Source parquet caches can still be built
 from local files offline. Credentials are read only when a live call is needed.
 
-The Carbon adapter exposes only search and free quote operations. Both its buy
-method and the isolated SDK worker's buy method raise. The configured purchase
-budget must remain zero. Scouts write a shopping list; their requests never
-become predictors. Current catalogue metadata is not historical data evidence.
-
-`WORK_DIR/discovery/<year>/` records the catalogue, raw proposals, evaluations,
-admissions and transcript. Run-level summaries and requests accompany them.
-Fake-provider admissions are rejected by the production sleeve loader.
-
-Saved `desk_*` sleeves participate in the existing equal blend and coverage
-report only in their admitted years. Empty admission years have an explicit
-`0 admitted` coverage row. The brief-05 harness's existing `drop_desk_<name>`
-choice reads admissions from its `--work-dir` source even after it switches the
-output directory. Optimizer-level impact must be measured by that harness.
+The Carbon adapter uses MCP/OAuth for catalogue search. Legacy REST dollar quotes
+are explicitly unavailable and cannot trigger a purchase. Existing owned dated
+extracts remain available to research. The versioned MCP cache preserves old REST
+receipts without reusing them as new evidence. Team-account analytical acquisition
+requires an explicit supported MCP request; scouting is not a data download.

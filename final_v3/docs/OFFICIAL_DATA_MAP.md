@@ -1,13 +1,18 @@
 # Official data map
 
-All raw inputs come from the four competition files in `config.DATA_DIR`, except the disclosed conf_lm_gated input below. Outside the disclosed exception, compatibility field names do not imply analyst or index data. Ranking formulas, size universes, walk-forward years, return labels, portfolio construction and cost assumptions remain unchanged; the expectation and filing feature meanings necessarily change as described below.
+Part 2 adds a reporting-only FRED TB3MS/SP500 input. Portfolio accounting keeps
+the panel-implied risk-free rate to convert the supplied excess-return labels;
+daily accounting spreads that rate geometrically over observed sessions.
+The reporting hurdle uses same-month TB3MS + 4%, and alpha/beta use the actual
+S&P 500 price index. Reporting inputs are never alpha features. Daily and
+monthly ledgers have separate reconciliation diagnostics; a disagreement fails
+readiness rather than being rescaled away. See [PART2.md](PART2.md).
+
+
+All raw inputs come from the four competition files in `config.DATA_DIR`, except the reporting-only FRED input and disclosed conf_lm_gated input below. Outside the disclosed exception, compatibility field names do not imply analyst or index data. Ranking formulas, size universes, walk-forward years, return labels, portfolio construction and cost assumptions remain unchanged; the expectation and filing feature meanings necessarily change as described below.
 
 | Former external input | Official replacement | Consumer | Lost information / changed meaning |
 | --- | --- | --- | --- |
-| FRED TB3MS monthly yield | Cross-sectional median of `ret - ret_exc` by panel `eom` | `evaluate.market`, monthly benchmark and cash returns | Panel-implied realized monthly risk-free return, rather than a quoted annualized Treasury yield. Used for evaluation, never a formation predictor. |
-| FRED TB3MS daily yield | `(1 + monthly_rf) ** (1 / N) - 1`, where N is the number of distinct supplied DSF trading dates in the full month | `report`, `evaluate.daily_metrics` | Constant daily allocation that compounds to the panel monthly rate; no daily interest-rate variation. Missing monthly rates fail rather than forward-fill. |
-| FRED SP500 monthly price index | Top 500 positive-`me` securities at the preceding calendar month-end, weighted by that `me`, applied to current panel `ret` | `evaluate.market`, report comparisons, beta, correlation and plots | **Large-cap market proxy**, not S&P 500 membership or its price index. Includes supplied stock total returns. Deterministic PERMNO tie-breaking; no first-month or missing-month weight backfill. Missing constituent returns are excluded and observed weights renormalized. Internal `spx` column is retained only for interface compatibility; displayed benchmark and summary keys name the proxy. |
-| FRED SP500 daily price index | Same prior-month top-500 selection and weights applied to DSF `daily_return` each day | `report`, `evaluate.daily_metrics` | Fixed formation weights each day; no current-month size selection, price index or intramonth constituent changes. Missing returns are excluded with observed weights renormalized. Daily and monthly proxy returns need not compound identically. |
 | FINRA short shares / shares outstanding and days-to-cover | None; screen explicitly not applied | optimizer, report | No official crowding measure exists. Main passes `short_interest=None`; report.json and performance.json disclose the absence. Market-cap rules and borrow costs remain. |
 | I/B/E/S ticker–PERMNO links | Supplied PERMNO identity; string PERMNO stored in compatibility `TICKER`, panel coverage dates in `load_link` | `expectations.attach_ticker`, graph earnings mapping, expectation state | No ticker-based inference, analyst coverage selection, or external link score. These identifiers are join keys, not predictors. |
 | I/B/E/S announcement dates / fiscal periods | 8-K/8-K-A Item 2.02 `filing_date` per PERMNO; first panel eom on/after filing in `fpe` | `expectations.load_surprises`, E7, graph earnings labels and past news | Filing date is the event clock, not verified earnings-release time. `fpe` is the panel observation month, not a fiscal quarter. Multiple filings mapped to one observation become one update, retaining the first filing. Securities with no retained result filing have no event. |

@@ -1,38 +1,27 @@
-# FIAM 2026 strategy pod platform
+﻿# FIAM 2026 — final_v3
 
-The governing design is [POD_FRAMEWORK_IMPLEMENTATION_SPEC.md](final_v2/POD_FRAMEWORK_IMPLEMENTATION_SPEC.md).
-The active platform is in [final_v2/](final_v2/README.md): four private strategy pods,
-paper and alternative-data research, registered experiments, independent admission,
-CIO coordination, risk, execution, accounting and reporting.
+The active strategy is [final_v3](final_v3/README.md), with one entrypoint:
+`final_v3/main.py`. It combines the established signal sleeves and company-graph
+overlay with four research desks and walk-forward discovery.
 
-## Install and verify
-
-```sh
-python -m venv .venv
-. .venv/bin/activate
-pip install -e './final_v2[research,test]'
-python -m pytest final_v2/tests -q -p no:cacheprovider
+```bash
+python final_v3/main.py          # rebuild final_v3/output
+python final_v3/main.py --reuse  # resume only matching source/input caches
 ```
 
-## Run
+Install the runtime dependencies from `final_v3/requirements.txt`. Training uses
+the configured device (`cuda` by default); inputs and disclosed licensed data
+remain separate from Git. See [the data map](final_v3/docs/OFFICIAL_DATA_MAP.md).
 
-Edit `final_v2/config.json`, then start the configured workflow:
+The [Part 2 adaptation](final_v3/docs/PART2.md) enforces sector breadth and sector
+net limits, audits the chosen 12% daily realised-volatility ceiling, and exports
+compliance, exposure histories and draft review materials. Historical README
+performance predates this adaptation and requires a fresh full run. Arcana,
+earnings attribution and final submission review remain explicitly pending.
 
-```sh
-python final_v2/run.py
-```
+`final_v2/` is retained as the previous research platform and supplies the shared
+Carbon Arc MCP/OAuth transport. The earlier root sleeves, optimiser and
+`submission/` remain historical reference material. New strategy work targets v3.
 
-Use `application.mode=demo` for synthetic acceptance, or `research` for configured
-multi-paper hypotheses, Carbon requests, native graph evaluation and eligible
-portfolio stages. All runtime options live in `final_v2/config.json`.
-Real source eligibility, measured candidate evidence and independent admission are
-required before a real strategy can enter a book. Test certificates and replay
-results do not establish investment performance.
-
-Raw inputs, credentials and detailed private state stay under `data/`, `external_data/`,
-`local/` and `final_v2/.pod_state/`; they are not supplied by a fresh checkout. Competition
-inputs include `chars_final_with_names.parquet`, `factor_char_list.csv`, the linked
-8-K corpus and `dsf_mini_from_2014.csv`. Keep the existing local input symlinks intact.
-
-`MAIN.py` and `main.py` remain the original submission entrypoints. Their local
-requirements and inputs are separate from the platform package.
+Keep one-off checks and exploratory scripts in the system temporary directory.
+Never commit supplied data, credentials or private research state.

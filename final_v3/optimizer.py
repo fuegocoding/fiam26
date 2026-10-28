@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 
 import risk
 import timing
+import part2
 from config import NAV
 
 # Every dollar limit derives from NAV (config.py) or a stock's ADV.
@@ -308,7 +309,7 @@ def _book(
         "short_floor_blocked": int((valid.me < SHORT_ME_FLOOR).sum()),
     }
     if not longs or not shorts:
-        return {}, coverage
+        raise ValueError('Part 2 infeasible portfolio: no eligible long/short book')
     long_notional = short_notional = side
     if BETA_NEUTRAL:
         beta = frame.set_index("permno").beta_60m.fillna(1.0).clip(*BETA_BOUNDS)
@@ -324,6 +325,7 @@ def _book(
         short_notional = GROSS - long_notional
     weights = {int(p): long_notional / len(longs) for p in longs}
     weights.update({int(p): -short_notional / len(shorts) for p in shorts})
+    part2.enforce_book(frame, weights)
     return weights, coverage
 
 

@@ -28,6 +28,9 @@ DEVICE = "cuda"
 # trained on target months up to Y-3 and validated on Y-2..Y-1.
 TEST_YEARS = tuple(range(2021, 2027))
 LAST_TARGET = pd.Timestamp("2026-08-31")
+REPORTING_FILE = FINAL.parent / 'external_data' / 'fred_reporting.parquet'
+if not REPORTING_FILE.exists():
+    REPORTING_FILE = FINAL.parent / 'external_data' / 'external.parquet'
 
 # Discovery uses expanding pre-year evidence and never purchases data.
 DISCOVERY = True

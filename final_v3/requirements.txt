@@ -6,3 +6,6 @@ scipy==1.17.1
 xgboost==3.4.1
 torch==2.14.0
 matplotlib==3.10.9
+mcp
+httpx
+pydantic>=2.12,<3

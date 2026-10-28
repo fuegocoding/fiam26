@@ -190,7 +190,9 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
         prev_size.update(size.to_dict())
     out = pd.DataFrame(rows).set_index("month")
     out["spx"] = mkt.spx.reindex(out.index)
-    out["benchmark"] = out.rf + HURDLE / 12
+    out["benchmark"] = mkt.benchmark_rf.reindex(out.index) + HURDLE / 12
+    if out.benchmark.isna().any() or out.spx.isna().any():
+        raise ValueError('Incomplete official Treasury or S&P 500 reporting history')
     out["active"] = out.total - out.benchmark
     out.attrs["liquidations"] = pd.DataFrame(exits)
     return out
@@ -264,6 +266,7 @@ def metrics(r: pd.DataFrame, factor_returns: pd.DataFrame | None = None) -> dict
         out.update(
             {
                 "alpha_ann": float(b[0] * 12),
+                "alpha_ann_se": float(se[0] * 12),
                 "alpha_t": float(b[0] / se[0]),
                 "alpha_t_hac": float(th[0]),
                 "beta": float(b[1]),
@@ -320,6 +323,8 @@ def daily_metrics(
     books: dict,
     dsf: pd.DataFrame,
     market_daily: pd.DataFrame,
+    monthly=None,
+    ledger=None,
 ) -> dict:
     """Daily book returns, maximum one-day loss and daily beta vs the large-cap market proxy.
 
@@ -345,16 +350,26 @@ def daily_metrics(
             rfd = float(rf_daily.get(day, np.nan))
             if not np.isfinite(rfd):
                 raise ValueError(f"Missing official risk-free rate for {day}")
-            pnl = float((weights[cols] * r).sum())
-            total.append({"day": day, "month": month, "total": rfd + pnl, "rf": rfd})
-            denom = 1.0 + pnl + rfd
+            missing = int((row.isna() & weights.reindex(row.index).abs().gt(1e-10)).sum()) + sum(abs(weights[k])>1e-10 for k in weights.index if k not in cols)
+            pnl = float((weights[cols] * (r-rfd)).sum())
+            fee = 0.0 if monthly is None else (float(monthly.loc[month,'cost']) if day==days.index[0] else 0.0)
+            borrow = 0.0 if monthly is None else float(monthly.loc[month,'borrow'])/len(days)
+            total.append({"day": day, "month": month, "total": rfd + pnl-fee-borrow, "rf": rfd,
+                          'trading_cost':fee,'borrow_cost':borrow,'missing_held_returns':missing})
+            denom = 1.0 + pnl + rfd-fee-borrow
             if denom > 0:
-                weights[cols] = weights[cols] * (1.0 + r + rfd) / denom
+                weights[cols] = weights[cols] * (1.0 + r) / denom
     if not total:
         return {}
     d = pd.DataFrame(total).set_index("day")
     spx = market_daily.spx
-    d = d.join(spx.rename("spx"), how="inner").dropna(subset=["spx"])
+    d = d.join(spx.rename("spx"), how="left")
+    d['accounting_rf'] = d.rf
+    if 'reporting_rf' in market_daily:
+        d['rf'] = market_daily.reporting_rf.reindex(d.index)
+    d.attrs['expected_sessions'] = market_daily.index
+    if ledger is not None:
+        ledger.append(d.copy())
     if d.empty:
         return {}
     ex = d.total - d.rf
@@ -367,9 +382,10 @@ def daily_metrics(
         "best_one_day_return": float(d.total.max()),
         "ann_volatility_daily": float(d.total.std() * np.sqrt(TRADING_DAYS)),
     }
-    if len(d) > 20:
-        b, se = ols(ex.to_numpy(), mkt.to_numpy()[:, None])
-        _, th, _ = ols_hac(ex.to_numpy(), mkt.to_numpy()[:, None])
+    observed = ex.notna() & mkt.notna()
+    if observed.sum() > 20:
+        b, se = ols(ex[observed].to_numpy(), mkt[observed].to_numpy()[:, None])
+        _, th, _ = ols_hac(ex[observed].to_numpy(), mkt[observed].to_numpy()[:, None])
         out.update(
             {
                 "beta_daily": float(b[1]),

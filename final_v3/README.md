@@ -19,6 +19,12 @@ the structure and discipline of `final_v2`'s research platform:
 
 ## Run
 
+Part 2 enforcement and reporting now run through `final_v3/main.py`; see
+[docs/PART2.md](docs/PART2.md). The saved results below predate this adaptation
+and must be regenerated before making claims under the new mandate. Sector
+breadth and net bounds are hard construction checks. Realised volatility is
+checked against 12% using the full daily net-return history. Arcana is deferred.
+
 ```bash
 cd final_v3 && ../.venv/bin/python main.py          # full rebuild into final_v3/output
 cd final_v3 && ../.venv/bin/python main.py --reuse  # resume matching cached stages
@@ -30,6 +36,10 @@ A full rebuild uses the GPU for the graph model and XGBoost and peaks near 7 GB
 of RAM; run one heavy job at a time on a 16 GB machine.
 
 ## Result
+
+**Historical result:** these figures used the earlier panel-rate/proxy reporting
+conventions. Current reporting uses the documented Treasury/S&P 500 input and
+explicit daily/monthly reconciliation; the figures are not a Part 2 certificate.
 
 Full rebuild, 01/2021–08/2026, net of trading and borrow costs. The benchmark
 is T-bill + 4% with the panel's own risk-free rate; "market" is a cap-weighted

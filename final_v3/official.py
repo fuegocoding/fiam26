@@ -45,7 +45,7 @@ def market_weights(frame):
     return weights[['permno', 'month', 'weight']]
 
 
-def monthly_market(frame=None):
+def panel_market(frame=None):
     frame = market_panel() if frame is None else frame
     rf = (frame.ret - frame.ret_exc).groupby(frame.month).median()
     matched = market_weights(frame).merge(frame[['permno', 'month', 'ret']],
@@ -57,7 +57,7 @@ def monthly_market(frame=None):
     return pd.DataFrame({'rf': rf, 'spx': proxy})
 
 
-def daily_market(data_dir, first, last):
+def proxy_daily_market(data_dir, first, last):
     """Fixed prior-month weights and geometrically spread monthly risk-free rate."""
     from evaluate import load_dsf
 
@@ -76,6 +76,47 @@ def daily_market(data_dir, first, last):
     out = pd.DataFrame({'rf': np.power(1 + rf, 1 / counts.to_numpy()) - 1}, index=calendar)
     out['spx'] = proxy
     return out.loc[first:last]
+
+
+@lru_cache(maxsize=1)
+def reporting_sources():
+    """Only FRED reporting rows; never substitute the stock-universe proxy."""
+    path = config.REPORTING_FILE
+    if not path.is_file():
+        raise ValueError(f'Missing Treasury/S&P reporting input: {path}')
+    frame = pd.read_parquet(path, columns=['table','date','series','value'])
+    frame = frame.loc[frame['table'].eq('fred') & frame.series.isin(['TB3MS','SP500'])].copy()
+    frame['date'] = pd.to_datetime(frame.date)
+    return frame
+
+
+def monthly_market(frame=None):
+    out = panel_market(frame)
+    source = reporting_sources()
+    rates = source.loc[source.series.eq('TB3MS')].set_index('date').value
+    rates.index = rates.index.to_period('M')
+    prices = source.loc[source.series.eq('SP500')].set_index('date').value.dropna().sort_index()
+    monthly = prices.resample('ME').last().pct_change(fill_method=None)
+    monthly.index = monthly.index.to_period('M')
+    out['spx'] = monthly.reindex(out.index)
+    out['benchmark_rf'] = rates.reindex(out.index)/1200
+    return out
+
+
+def daily_market(data_dir, first, last):
+    source = reporting_sources()
+    rates = source.loc[source.series.eq('TB3MS')].set_index('date').value
+    rates.index = rates.index.to_period('M')
+    prices = source.loc[source.series.eq('SP500')].set_index('date').value.dropna().sort_index()
+    dates = trading_days(data_dir)
+    dates = dates[(dates>=first)&(dates<=last)]
+    calendar = trading_days(data_dir)
+    counts = pd.Series(1,index=calendar).groupby(calendar.to_period('M')).sum()
+    panel_rates = panel_market().rf.reindex(dates.to_period('M')).to_numpy()
+    accounting = np.power(1+panel_rates,1/counts.reindex(dates.to_period('M')).to_numpy())-1
+    return pd.DataFrame({'rf':accounting,
+                         'reporting_rf':rates.reindex(dates.to_period('M')).to_numpy()/25200,
+                         'spx':prices.pct_change(fill_method=None).reindex(dates).to_numpy()},index=dates)
 
 
 def has_item(items, item):

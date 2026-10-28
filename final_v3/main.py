@@ -30,6 +30,8 @@ HEADLINE = [
     "turnover_avg",
     "oos_r2_universe",
     "compliance_all_pass",
+    "submission_ready",
+    "annualised_realised_volatility_daily",
 ]
 
 
@@ -45,6 +47,8 @@ def check_inputs() -> None:
         raise SystemExit(
             f"Missing in {config.DATA_DIR}: {', '.join(missing)}. See data/README.md."
         )
+    if not config.REPORTING_FILE.is_file():
+        raise SystemExit(f'Missing Treasury/S&P 500 reporting file: {config.REPORTING_FILE}')
 
 
 def build_predictions() -> pd.DataFrame:

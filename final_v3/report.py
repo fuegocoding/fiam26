@@ -10,6 +10,7 @@ import pandas as pd
 import config
 import evaluate
 import official
+import part2
 
 FIRST = pd.Period(f"{config.TEST_YEARS[0]}-01", "M")
 LAST = config.LAST_TARGET.to_period("M")
@@ -117,7 +118,7 @@ def oos_r2(
 
 
 def return_stats(r: pd.DataFrame) -> dict:
-    """Return statistics for the strategy, the benchmark and the Large-cap market proxy."""
+    """Return statistics for the strategy, the benchmark and the S&P 500."""
     total = r.total
     best, worst = total.idxmax(), total.idxmin()
     long_leg = r.pnl_long / r.long_notional
@@ -131,8 +132,8 @@ def return_stats(r: pd.DataFrame) -> dict:
         "cumulative_return": _compound(total),
         "benchmark_cagr": _annualized(r.benchmark),
         "benchmark_cumulative": _compound(r.benchmark),
-        "large_cap_market_proxy_cagr": _annualized(r.spx),
-        "large_cap_market_proxy_cumulative": _compound(r.spx),
+        "sp500_cagr": _annualized(r.spx),
+        "sp500_cumulative": _compound(r.spx),
         "best_month": str(best),
         "best_month_return": float(total[best]),
         "worst_month": str(worst),
@@ -196,7 +197,7 @@ def calendar_years(r: pd.DataFrame) -> pd.DataFrame:
         {
             "strategy": by_year.total.apply(_compound),
             "benchmark": by_year.benchmark.apply(_compound),
-            "large_cap_market_proxy": by_year.spx.apply(_compound),
+            "sp500": by_year.spx.apply(_compound),
             "active": by_year.active.sum(),
             "months": by_year.size(),
         }
@@ -206,8 +207,8 @@ def calendar_years(r: pd.DataFrame) -> pd.DataFrame:
 def comparison_metrics(r: pd.DataFrame) -> pd.DataFrame:
     """Competition statistics on the same monthly NAV basis for each series."""
     columns = {}
-    for name, values in (("Strategy", r.total), ("Panel risk-free + 4%", r.benchmark),
-                         ("Large-cap market proxy", r.spx)):
+    for name, values in (("Strategy", r.total), ("T-bill + 4%", r.benchmark),
+                         ("S&P 500", r.spx)):
         curve = (1 + values).cumprod()
         excess, active = values - r.rf, values - r.benchmark
         columns[name] = {
@@ -403,8 +404,8 @@ def _growth(r: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Strategy": (1 + r.total).cumprod(),
-            "Panel risk-free + 4%": (1 + r.benchmark).cumprod(),
-            "Large-cap market proxy": (1 + r.spx.fillna(0)).cumprod(),
+            "T-bill + 4%": (1 + r.benchmark).cumprod(),
+            "S&P 500": (1 + r.spx.fillna(0)).cumprod(),
         }
     )
 
@@ -429,7 +430,7 @@ def _plot_cumulative(r, x, out, period) -> None:
 def _plot_underwater(r, x, out, period) -> None:
     growth = _growth(r)
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    for name in ("Strategy", "Large-cap market proxy"):
+    for name in ("Strategy", "S&P 500"):
         drawdown = growth[name] / growth[name].cummax().clip(lower=1.0) - 1
         ax.fill_between(x, drawdown, 0, alpha=0.4, label=name)
     ax.set_ylabel("Drawdown")
@@ -449,7 +450,7 @@ def _plot_rolling(r, x, out, period) -> None:
     for ax in (top, bottom):
         ax.axhline(0, color="k", lw=0.5)
         ax.grid(alpha=0.3)
-    title = "Rolling 12-month active return and IR (vs Panel risk-free + 4%)"
+    title = "Rolling 12-month active return and IR (vs T-bill + 4%)"
     _save(fig, out / "rolling_active_ir.png", title, period)
 
 
@@ -459,9 +460,9 @@ def _plot_beta(r, x, out, period) -> None:
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.plot(x, beta)
     ax.axhline(0, color="k", lw=0.5)
-    ax.set_ylabel("12-m beta to Large-cap market proxy")
+    ax.set_ylabel("12-m beta to S&P 500")
     ax.grid(alpha=0.3)
-    title = "Rolling 12-month beta to the Large-cap market proxy"
+    title = "Rolling 12-month beta to the S&P 500"
     _save(fig, out / "rolling_beta.png", title, period)
 
 
@@ -556,6 +557,8 @@ def run(
         for month, g in p.groupby("return_month")
     }
     r = evaluate.evaluate(books, universe, market)
+    r['accounting_rf'] = r.rf
+    r['rf'] = market.benchmark_rf.reindex(r.index)
     r.attrs["liquidations"].to_csv(out_dir / "liquidations.csv", index=False)
     holdings = write_submission(p, r, out_dir)
 
@@ -570,11 +573,12 @@ def run(
     ]
     stats.update(mandate_stats(r, p, nav))
     stats["score_column"] = score
-    stats["market_benchmark"] = "Large-cap market proxy (prior-month top 500, value weighted)"
+    stats["market_benchmark"] = "S&P 500 price index; FRED SP500"
     stats["short_interest_screen"] = ("not applied (no official short-interest data)"
                                        if short_interest is None or short_interest.empty
                                        else "applied")
 
+    daily_ledger = []
     if data_dir is not None:
         dsf = evaluate.load_dsf(
             data_dir,
@@ -583,7 +587,7 @@ def run(
             pd.Period(LAST, "M").to_timestamp(how="end"),
         )
         market_daily = official.daily_market(data_dir, dsf.day.min(), dsf.day.max())
-        daily = evaluate.daily_metrics(books, dsf, market_daily)
+        daily = evaluate.daily_metrics(books, dsf, market_daily, monthly=r, ledger=daily_ledger)
         stats.update(daily)
         exhibit = evaluate.adv_days_exhibit(p, nav)
         exhibit.to_csv(out_dir / "position_adv_days.csv", index=False)
@@ -608,10 +612,14 @@ def run(
     checks = {
         **compliance(r, holdings, predictions),
         **compliance_positions(p),
+        **part2.write_report(p, r, daily_ledger[0] if daily_ledger else None, out_dir, stats),
     }
     checks["all_pass"] = all(v for v in checks.values() if isinstance(v, bool))
     (out_dir / "compliance.json").write_text(
         json.dumps(checks, indent=2, default=str) + "\n"
     )
     charts(r, contrib, out_dir / "charts")
+    stats['compliance_all_pass'] = checks['all_pass']
+    for filename in ('performance.json','report.json'):
+        (out_dir/filename).write_text(json.dumps(stats,indent=2,default=str)+'\n')
     return {**stats, "compliance_all_pass": checks["all_pass"]}
