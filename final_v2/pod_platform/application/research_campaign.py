@@ -52,6 +52,8 @@ from ..research.filing_text import (
 from ..research.forecast_construction import monthly_concentration
 from ..research.input_permissions import FILING_RESEARCH_FEATURES
 from ..research.joint_allocation import allocate_jointly
+from ..research.mandate import DEFAULTS
+from ..research.submission import write_bundle
 from ..research.sleeve_execution import SleeveExecutionBook
 from ..research.strategy_code import (
     CodeBatch,
@@ -110,6 +112,7 @@ class ResearchCampaign:
     def __init__(self, config, *, providers=None, evidence_services=None):
         self.config = config
         self.settings = {
+            **DEFAULTS,
             **config["training_lab"],
             "reject_ineligible_short_orders": True,
             "compact_storage": True,
@@ -118,6 +121,9 @@ class ResearchCampaign:
             if key in self.settings:
                 self.settings[key] = str(config_path(self.settings[key]))
         self.policy = config["research_campaign"]
+        for key in ('earnings_calendar_path', 'expected_sessions_path'):
+            if self.policy.get('submission', {}).get(key):
+                self.policy['submission'][key] = str(config_path(self.policy['submission'][key]))
         self.evaluation_period = self.policy.get("evaluation_period")
         self.portfolio_evidence_scope = self.policy.get("portfolio_evidence_scope", "prior_settled")
         if self.portfolio_evidence_scope not in {"prior_settled", "retrospective_evaluation_period"}:
@@ -1527,6 +1533,7 @@ class ResearchCampaign:
                 **self.settings,
                 "execution_start_nav": self.settings["fund_capital_usd"],
                 "execution_observer": book,
+                "enforce_fund_mandate": True,
                 "holdings_storage_path": str(self.output / "fund_holdings.npy"),
             },
             keep_holdings=True,
@@ -1541,6 +1548,7 @@ class ResearchCampaign:
             {
                 **self.settings,
                 "execution_start_nav": self.settings["fund_capital_usd"],
+                "enforce_fund_mandate": True,
             },
         )
         difference = float(np.max(np.abs(verified["net"] - fund["net"])))
@@ -1879,6 +1887,14 @@ class ResearchCampaign:
                 "weight": held[row, column],
             }
         ).to_parquet(self.output / "actual_holdings.parquet", index=False)
+        submission = write_bundle(
+            self.output, dates, held, self.market, np.flatnonzero(active),
+            self.panel.securities, daily, monthly, fund['turnover'][active],
+            fund['execution_targets'], self.settings, self.policy, fund['execution'],
+        )
+        constraint_report['part2'] = submission['sector_compliance']
+        constraint_report['volatility'] = submission['volatility']
+        constraints_pass = bool(constraints_pass and submission['constraints_pass'])
         agent_counts = {
             p: sum(
                 t["origin"] in {"agent_written_code", "recorded_agent_code"}
@@ -1918,6 +1934,9 @@ class ResearchCampaign:
             "execution": fund["execution"],
             "constraints": constraint_report,
             "constraints_pass": constraints_pass,
+            "submission_ready": submission['submission_ready'],
+            "submission": submission,
+            "frozen_training_provenance": self.policy.get('frozen_training_provenance'),
             "static_target_replay_max_return_difference": replay_difference,
             "production_admission": False,
             "research_scope": f"Development observations through {self.settings['end']}; later trading outcomes excluded",

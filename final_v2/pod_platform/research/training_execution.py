@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from .mandate import check_book, frame_sectors, sector_codes
 
-def trim_observed_risk(target, tradable, settings):
+
+def trim_observed_risk(target, tradable, settings, *, sectors=None):
     """Scale observed holdings down at the close to respect fund risk limits."""
     adjustable = np.asarray(tradable, bool)
     fixed, variable = target[~adjustable], target[adjustable]
@@ -21,6 +23,19 @@ def trim_observed_risk(target, tradable, settings):
     if abs(variable_net) > 1e-14:
         bounds = sorted(((-.5-fixed_net)/variable_net, (.5-fixed_net)/variable_net))
         lower, upper = max(lower, bounds[0]), min(upper, bounds[1])
+    if sectors is not None:
+        codes = sector_codes(sectors)
+        for code in np.unique(codes):
+            local = codes == code
+            fixed_sector = target[local & ~adjustable].sum()
+            variable_sector = target[local & adjustable].sum()
+            limit = settings.get('sector_net_limit', .2)
+            if abs(variable_sector) > 1e-14:
+                bounds = sorted(((-limit-fixed_sector)/variable_sector,
+                                 (limit-fixed_sector)/variable_sector))
+                lower, upper = max(lower, bounds[0]), min(upper, bounds[1])
+            elif abs(fixed_sector) > limit + 1e-7:
+                return target, 1.0
     # Missing quotes cannot be used to invent a feasible rebalance. Any
     # remaining fixed-position breach is reported by the normal daily audit.
     if upper < max(0.0, lower):
@@ -41,6 +56,8 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
     """
     days, names = market.returns.shape
     weights, age = np.zeros(names), np.zeros(names)
+    trading_age = np.zeros(names)
+    closed_dollar_trading_days = 0.0
     closed_dollar_days = closed_dollars = 0.0
     net, turnover, long_returns, short_returns, cash_returns = (
         np.zeros(days) for _ in range(5)
@@ -69,6 +86,7 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
     active_from = min(schedule, default=days)
     rejected_shorts = unavailable_quotes = 0
     risk_trim_sessions = 0
+    mandate_rejections = []
     cash_income = 0.0
     previous_date = market.dates[0] if days else None
     for day, date in enumerate(market.dates):
@@ -82,9 +100,12 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
         missing = ~valid & (weights != 0)
         exit_turnover = float(np.abs(weights[missing]).sum())
         age += (date - previous_date).days
+        trading_age += 1
+        closed_dollar_trading_days += float(np.abs(weights[missing]) @ trading_age[missing]) * nav
         closed_dollar_days += float(np.abs(weights[missing]) @ age[missing]) * nav
         closed_dollars += exit_turnover * nav
         age[missing] = 0
+        trading_age[missing] = 0
         long_returns[day] = float(np.maximum(weights[valid], 0) @ raw[valid])
         short_returns[day] = float(np.minimum(weights[valid], 0) @ raw[valid])
         if market.cash_returns is not None and day >= active_from:
@@ -100,6 +121,9 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
         if observer is not None:
             observer.mark(day, raw, valid, nav, carried)
         target = carried.copy()
+        formation = int(market.formation[day])
+        frame = market.frames[formation] if market.frames is not None and formation >= 0 else None
+        sectors = frame_sectors(frame, names) if settings.get('enforce_fund_mandate') else None
         if decision is not None:
             composed = hasattr(decision, "resolve")
             target = np.asarray(
@@ -109,6 +133,14 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
                 raise ValueError("Targets must be finite security vectors")
             if adaptive and not composed:
                 target *= decision_nav / nav
+            if sectors is not None:
+                proposed_check = check_book(target, sectors, settings)
+                if not proposed_check['pass']:
+                    mandate_rejections.append({'date': str(date.date()), 'stage': 'proposed',
+                                               'failures': proposed_check['failures']})
+                    target = carried.copy()
+                    if observer is not None and hasattr(observer, 'reject_targets'):
+                        observer.reject_targets(day, nav, carried)
             # An absent quote cannot supply an invented transaction price.
             unavailable = ~market.tradable[day]
             unavailable_quotes += int(np.count_nonzero(
@@ -127,8 +159,16 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
                 ineligible = (target < 0) & (cap < 500e6)
                 rejected_shorts += int(ineligible.sum())
                 target[ineligible] = 0
+            if sectors is not None:
+                actual_check = check_book(target, sectors, settings)
+                if not actual_check['pass'] and not np.array_equal(target, carried):
+                    mandate_rejections.append({'date': str(date.date()), 'stage': 'post_quote',
+                                               'failures': actual_check['failures']})
+                    target = carried.copy()
+                    if observer is not None and hasattr(observer, 'reject_targets'):
+                        observer.reject_targets(day, nav, carried)
         original_target = target
-        target, risk_scale = trim_observed_risk(target, market.tradable[day], settings)
+        target, risk_scale = trim_observed_risk(target, market.tradable[day], settings, sectors=sectors)
         if risk_scale < 1:
             risk_trim_sessions += 1
             if observer is not None and hasattr(observer, "risk_adjustment"):
@@ -146,6 +186,7 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
             0,
         )
         closed_dollar_days += float(closed @ age) * nav
+        closed_dollar_trading_days += float(closed @ trading_age) * nav
         closed_dollars += float(closed.sum()) * nav
         remaining = np.maximum(0, np.abs(carried) - closed)
         age = np.divide(
@@ -154,6 +195,8 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
             out=np.zeros(names),
             where=(target * carried > 0) & (np.abs(target) > 1e-12),
         )
+        trading_age = np.divide(trading_age * remaining, np.abs(target),
+            out=np.zeros(names), where=(target * carried > 0) & (np.abs(target) > 1e-12))
         if observer is not None:
             observer.fills(day, nav, carried, movement, target)
         weights = target
@@ -185,6 +228,9 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
                 closed_dollar_days / closed_dollars if closed_dollars else None
             ),
             "closed_notional_usd": closed_dollars,
+            "average_closed_notional_holding_trading_days": (
+                closed_dollar_trading_days / closed_dollars if closed_dollars else None
+            ),
             "maximum_positions": int(counts.max(initial=0)),
             "maximum_gross": float(gross.max(initial=0)),
             "maximum_absolute_net": float(absolute_net.max(initial=0)),
@@ -209,6 +255,8 @@ def replay_at_observed_prices(market, schedule, settings, *, keep_holdings=False
             "rejected_ineligible_short_observations": rejected_shorts,
             "unavailable_quote_observations": unavailable_quotes,
             "risk_trim_sessions": risk_trim_sessions,
+            "rejected_mandate_targets": len(mandate_rejections),
+            "mandate_rejections": mandate_rejections,
             "open_positions_marked_at_training_end": True,
         },
     }

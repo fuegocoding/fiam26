@@ -122,6 +122,11 @@ class SleeveExecutionBook:
             target *= scale
             self.updated[identity] = day
 
+    def reject_targets(self, day, nav, carried):
+        """Cancel rejected orders while preserving actual sleeve positions."""
+        self.targets = {identity: position.copy() for identity, position in self.positions.items()}
+        self.updated = dict.fromkeys(self.targets, day)
+
     def fills(self, day, nav, carried, fills, after):
         identities = sorted(set(self.positions) | set(self.targets))
         if not identities:
