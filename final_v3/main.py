@@ -2,10 +2,12 @@
 
 import argparse
 import json
+import pathlib
 import shutil
 
 import pandas as pd
 
+import checkpoints
 import combiner
 import config
 import evaluate
@@ -49,7 +51,7 @@ def check_inputs() -> None:
         )
     if not config.REPORTING_FILE.is_file():
         raise SystemExit(f'Missing Treasury/S&P 500 reporting file: {config.REPORTING_FILE}')
-    ibes_file = config.FINAL.parent / 'external_data' / 'external.parquet'
+    ibes_file = getattr(config, 'IBES_FILE', config.FINAL.parent/'external_data/external.parquet')
     if config.USE_IBES and not ibes_file.is_file():
         raise SystemExit(f'Missing licensed I/B/E/S input for conf_lm_gated: {ibes_file}. No strategy sleeve has been silently removed.')
 
@@ -114,50 +116,113 @@ def configure_run(argv=None):
     parser.add_argument('--no-discovery', action='store_true', help='Disable all LLM research/scouting; run existing sleeves only')
     parser.add_argument('--device', choices=('cpu','cuda'), default=config.DEVICE)
     parser.add_argument('--official-only', action='store_true', help='Explicitly exclude the licensed I/B/E/S analyst-revision sleeve')
+    parser.add_argument('--data-dir', type=pathlib.Path, help='Competition input directory')
+    parser.add_argument('--external-file', type=pathlib.Path, help='Licensed external input container')
+    parser.add_argument('--reporting-file', type=pathlib.Path, help='Treasury/S&P 500 reporting parquet')
+    parser.add_argument('--output-dir', type=pathlib.Path, help='Separate destination for this run')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--save-checkpoint', type=pathlib.Path, help='Archive the completed output, model weights and forecasts; do not run training')
+    mode.add_argument('--from-predictions', type=pathlib.Path, help='Rebuild portfolio/report from a verified checkpoint; no model or graph rebuild')
+    mode.add_argument('--from-weights', type=pathlib.Path, help='Replay a verified checkpoint portfolio and generate its report; no training or optimization')
     args = parser.parse_args(argv)
     if args.no_discovery:
         config.DISCOVERY = False
     config.DEVICE = args.device
     if args.official_only:
         config.USE_IBES = False
+    from disclosed_ibes import FILE as default_ibes_file
+    config.IBES_FILE = default_ibes_file
+    if args.data_dir:
+        config.DATA_DIR = args.data_dir.resolve()
+    if args.external_file:
+        import disclosed_ibes
+        config.IBES_FILE = args.external_file.resolve()
+        disclosed_ibes.FILE = config.IBES_FILE
+        if config.REPORTING_FILE.name == 'external.parquet':
+            config.REPORTING_FILE = config.IBES_FILE
+    if args.reporting_file:
+        config.REPORTING_FILE = args.reporting_file.resolve()
+    replay = args.from_predictions or args.from_weights
+    if replay:
+        saved = checkpoints.metadata(replay)
+        if args.no_discovery and saved['discovery_enabled']:
+            raise ValueError('Cannot label agent-enabled archived forecasts as no-discovery')
+        if args.official_only and saved['ibes_enabled']:
+            raise ValueError('Cannot remove I/B/E/S effects from already archived forecasts')
+        config.DISCOVERY = saved['discovery_enabled']
+        config.USE_IBES = saved['ibes_enabled']
+    if args.output_dir:
+        config.WORK_DIR = args.output_dir.resolve()
+    elif replay:
+        config.WORK_DIR = config.FINAL / 'replay_output'
+    if replay:
+        checkpoints.require_separate_paths(config.WORK_DIR, replay)
+    work = config.WORK_DIR.resolve()
+    protected = [config.FINAL.resolve(), config.DATA_DIR.resolve(),
+                 config.IBES_FILE.resolve(), config.REPORTING_FILE.resolve()]
+    if any(path.is_relative_to(work) for path in protected):
+        raise ValueError('Output directory must not contain application source or inputs')
+    if work.is_relative_to(config.DATA_DIR.resolve()):
+        raise ValueError('Output directory must be separate from the input directory')
     return args
 
 
 def main() -> None:
     args = configure_run()
+    if args.save_checkpoint:
+        saved = checkpoints.export(config.WORK_DIR, args.save_checkpoint,
+            config.DATA_DIR, config.IBES_FILE, config.REPORTING_FILE)
+        print(json.dumps({'checkpoint':str(args.save_checkpoint.resolve()),
+                          'neural_checkpoints':saved['neural_checkpoints'],
+                          'holding_months':saved['holding_months']}, indent=2))
+        return
     print(f'Run mode: discovery={config.DISCOVERY}, device={config.DEVICE}, I/B/E/S={config.USE_IBES}, Arcana=deferred', flush=True)
     check_inputs()
+    replay = args.from_predictions or args.from_weights
+    loaded = None
+    if replay:
+        loaded = checkpoints.load(replay, config.DATA_DIR, config.IBES_FILE, config.REPORTING_FILE)
     if not args.reuse and config.WORK_DIR.exists():
+        if args.output_dir and any(config.WORK_DIR.iterdir()) and not any(
+            (config.WORK_DIR/name).is_file() for name in (timing.CACHE_FILE, 'replay_provenance.json')
+        ):
+            raise ValueError('Refusing to clear a non-run output directory; choose an empty destination')
         shutil.rmtree(config.WORK_DIR)
     config.WORK_DIR.mkdir(parents=True, exist_ok=True)
-    timing.prepare_cache(config.WORK_DIR, config.DATA_DIR, config.DEVICE)
+    if not replay:
+        timing.prepare_cache(config.WORK_DIR, config.DATA_DIR, config.DEVICE)
     panel = config.DATA_DIR / config.PANEL_FILE
 
-    predictions = build_predictions()
+    predictions = loaded[1] if loaded else build_predictions()
     predictions.to_parquet(config.WORK_DIR / "predictions.parquet", index=False)
+    if replay:
+        checkpoints.record_replay(config.WORK_DIR, replay, loaded[0],
+            'frozen_weights' if args.from_weights else 'frozen_predictions')
+        checkpoints.restore_forecast_assets(config.WORK_DIR, replay, loaded[0])
+    checkpoints.capture_predictions(config.WORK_DIR, config.DATA_DIR, config.IBES_FILE, config.REPORTING_FILE)
 
     crowded = None
     print("Short-interest crowding screen: not applied (no official short-interest data)", flush=True)
     universe = evaluate.load_universe(panel)
     market = evaluate.market()
 
-    # Dollar limits follow the compounding fund, so the book and the capital
-    # path have to agree. Iterate until the book stops changing; in practice
-    # this settles in about nine passes.
-    nav: float | pd.Series = config.NAV
-    previous = None
-    for _ in range(16):
-        portfolio, diagnostics = optimizer.optimize(
-            predictions, panel, nav=nav, short_interest=crowded
-        )
-        key = portfolio[
-            ["return_month", "permno", "target_weight"]
-        ].reset_index(drop=True)
+    # Settle each holding month before sizing the next month, so dollar
+    # liquidity limits use capital compounded only through prior returns.
+    if args.from_weights:
+        portfolio = loaded[2].copy()
+        portfolio['return_month'] = pd.to_datetime(portfolio.return_month).dt.to_period('M')
         nav = nav_schedule(portfolio, universe, market, config.NAV)
-        if previous is not None and key.equals(previous):
-            break
-        previous = key
-    optimizer.write(portfolio, diagnostics, config.WORK_DIR, nav=config.NAV)
+        for name in ('portfolio.parquet','optimizer_diagnostics.csv','optimizer_config.json'):
+            shutil.copy2(args.from_weights/name, config.WORK_DIR/name)
+    else:
+        capital = evaluate.CausalCapital(universe, market, config.NAV)
+        portfolio, diagnostics = optimizer.optimize(
+            predictions, panel, nav=capital, short_interest=crowded, risk_cache={})
+        nav = capital.schedule
+        recomputed = nav_schedule(portfolio, universe, market, config.NAV)
+        if not (nav/recomputed-1).abs().le(1e-12).all():
+            raise ValueError('Causal sizing capital does not reconcile with final portfolio returns')
+        optimizer.write(portfolio, diagnostics, config.WORK_DIR, nav=config.NAV)
 
     stats = report.run(
         portfolio,

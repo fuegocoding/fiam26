@@ -1,0 +1,10 @@
+checkpoints/*
+!checkpoints/annual_turnover_400pct_20261028_v2.tar.gz
+!checkpoints/annual_turnover_400pct_pod_metrics_20261028.tar.gz
+replay_output/
+valuation_treasury_output/
+treasury_5pct_output/
+turnover_30pct_output/
+turnover_30pct_hedged_output/
+turnover_30pct_reserved_output/
+annual_turnover_400pct_output/

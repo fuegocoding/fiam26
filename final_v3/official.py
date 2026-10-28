@@ -100,6 +100,11 @@ def monthly_market(frame=None):
     monthly.index = monthly.index.to_period('M')
     out['spx'] = monthly.reindex(out.index)
     out['benchmark_rf'] = rates.reindex(out.index)/1200
+    # TB3MS is a monthly average published after the observation month. Two
+    # calendar months of lag ensure it was available before portfolio formation.
+    # This is a cash-accrual proxy, not a mark-to-market Treasury total return.
+    treasury = rates.sort_index().shift(2) / 1200
+    out['treasury_rf'] = treasury.reindex(out.index)
     return out
 
 
@@ -114,7 +119,10 @@ def daily_market(data_dir, first, last):
     counts = pd.Series(1,index=calendar).groupby(calendar.to_period('M')).sum()
     panel_rates = panel_market().rf.reindex(dates.to_period('M')).to_numpy()
     accounting = np.power(1+panel_rates,1/counts.reindex(dates.to_period('M')).to_numpy())-1
+    treasury_monthly = monthly_market().treasury_rf.reindex(dates.to_period('M')).to_numpy()
+    treasury_daily = np.power(1+treasury_monthly,1/counts.reindex(dates.to_period('M')).to_numpy())-1
     return pd.DataFrame({'rf':accounting,
+                         'treasury_rf':treasury_daily,
                          'reporting_rf':rates.reindex(dates.to_period('M')).to_numpy()/25200,
                          'spx':prices.pct_change(fill_method=None).reindex(dates).to_numpy()},index=dates)
 

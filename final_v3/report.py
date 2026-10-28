@@ -11,6 +11,8 @@ import config
 import evaluate
 import official
 import part2
+import optimizer
+import turnover
 
 FIRST = pd.Period(f"{config.TEST_YEARS[0]}-01", "M")
 LAST = config.LAST_TARGET.to_period("M")
@@ -316,6 +318,10 @@ def compliance(
         ),
     }
     checks["all_pass"] = all(checks.values())
+    if optimizer.MAX_TREASURY_WEIGHT is not None:
+        checks['treasury_at_most_configured_cap_at_rebalance'] = bool(
+            r.treasury_weight.le(optimizer.MAX_TREASURY_WEIGHT + 1e-10).all())
+        checks['all_pass'] = all(value for key,value in checks.items() if key != 'all_pass')
     return checks
 
 
@@ -559,7 +565,39 @@ def run(
     r = evaluate.evaluate(books, universe, market)
     r['accounting_rf'] = r.rf
     r['rf'] = market.benchmark_rf.reindex(r.index)
+    liquidation = r.attrs['liquidations']
+    forced = (liquidation.groupby('return_month').exit_notional.sum().reindex(r.index,fill_value=0)
+              if not liquidation.empty else pd.Series(0.0,index=r.index))
+    r['forced_liquidation_one_way_turnover'] = forced/2
+    r['rebalance_one_way_turnover'] = (r.traded-forced)/2
+    settings_path = out_dir.parent/'optimizer_config.json'
+    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    cap = settings.get('max_one_way_turnover')
+    annual_cap = settings.get('max_annual_one_way_turnover')
+    exempt = pd.Series(False,index=r.index)
+    if settings.get('exempt_initial_deployment',False):
+        exempt.iloc[0] = True
+    r['turnover_initial_deployment_exempt'] = exempt
+    r['turnover_initial_deployment_excluded'] = 0.0
+    if exempt.iloc[0]:
+        r.iloc[0,r.columns.get_loc('turnover_initial_deployment_excluded')] = float(r.gross.iloc[0])/2
+    r['annual_turnover_charged'] = (r.traded/2-r.turnover_initial_deployment_excluded).clip(lower=0)
+    r['annual_turnover_year_to_date'] = r.annual_turnover_charged.groupby(r.index.year).cumsum()
+    annual_turnover = r.groupby(r.index.year).agg(
+        months=('total','size'),one_way_turnover=('annual_turnover_charged','sum'),
+        initial_deployment_excluded=('turnover_initial_deployment_excluded','sum'),
+        max_monthly_counted_turnover=('annual_turnover_charged','max'))
+    annual_turnover['annualized_observed_months'] = annual_turnover.one_way_turnover/annual_turnover.months*12
+    annual_turnover.to_csv(out_dir/'calendar_year_turnover.csv',index_label='year')
     r.attrs["liquidations"].to_csv(out_dir / "liquidations.csv", index=False)
+    r.attrs['cap_attribution'].to_csv(out_dir / 'cap_attribution_monthly.csv', index=False)
+    cash = r[['treasury_weight','treasury_rf','treasury_income',
+              'short_collateral_weight','short_collateral_income',
+              'financing_weight','financing_cost']].copy()
+    capital = nav.reindex(r.index) if isinstance(nav, pd.Series) else float(nav)
+    cash['treasury_dollars'] = cash.treasury_weight * capital
+    cash['instrument'] = '3-month Treasury bill cash-accrual proxy'
+    cash.to_csv(out_dir / 'cash_allocations.csv')
     holdings = write_submission(p, r, out_dir)
 
     stats = evaluate.metrics(r, evaluate.factors(universe))
@@ -572,10 +610,58 @@ def run(
         "max_drawdown_deployed_capital_gross_normalized", "Strategy"
     ]
     stats.update(mandate_stats(r, p, nav))
+    if cap is not None:
+        monitored = ~exempt
+        stats['turnover_policy'] = {
+            'max_one_way_turnover_per_rebalance':cap,
+            'initial_deployment_exempt':bool(exempt.iloc[0]),
+            'forced_exit_turnover_reserve':settings.get('forced_exit_turnover_reserve',0),
+            'scheduled_rebalance_budget':cap-settings.get('forced_exit_turnover_reserve',0),
+            'subsequent_rebalance_mean':float(r.loc[monitored,'rebalance_one_way_turnover'].mean()),
+            'subsequent_rebalance_max':float(r.loc[monitored,'rebalance_one_way_turnover'].max()),
+            'forced_liquidation_mean':float(r.loc[monitored,'forced_liquidation_one_way_turnover'].mean()),
+            'subsequent_total_turnover_max':float((r.loc[monitored,'traded']/2).max()),
+            'definition':'Half the absolute signed position changes from drifted pretrade holdings / NAV. Involuntary within-month liquidations are reported separately.'}
+    if annual_cap is not None:
+        # The mandate display must use the same initialization exception as
+        # the annual guard. Keep raw trading (and all its costs) separately.
+        for name in ('turnover_one_way_per_rebalance','turnover_one_way_annualised',
+                     'turnover_avg','turnover_min','turnover_max'):
+            stats[name+'_including_initial_deployment'] = stats[name]
+        counted = r.annual_turnover_charged
+        stats.update(turnover_one_way_per_rebalance=float(counted.mean()),
+            turnover_one_way_annualised=float(counted.mean()*12),
+            turnover_avg=float(counted.mean()*2),turnover_min=float(counted.min()*2),
+            turnover_max=float(counted.max()*2),
+            turnover_metric_basis='Initial deployment excluded; all forced exits included. Initial trading costs remain charged to returns.')
+        stats['holding_period_gross_over_turnover_days'] = float(
+            r.gross.mean()/max(counted.mean()*12,1e-12)*252)
+        stats.setdefault('turnover_policy',{}).update({
+            'max_calendar_year_one_way_turnover':annual_cap,
+            'monthly_ceiling':cap,
+            'initial_deployment_exempt':bool(exempt.iloc[0]),
+            'forced_exits_included':True,
+            'calendar_year_totals':{str(year):float(value) for year,value in annual_turnover.one_way_turnover.items()},
+            'maximum_calendar_year_total':float(annual_turnover.one_way_turnover.max()),
+            'mean_monthly_counted_turnover':float(r.annual_turnover_charged.mean()),
+            'max_monthly_counted_turnover':float(r.annual_turnover_charged.max()),
+            'allocation':'Remaining calendar-year budget paced over months through December; preferred five-point forced-exit headroom; formation-only minimum-trade fallback may borrow future monthly allocations.',
+            'partial_year':'Actual year-to-date sums shown alongside annualized observed-month figures; future September-December budget is not spent merely because the sample ends in August.',
+            'definition':'Sum of half absolute signed position changes from drifted pretrade holdings / each current NAV, including within-month forced liquidations. Only initial deployment trades are excluded.'})
     stats["score_column"] = score
     stats['discovery_enabled'] = config.DISCOVERY
     stats['excluded_sleeves'] = [] if config.USE_IBES else ['conf_lm_gated']
     stats["market_benchmark"] = "S&P 500 price index; FRED SP500"
+    stats['cash_policy'] = {
+        'maximum_treasury_weight_at_rebalance': optimizer.MAX_TREASURY_WEIGHT,
+        'instrument': '3-month Treasury bill cash-accrual proxy',
+        'rate': 'FRED TB3MS annual percent / 1200, lagged two calendar months',
+        'own_cash_weight': 'max(1 - long_notional, 0)',
+        'short_collateral': 'separate; earns panel-implied accounting rate',
+        'financing': 'max(long_notional - 1, 0), at panel-implied accounting rate',
+        'treasury_weight_mean': float(r.treasury_weight.mean()),
+        'treasury_income_annual_nav': float(r.treasury_income.mean()*12),
+        'limitation': 'Yield accrual approximation; no bill price changes, bid/ask or broker margin schedule.'}
     stats["short_interest_screen"] = ("not applied (no official short-interest data)"
                                        if short_interest is None or short_interest.empty
                                        else "applied")
@@ -616,6 +702,14 @@ def run(
         **compliance_positions(p),
         **part2.write_report(p, r, daily_ledger[0] if daily_ledger else None, out_dir, stats),
     }
+    if cap is not None:
+        checks['rebalance_turnover_within_cap_excluding_initial_deployment'] = bool(
+            r.loc[~exempt,'rebalance_one_way_turnover'].le(cap+1e-9).all())
+        checks['total_turnover_within_cap_excluding_initial_deployment'] = bool(
+            (r.loc[~exempt,'traded']/2).le(cap+1e-9).all())
+    if annual_cap is not None:
+        checks['calendar_year_one_way_turnover_below_cap'] = bool(
+            annual_turnover.one_way_turnover.lt(annual_cap).all())
     checks["all_pass"] = all(v for v in checks.values() if isinstance(v, bool))
     (out_dir / "compliance.json").write_text(
         json.dumps(checks, indent=2, default=str) + "\n"

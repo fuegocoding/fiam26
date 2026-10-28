@@ -84,14 +84,16 @@ def make_sleeves() -> tuple[base.Sleeve, ...]:
 
 
 def active_sleeves(sleeves: tuple[base.Sleeve, ...], *, announce=False) -> tuple[base.Sleeve, ...]:
-    """Skip components that cannot enter the endowed book."""
+    """Apply explicit input exclusions and the optional fund-size switch."""
     active = []
     for sleeve in sleeves:
         if not config.USE_IBES and sleeve.name == 'conf_lm_gated':
             if announce:
                 print('Sleeve conf_lm_gated: explicitly excluded (--official-only; I/B/E/S unavailable)', flush=True)
             continue
-        if config.NAV > optimizer.MICRO_SLEEVES_MAX_NAV and sleeve.name in MICRO_SLEEVES:
+        if (optimizer.ENABLE_MICRO_SLEEVE_SWITCH
+                and config.NAV > optimizer.MICRO_SLEEVES_MAX_NAV
+                and sleeve.name in MICRO_SLEEVES):
             if announce:
                 print(f"Sleeve {sleeve.name}: skipped (inactive above $50M NAV; would not enter the book)", flush=True)
         else:
@@ -253,12 +255,18 @@ def predict(context: base.Context) -> pd.DataFrame:
     sleeve_coverage(wide, context.work_dir)
     stored = wide.assign(return_month=wide.return_month.dt.to_timestamp("M"))
     stored.to_parquet(context.work_dir / "sleeves.parquet", index=False)
-    blended = blend(wide, [sleeve.name for sleeve in sleeves])
     forecasts = graph_forecasts(context)
     forecasts = forecasts.loc[
         pd.to_datetime(forecasts.target_month).le(config.LAST_TARGET)
     ]
     forecasts.to_parquet(context.work_dir / "graph_forecasts.parquet", index=False)
+    return combine_scores(context, wide, forecasts, [sleeve.name for sleeve in sleeves])
+
+
+def combine_scores(context: base.Context, wide: pd.DataFrame,
+                   forecasts: pd.DataFrame, names: list[str]) -> pd.DataFrame:
+    """Combine saved or freshly generated sleeve and graph forecasts identically."""
+    blended = blend(wide, names)
     formation = formation_fields(context.panel_path)
     graph = overlay.company_forecasts(forecasts, formation)
     graph_months = graph.return_month.unique()
@@ -270,7 +278,7 @@ def predict(context: base.Context) -> pd.DataFrame:
     )
     liquid = blend(
         wide,
-        [s.name for s in sleeves if s.name not in MICRO_SLEEVES],
+        [name for name in names if name not in MICRO_SLEEVES],
     )[["return_month", "permno", "sleeve_score", "available_count"]]
     scores = scores.merge(
         liquid.rename(

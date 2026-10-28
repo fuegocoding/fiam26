@@ -85,6 +85,7 @@ def build(context: base.Context) -> pathlib.Path:
                 eval_set=[(validation[features].values, validation.target.values)],
                 verbose=False,
             )
+            model.save_model(output.parent / f"model_{year}_seed{seed}.json")
             predictions.append(model.predict(test[features].values))
             print(
                 f"Filing events {year} seed {seed}: best iteration"

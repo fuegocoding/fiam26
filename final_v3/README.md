@@ -33,8 +33,9 @@ python final_v3/main.py --no-discovery --official-only --device cpu --reuse  # n
 
 Inputs: `../data/` (panel, 8-K corpus, factor list, `dsf_mini_from_2014.csv`)
 and `../external_data/external.parquet` (read only for the disclosed exception).
-A full rebuild uses the GPU for the graph model and XGBoost and peaks near 7 GB
-of RAM; run one heavy job at a time on a 16 GB machine.
+A full rebuild uses the GPU for the graph model and XGBoost. The measured
+2026-10-28 no-agent A100 run peaked near 9.5 GiB of process RAM; allow sufficient
+headroom and run one heavy job at a time on a 16 GB machine.
 
 `--no-discovery` retains the established sleeves and graph training. It makes
 no LLM or Carbon scouting calls. Arcana is already deferred. The I/B/E/S
@@ -42,7 +43,31 @@ analyst-revision sleeve still needs its disclosed input; disabling agents does
 not silently remove that investment signal. Discovery mode is fingerprinted
 in the cache, so enabled and disabled runs cannot reuse each other's results.
 
+Trained weights, forecasts and monthly portfolio allocations can now be saved
+outside `output/`. `--from-weights CHECKPOINT` replays allocations and reporting;
+`--from-predictions CHECKPOINT` rebuilds construction/reporting without training
+or graph preparation. Input and checkpoint contents are verified by hash.
+See [checkpoint commands and preservation](docs/CHECKPOINTS.md) and the
+[measured attribution and research priorities](docs/RESEARCH_PRIORITIES.md).
+
 ## Result
+
+The latest valuation-enabled rerun caps Treasury at 5% and calendar-year
+one-way turnover strictly below 400%, with initial deployment exempt:
+[results, exposures and turnover](docs/ANNUAL_TURNOVER_400PCT_RERUN.md).
+The [monthly and pod metrics](docs/ANNUAL400_MONTHLY_POD_METRICS.md) include
+all five complete books, rank IC, CAPM/factor alpha and trailing/expanding
+performance statistics. There is no fixed monthly turnover ceiling.
+It is stored separately in `annual_turnover_400pct_output/`. The annual budget
+includes forced exits and is paced through December using settled turnover;
+a formation-only minimum-trade fallback may borrow later monthly allocations.
+A realized annual breach rejects the run. The preceding
+[30% monthly-cap run](docs/TURNOVER_30PCT_RERUN.md) remains preserved in
+`turnover_30pct_reserved_output/`. The earlier [5% Treasury run](docs/TREASURY_5PCT_RERUN.md) remains
+preserved in `treasury_5pct_output/`. The earlier
+[Treasury-sweep run and pod/cap breakdown](docs/VALUATION_TREASURY_RERUN.md)
+remain preserved in `valuation_treasury_output/`; the tables below are older
+historical results.
 
 **Historical result:** these figures used the earlier panel-rate/proxy reporting
 conventions. Current reporting uses the documented Treasury/S&P 500 input and
@@ -83,9 +108,31 @@ proxy of the 500 largest stocks.
 | Market dynamics | `xgb_rank` | walk-forward XGBoost rank forecast on the 147 characteristics |
 | Cross-desk overlay | company graph | business-text and peer graph forecast of next earnings, weight 0.05 |
 
-At the mandate size the two micro-cap sleeves (`gap_micro_best`,
-`runway_micro`) cannot enter the book (the optimizer ranks on the liquid score
-above US$50m NAV). final_v3 skips them and prints that it did.
+The two micro-cap sleeves (`gap_micro_best`, `runway_micro`) are enabled at
+the mandate size. Their signals enter the blend; actual trades still pass the
+same liquidity, position-size and $500m short-market-cap checks. The optional
+$50m fund-size switch is disabled. Earlier archived runs used that switch.
+
+The current sizing rule caps unused own capital at 5% of NAV at each monthly
+rebalance, deploying at least 95% to longs. The short target follows the beta
+hedge as a preferred target within 200% gross and +/-50% net, with final per-name ADV and position
+caps. The monthly rebalance schedule and 0.5 retention buffer are unchanged;
+one-way turnover is budgeted across the calendar year under a 400% ceiling,
+with initial funding exempt and forced exits included. A
+constrained projection retains eligible incumbents and adjusts weights to
+meet the budget using actual drifted holdings. Involuntary liquidations are
+reported separately. This cash
+ceiling supersedes the global ES/edge reductions to cash, while individual
+peer-squeeze/run-up short limits remain in force. Exposures can drift between
+rebalances; daily verification remains subject to the documented data gaps.
+
+Unused own capital (`max(1 - long notional, 0)`) accrues the FRED TB3MS cash
+proxy, lagged two calendar months to avoid using an unpublished monthly average.
+Short proceeds remain separate collateral earning the panel-implied rate;
+borrowing above own NAV is financed at that rate. This replaces the previous
+implicit cash accrual rather than adding interest twice. Treasury income and
+market-cap contributions are exported with each report. The proxy does not
+model Treasury price changes, bid/ask costs or a broker margin schedule.
 
 ## Data policy
 

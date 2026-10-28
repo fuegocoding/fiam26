@@ -98,7 +98,7 @@ def prepare_cache(work_dir: pathlib.Path, data_dir: pathlib.Path, device: str) -
     ]
     inputs.append(data_dir / "dsf_mini_from_2014.csv")
     if config.USE_IBES:
-        inputs.append(config.FINAL.parent / "external_data" / "external.parquet")
+        inputs.append(getattr(config, 'IBES_FILE', config.FINAL.parent / "external_data" / "external.parquet"))
     if config.REPORTING_FILE not in inputs:
         inputs.append(config.REPORTING_FILE)
     manifest = {

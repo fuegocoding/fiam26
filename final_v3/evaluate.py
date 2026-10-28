@@ -19,6 +19,75 @@ BORROW_BPS = {
 HURDLE = 0.04
 
 
+class CausalCapital:
+    """Finalize each month's net ledger before sizing the next month."""
+
+    def __init__(self, universe, market, endowment):
+        self.universe, self.market = universe, market
+        self.endowment = float(endowment)
+        self.books, self.starts = {}, {}
+        self.current = self.endowment
+        self.ledger = None
+
+    def pretrade(self, month):
+        """Actual carried positions after prior returns, costs and liquidations."""
+        if not self.books:
+            return {}
+        previous = max(self.books)
+        if month != previous+1:
+            raise ValueError('Pretrade holdings require consecutive monthly books')
+        book = self.books[previous]
+        ids = list(book)
+        cur = self.universe.loc[self.universe.return_month.eq(previous)].set_index('permno').reindex(ids)
+        last = self.ledger.loc[previous]
+        returns, liquidated = position_returns(cur, float(last.rf))
+        return {p:book[p]*(1+float(returns.loc[p])+float(last.rf))/(1+float(last.total))
+                for p in ids if not liquidated.loc[p]}
+
+    def capital(self, month):
+        if self.books and month != max(self.books) + 1:
+            raise ValueError('Causal capital requires consecutive monthly books')
+        if month in self.starts:
+            raise ValueError('Causal capital month has already been sized')
+        self.starts[month] = self.current
+        return self.current
+
+    def settle(self, month, weights):
+        if month not in self.starts or month in self.books:
+            raise ValueError('Causal settlement requires one previously sized month')
+        self.books[month] = dict(weights)
+        ledger = evaluate(self.books, self.universe, self.market)
+        self.ledger = ledger
+        self.current = self.endowment * float((1+ledger.total).prod())
+        if not np.isfinite(self.current) or self.current <= 0:
+            raise ValueError('Causal portfolio capital is non-positive or invalid')
+
+    @property
+    def schedule(self):
+        return pd.Series(self.starts, dtype=float).sort_index()
+
+
+def cash_sweep(weights: pd.Series, accounting_rf: float, treasury_rf: float) -> dict:
+    """Sweep unused own capital to bills; retain separate short collateral.
+
+    Short proceeds remain collateral earning the original accounting rate;
+    they are not swept a second time. Any borrowing above own NAV is financed
+    at that rate. The caller converts stock excess returns back to total P&L.
+    """
+    if not np.isfinite(accounting_rf) or not np.isfinite(treasury_rf):
+        raise ValueError('Missing accounting or point-in-time Treasury rate')
+    long = float(weights.clip(lower=0).sum())
+    short = float(-weights.clip(upper=0).sum())
+    cash = max(1.0 - long, 0.0)
+    financing = max(long - 1.0, 0.0)
+    return {'treasury_weight': cash, 'treasury_rf': treasury_rf,
+            'treasury_income': cash * treasury_rf,
+            'short_collateral_weight': short,
+            'short_collateral_income': short * accounting_rf,
+            'financing_weight': financing,
+            'financing_cost': financing * accounting_rf}
+
+
 def load_universe(panel_path: pathlib.Path) -> pd.DataFrame:
     """Formation fields and the realized next-month excess return."""
     cols = [
@@ -98,12 +167,10 @@ def position_returns(cur: pd.DataFrame, rf: float) -> tuple[pd.Series, pd.Series
 def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataFrame:
     """One row per month: rf, P&L by leg, costs, total, exposures."""
     keyed = universe.set_index(["return_month", "permno"])
-    rows, exits, prev, prev_r, prev_size = [], [], {}, {}, {}
+    rows, exits, cap_rows, prev, prev_r, prev_size = [], [], [], {}, {}, {}
     prev_rf, prev_total = 0.0, 0.0
     for m in sorted(books):
         w = books[m]
-        if not w:
-            continue
         rf = float(mkt.rf.get(m, np.nan))
         ids = list(w)
         cur = keyed.reindex(pd.MultiIndex.from_arrays([[m] * len(ids), ids]))
@@ -118,12 +185,16 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
             for p, x in prev.items()
         }
         cost = traded = 0.0
+        cap_cost, cap_traded = {}, {}
         for p in set(w) | set(drift):
             d = abs(w.get(p, 0.0) - drift.get(p, 0.0))
             if d:
                 tier = size.get(p) if p in w else prev_size.get(p)
                 cost += d * NAME_COST_BP.get(str(tier), 25.0) / 1e4
                 traded += d
+                tier = str(tier)
+                cap_cost[tier] = cap_cost.get(tier, 0.0) + d * NAME_COST_BP.get(tier, 25.0) / 1e4
+                cap_traded[tier] = cap_traded.get(tier, 0.0) + d
         # Close the missing-data holding in this month; it is absent from next
         # month's drift, so the exit cannot be charged again one month later.
         for p in liquidated[liquidated].index:
@@ -132,6 +203,9 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
             exit_cost = exit_notional * NAME_COST_BP.get(str(size[p]), 25.0) / 1e4
             cost += exit_cost
             traded += exit_notional
+            tier = str(size[p])
+            cap_cost[tier] = cap_cost.get(tier, 0.0) + exit_cost
+            cap_traded[tier] = cap_traded.get(tier, 0.0) + exit_notional
             exits.append(
                 {
                     "return_month": m,
@@ -156,6 +230,37 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
             / 12
         )
         pnl = float((ws * ret).sum())
+        sweep = cash_sweep(ws, rf, float(mkt.treasury_rf.get(m, np.nan)))
+        equity_pnl = pnl + float(ws.sum()) * rf
+        total = (equity_pnl + sweep['treasury_income']
+                 + sweep['short_collateral_income'] - sweep['financing_cost']
+                 - cost - borrow)
+        month_caps = []
+        for tier in sorted(set(NAME_COST_BP) | set(size.astype(str)) | set(cap_cost)):
+            selected = size.eq(tier)
+            short_weights = ws.where(selected & neg, 0.0)
+            tier_borrow = float(-short_weights.sum()) * BORROW_BPS.get(tier, 700.0) / 1e4 / 12
+            tier_pnl = float((ws.where(selected, 0.0) * (ret + rf)).sum())
+            month_caps.append({'month': m, 'cap_group': tier, 'kind': 'equity',
+                'names': int(selected.sum()),
+                'long_notional': float(ws.where(selected & ~neg, 0.0).sum()),
+                'short_notional': float(-short_weights.sum()),
+                'gross': float(ws.where(selected, 0.0).abs().sum()),
+                'price_pnl': tier_pnl, 'trading_cost': cap_cost.get(tier, 0.0),
+                'borrow_cost': tier_borrow, 'traded': cap_traded.get(tier, 0.0),
+                'net_contribution': tier_pnl - cap_cost.get(tier, 0.0) - tier_borrow})
+        for label, weight, income in (
+            ('Treasury', sweep['treasury_weight'], sweep['treasury_income']),
+            ('Short collateral', sweep['short_collateral_weight'], sweep['short_collateral_income']),
+            ('Financing', -sweep['financing_weight'], -sweep['financing_cost'])):
+            month_caps.append({'month': m, 'cap_group': label, 'kind': 'cash',
+                'names': 0, 'long_notional': 0.0, 'short_notional': 0.0,
+                'gross': 0.0, 'cash_weight': weight, 'price_pnl': income,
+                'trading_cost': 0.0, 'borrow_cost': 0.0, 'traded': 0.0,
+                'net_contribution': income})
+        if not np.isclose(sum(row['net_contribution'] for row in month_caps), total, atol=1e-12, rtol=0):
+            raise ValueError('Market-cap/cash attribution does not reconcile to monthly NAV return')
+        cap_rows.extend(month_caps)
         net_sector = ws.groupby(sector).sum()
         small = ws[neg & size.isin(["micro", "nano"])].abs().sum()
         rows.append(
@@ -167,7 +272,9 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
                 "pnl_short": float((ws[neg] * ret[neg]).sum()),
                 "cost": cost,
                 "borrow": borrow,
-                "total": rf + pnl - cost - borrow,
+                "equity_pnl": equity_pnl,
+                **sweep,
+                "total": total,
                 "traded": traded,
                 "names": len(w),
                 "longs": int((~neg).sum()),
@@ -186,7 +293,7 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
         prev = {p: x for p, x in w.items() if not liquidated[p]}
         prev_r = ret.to_dict()
         prev_rf = rf
-        prev_total = rf + pnl - cost - borrow
+        prev_total = total
         prev_size.update(size.to_dict())
     out = pd.DataFrame(rows).set_index("month")
     out["spx"] = mkt.spx.reindex(out.index)
@@ -195,6 +302,7 @@ def evaluate(books: dict, universe: pd.DataFrame, mkt: pd.DataFrame) -> pd.DataF
         raise ValueError('Incomplete official Treasury or S&P 500 reporting history')
     out["active"] = out.total - out.benchmark
     out.attrs["liquidations"] = pd.DataFrame(exits)
+    out.attrs['cap_attribution'] = pd.DataFrame(cap_rows)
     return out
 
 
@@ -330,17 +438,17 @@ def daily_metrics(
 
     Each month's book is held at its target weights and drifts with the
     realized daily returns until the next rebalance, which matches the monthly
-    convention in evaluate(). Cash earns the daily panel-implied risk-free rate.
+    convention in evaluate(). Unused own capital earns the Treasury proxy;
+    short collateral and financing retain the panel-implied rate.
     """
     rf_daily = market_daily.rf
     px = dsf.pivot(index="day", columns="permno", values="daily_return")
     total, book_ids = [], {}
     for month in sorted(books):
         w = books[month]
-        if not w:
-            continue
-        days = px.loc[px.index.to_period("M") == month]
-        if days.empty:
+        month_days = market_daily.index[market_daily.index.to_period('M') == month]
+        days = px.reindex(month_days)
+        if not len(days.index):
             continue
         book_ids[month] = list(w)
         weights = pd.Series(w, dtype=float)
@@ -352,11 +460,16 @@ def daily_metrics(
                 raise ValueError(f"Missing official risk-free rate for {day}")
             missing = int((row.isna() & weights.reindex(row.index).abs().gt(1e-10)).sum()) + sum(abs(weights[k])>1e-10 for k in weights.index if k not in cols)
             pnl = float((weights[cols] * (r-rfd)).sum())
+            sweep = cash_sweep(weights, rfd, float(market_daily.treasury_rf.get(day, np.nan)))
+            equity_pnl = float((weights[cols] * r).sum())
             fee = 0.0 if monthly is None else (float(monthly.loc[month,'cost']) if day==days.index[0] else 0.0)
             borrow = 0.0 if monthly is None else float(monthly.loc[month,'borrow'])/len(days)
-            total.append({"day": day, "month": month, "total": rfd + pnl-fee-borrow, "rf": rfd,
+            day_return = (equity_pnl + sweep['treasury_income']
+                          + sweep['short_collateral_income'] - sweep['financing_cost'] - fee - borrow)
+            total.append({"day": day, "month": month, "total": day_return, "rf": rfd,
+                          **sweep,
                           'trading_cost':fee,'borrow_cost':borrow,'missing_held_returns':missing})
-            denom = 1.0 + pnl + rfd-fee-borrow
+            denom = 1.0 + day_return
             if denom > 0:
                 weights[cols] = weights[cols] * (1.0 + r) / denom
     if not total:

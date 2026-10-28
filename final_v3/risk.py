@@ -53,11 +53,18 @@ GEV_MIN_MONTHS = 24
 JUMP_CLIP = 3.0
 
 
+def feature_cache_signature() -> tuple:
+    """Parameters used by the book-independent peer and edge features."""
+    return (PEER_WINDOW_MONTHS, PEER_MIN_OBSERVATIONS, SQUEEZE_MOVE,
+            EDGE_MONTHS, EDGE_MIN_MONTHS, EDGE_TAIL, EDGE_FLOOR, EDGE_STEP, MIN_PRICE)
+
+
 def protect(
     weights: dict[int, float],
     month: pd.Period,
     panel: pd.DataFrame,
     scores: pd.DataFrame,
+    cache: dict | None = None,
 ) -> tuple[dict[int, float], pd.DataFrame, dict]:
     """Applies the risk rules to one month's target book.
 
@@ -84,7 +91,9 @@ def protect(
     now = now.set_index("permno")
     shorts = book.index[book < 0]
 
-    probability = _peer_squeeze_probability(history, now, formation)
+    cached = None if cache is None else cache.get(formation)
+    probability = (_peer_squeeze_probability(history, now, formation)
+                   if cached is None else cached['peer_probability'])
     flagged = probability.rank(pct=True).gt(1 - PEER_TOP_SHARE)
     flagged = flagged.reindex(shorts, fill_value=False)
     sector = now.gics.astype("string").str[:2].reindex(shorts).fillna("na")
@@ -98,7 +107,10 @@ def protect(
     scale = 1.0
     if np.isfinite(norm) and shortfall > 0:
         scale = float(np.clip(ES_TOLERANCE * norm / shortfall, ES_FLOOR, 1.0))
-    edge_t, edge_scale = _edge_throttle(scores, history, month)
+    edge_t, edge_scale = (_edge_throttle(scores, history, month)
+                          if cached is None else cached['edge'])
+    if cache is not None and cached is None:
+        cache[formation] = {'peer_probability': probability, 'edge': (edge_t, edge_scale)}
     adjusted *= scale * edge_scale
 
     table = pd.DataFrame(
@@ -108,6 +120,8 @@ def protect(
                 book.index
             ),
             "risk_multiplier": adjusted / book,
+            "peer_flagged": flagged.reindex(book.index, fill_value=False),
+            "runup_factor": pd.Series(np.minimum(1.0, RUNUP_CAP / (1 + rally)), index=shorts).reindex(book.index, fill_value=1.0),
         }
     )
     summary = {
