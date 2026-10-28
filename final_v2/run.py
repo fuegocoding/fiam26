@@ -27,6 +27,7 @@ def main():
                 "owned_strategy_counts",
                 "research_pool_target_met",
                 "constraints_pass",
+                "submission_ready",
                 "new_model_call_attempts",
             )
         } | {"report": str(Path(result["output_dir"]) / "campaign_report.json"),

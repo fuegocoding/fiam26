@@ -44,8 +44,8 @@ def frequency_metrics(returns, cash, market, annual):
         np.asarray(x, float) for x in (returns, cash, market)
     )
     excess, active = returns - cash, returns - cash - 0.04 / annual
-    vol = np.std(excess, ddof=1)
-    tracking = np.std(active, ddof=1)
+    vol = np.std(excess, ddof=1) if len(excess) > 1 else float('nan')
+    tracking = np.std(active, ddof=1) if len(active) > 1 else float('nan')
     reg = regression(excess, market - cash)
     return {
         "observations": len(returns),
@@ -55,7 +55,7 @@ def frequency_metrics(returns, cash, market, annual):
             np.expm1(np.log1p(returns).sum() * annual / len(returns))
         ),
         "annualized_volatility": float(
-            np.std(returns, ddof=1) * np.sqrt(annual)
+            (np.std(returns, ddof=1) if len(returns) > 1 else float('nan')) * np.sqrt(annual)
         ),
         "sharpe": float(np.mean(excess) / vol * np.sqrt(annual))
         if vol > 1e-12

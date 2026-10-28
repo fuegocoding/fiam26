@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from .filing_access import FilingResearchStore
 from .input_permissions import COMPETITION_CHARACTERISTICS
@@ -299,6 +300,8 @@ def prepare_panel(panel_path, daily_path, settings, cache):
             "rvol_21d",
             "bidaskhl_21d",
         ]
+        schema = pq.read_schema(panel_path).names
+        context_columns += [c for c in ('ticker', 'company_name') if c in schema]
         raw = pd.read_parquet(
             panel_path,
             columns=context_columns,
@@ -479,6 +482,8 @@ def prepare_panel(panel_path, daily_path, settings, cache):
             "dolvol_126d",
             "rvol_21d",
             "bidaskhl_21d",
+            "ticker",
+            "company_name",
         ]
         frames = [
             frame[[c for c in context if c in frame]].copy() for frame in frames
