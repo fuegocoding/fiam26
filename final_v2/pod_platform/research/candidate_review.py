@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from .edge_curve import mean_evidence
+from .predictive_selection import predictive_score
 
 
 def candidate_history(trial, known):
@@ -35,21 +37,32 @@ def chronological_evidence(values, width):
 
 
 def compare_refinement(candidate, parent, known, minimum, uncertainty_haircut):
-    """Compare declared scopes/windows on identical settled months."""
-    common = np.intersect1d(candidate_history(candidate, known), candidate_history(parent, known))
-    width = min(candidate["strategy"].validation_window_months, parent["strategy"].validation_window_months)
+    """Compare predictive scores on common decision cohorts known at the cutoff."""
+    reviews = [review_candidate(t, known, minimum, uncertainty_haircut) for t in (candidate, parent)]
+    asof = reviews[0]["predictive_selection"].get("asof")
+    if asof is None:
+        return {"months": 0, "candidate_score": None, "parent_score": None}
+    common = None
+    for trial in (candidate, parent):
+        data = trial.get("predictive_monthly", pd.DataFrame())
+        if data.empty:
+            return {"months": 0, "candidate_score": None, "parent_score": None}
+        first = pd.Timestamp(asof) - pd.DateOffset(months=trial["strategy"].evidence_lookback_months)
+        eligible = data.loc[(data.variant == "base") & (data.settlement_date > first)
+            & (data.settlement_date <= pd.Timestamp(asof))
+            & np.isfinite(data.rank_ic), "formation_month"].to_numpy()
+        common = eligible if common is None else np.intersect1d(common, eligible)
     scores = []
     for trial in (candidate, parent):
-        review = review_candidate(trial, common, minimum, uncertainty_haircut)
-        chronological = chronological_evidence(np.asarray(trial["monthly"])[common], width)
-        edge, worst = review["expected_annual_unit_edge"], chronological["worst_annual_unit_mean"]
-        scores.append(min(edge, worst) if len(common) >= minimum and edge is not None and worst is not None else None)
-    return {"months": len(common), "window_months": width,
+        restricted = {**trial, "predictive_monthly": trial["predictive_monthly"].loc[
+            trial["predictive_monthly"].formation_month.isin(common)]}
+        scores.append(predictive_score(restricted, asof, minimum)["score"])
+    return {"months": len(common), "method": "common_cohort_predictive_score",
         "candidate_score": scores[0], "parent_score": scores[1]}
 
 
 def review_candidate(trial, known, minimum=24, uncertainty_haircut=1.0):
-    """Assess only settled unit returns; validity alone is not positive evidence."""
+    """Rank predictive evidence; historical portfolio returns describe risk."""
     eligible = candidate_history(trial, known)
     values = np.asarray(trial["monthly"], float)[eligible]
     evidence = mean_evidence(values)
@@ -57,33 +70,41 @@ def review_candidate(trial, known, minimum=24, uncertainty_haircut=1.0):
     if evidence["hac_se"] is not None:
         expected = float((evidence["mean"] * len(values) / (len(values) + 12)
                           - uncertainty_haircut * evidence["hac_se"]) * 12)
-    supported = len(values) >= minimum and expected is not None and expected > 0
+    known = np.asarray(known, int)
+    dates = trial.get("outcome_dates")
+    asof = pd.DatetimeIndex(dates)[known].max() if dates is not None and len(known) else None
+    prediction = predictive_score(trial, asof, minimum)
+    supported = prediction["rank_eligible"]
+    legacy = trial.get("funding_method", "predictive") == "legacy_returns"
     return {
         **evidence,
         "evidence_lookback_months": trial["strategy"].evidence_lookback_months,
         "chronological": chronological_evidence(values, trial["strategy"].validation_window_months),
-        "expected_annual_unit_edge": expected,
+        "expected_annual_unit_edge": expected if legacy else None,
+        "historical_return_diagnostic": {"uncertainty_adjusted_annual_mean": expected,
+            "used_for_funding": legacy},
+        "predictive_selection": prediction,
+        "selection_score": prediction["score"],
+        "funding_supported": bool(len(values) >= minimum and expected is not None and expected > 0) if legacy else None,
+        "funding_reason": "legacy_return_evidence" if legacy else "calibrate_current_stock_targets_at_allocation",
         "supported": supported,
-        "review_reason": "positive_uncertainty_adjusted_unit_edge" if supported else (
-            "insufficient_settled_history" if len(values) < minimum
-            else "nonpositive_uncertainty_adjusted_unit_edge"
-        ),
+        "review_reason": prediction["reason"],
     }
 
 
 def supported_candidates(trials, pod, known, minimum=24, *,
                          uncertainty_haircut=1.0, maximum=3, maximum_correlation=.85):
-    """Rank supported candidates and retain distinct return evidence."""
+    """Rank by the four-component predictive score, retaining distinct sleeves."""
     rows = []
     for identity, trial in trials.items():
         if trial["strategy"].pod != pod:
             continue
         evidence = review_candidate(trial, known, minimum, uncertainty_haircut)
         if evidence["supported"]:
-            rows.append((evidence["lower_95"], evidence["expected_annual_unit_edge"], identity))
+            rows.append((evidence["selection_score"], identity))
     selected = []
     known = np.asarray(known, dtype=int)
-    for _, _, identity in sorted(rows, reverse=True):
+    for _, identity in sorted(rows, key=lambda row: (-row[0], row[1])):
         trial = trials[identity]
         duplicate = False
         for old in selected:

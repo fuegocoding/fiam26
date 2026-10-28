@@ -93,6 +93,7 @@
     "max_pod_capital": 0.5,
     "daily_warmup_start": "2014-01-01",
     "research_universe_size": null,
+    "tree_device": "auto",
     "strategy_capital_usd": 250000000,
     "fund_capital_usd": 1000000000,
     "liquid_hedge_min_market_cap_usd": 10000000000,
@@ -101,10 +102,15 @@
     "filings_path": "${project_root}/data/8k_20150101_20260831_identified.parquet"
   },
   "research_campaign": {
+    "align_forecast_horizons": true,
+    "funding_method": "predictive",
+    "robustness_suite": "expanded",
+    "issuer_validation_folds": 2,
     "code_max_tokens": 2560,
     "max_request_estimated_tokens": 7600,
     "candidates_per_request": 3,
     "target_supported_candidates_per_pod": 5,
+    "maximum_owned_strategies_per_pod": 3,
     "minimum_edge_months": 12,
     "edge_uncertainty_haircut": 1.0,
     "benchmark_fred_path": "${project_root}/external_data/external.parquet",

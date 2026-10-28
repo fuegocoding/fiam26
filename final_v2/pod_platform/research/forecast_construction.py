@@ -86,10 +86,27 @@ def monthly_concentration(strategy, decisions, panel, market, settings):
     Labels cover execution close to the next execution close, including the
     old book's final return before its replacement fills. Calendar-month
     headline returns have a different boundary. The label is the exact
-    fixed-share zero-size interval. Faster rules
-    must use daily replay and cannot select a count from this monthly curve.
+    fixed-share zero-size interval. Faster rules and expiry closes between
+    monthly executions must use daily replay; this curve cannot represent them.
     """
     if strategy.review != "monthly":
+        return None
+    execution_days = market.dates.get_indexer(panel.execution_dates)
+    if (len(execution_days) != len(panel.returns)
+        or np.any(execution_days < 0)
+        or len(np.unique(execution_days)) != len(execution_days)):
+        return None
+    monthly = {int(day): t for t, day in enumerate(execution_days)}
+    if any(day not in monthly or monthly[day] != formation
+        for day, (formation, _) in decisions.items()):
+        return None
+    # Each label must end at the next monthly execution close. A forecast
+    # horizon panel or an irregular interval cannot represent this hold path.
+    if (len(panel.settlement_dates) != len(execution_days)
+        or panel.settlement_dates.isna().any()
+        or (len(execution_days) > 1 and np.any(panel.settlement_dates[:-1] != panel.execution_dates[1:]))
+        or np.any(market.dates.get_indexer(panel.settlement_dates) < 0)
+        or np.any(panel.settlement_dates <= panel.execution_dates)):
         return None
     panel = scoped_panel(panel, strategy.universe)
     designs = construction_designs(panel, strategy.controls)

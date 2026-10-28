@@ -218,6 +218,8 @@ CONSTRAINT_KEYWORDS = (
     "maxItems",
     "minimum",
     "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
     "pattern",
     "default",
 )
@@ -966,6 +968,16 @@ class ClaudeCodeProvider:
             raise ProviderError("claude output exceeds the configured limit")
         response_hash = sha256_bytes(stdout)
         if proc.returncode != 0:
+            # The CLI reports account limits on stdout. Keep only a bounded,
+            # recognizable reset hint; never expose arbitrary child output.
+            notice = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", stdout.decode("utf-8", "replace"))
+            reset = re.search(r"\bresets?\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?"
+                r"(?:\s*\([A-Za-z_/-]+\))?", notice, re.I)
+            if reset and re.search(r"\b(?:limit|usage|quota)\b", notice, re.I):
+                hint = reset.group(0).strip()
+                raise ProviderError(f"claude provider limit reached; {hint}",
+                    response_hash=response_hash,
+                    diagnostic={"failure_kind": "provider_limit", "reset_hint": hint})
             raise ProviderError(
                 f"claude exited with status {proc.returncode}",
                 response_hash=response_hash,

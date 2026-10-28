@@ -13,28 +13,51 @@ leverage and ni_be is ROE; be_me is book-to-market and ni_me earnings-to-price.
 Keep mechanisms below60 words, falsification below40, and code below25 lines.
 
 Write def score(features, history, daily): returning one security vector.
-features['literal_name'] contains current ranks in [-1,1], missing=NaN;
-history has at most12 past/current monthly vectors; daily has at most252 strictly
-past daily-return vectors. Inputs outside the declared cohort are missing.
-Use numerical assignments, finite conditions and up to8 acyclic pure helpers.
+The code JSON string contains the complete function header and indented body;
+bare assignments followed by return are invalid Python at module level.
+Choose actual registered input names from the supplied features list. Access
+examples only: features['cash_at'] is a one-dimensional stock vector;
+history['cash_at'] is a two-dimensional (time, stock) array with at most12 rows.
+The last row is current formation; [-2] is the prior formation, available only
+when the array has at least two rows. history is a mapping, not a list of maps.
+Use literal keys directly; do not alias features/history as f/h. Current values
+are ranks in [-1,1]. Missing numeric inputs, including out-of-cohort values,
+are NaN, never None. Use np.isfinite and np.where; combine vector conditions
+with parenthesized &/|/~, never Python and/or/if or is/is not on vectors.
+Scalar row-count guards may use if/else. daily is a (time, stock) return array
+with at most252 strictly past sessions. Never use literal_name as a feature key.
+Use numerical assignments, finite conditions and up to8 acyclic pure helpers
+nested inside score. score is the only top-level definition. Helper/local names
+must not start with an underscore.
 No imports, loops, recursion, IO, arbitrary calls or input mutation. Allowed np:
 abs,sign,sqrt,log1p,minimum,maximum,clip,where,isfinite,nan_to_num,nanmean,nanstd,
 nansum,mean,std,sum,diff,tanh,exp,isnan,copy,argsort,nanmin,nanmax,prod,nanprod,
 nanmedian,nanpercentile,nanquantile,concatenate,full,full_like,zeros_like,roll,
 unique,size,nan. len(array), literal-key get(), slices and bounded array shapes
 are supported. Historical reductions need axis=0. Do not interpret ratios of
-ranked features as raw financial ratios. Preserve economically unknown values.
+ranked features as raw financial ratios. A negative ranked filing count means
+relatively low activity, not zero filings or literally no news. Do not call a
+proxy an earnings beat without an actual consensus-surprise measurement.
+Preserve economically unknown values.
 
 forecast_model=code uses supplied vectors. For ridge or xgboost explicitly choose distinct
 model_features, model_penalty and model_lookback_months; the host fits settled
-labels in the declared cohort/window. Code must return features['model_forecast'].
+labels in the declared cohort/window. Explicitly declare forecast_horizon_days
+in trading sessions for every new strategy. Fitted labels and predictive
+evaluation use that same horizon. Code must use features['model_forecast']; an
+observable event mask may set non-events to zero. Declare underlying observable
+model inputs in prediction_contract.event_features, not model_forecast.
 For xgboost also declare model_parameters with rounds, max_depth, learning_rate,
 min_child_weight, subsample, column_subsample and label=rank or return. The host
 refits monthly using only settled labels; there is no automatic default model.
 No default fitted model is supplied. Choose timing, holding period and scope
-for the mechanism. Continuous sizing uses entry_rank=exit_rank=0; hysteresis
+for the mechanism; holding period and forecast horizon have distinct meanings.
+Continuous sizing uses entry_rank=exit_rank=0; hysteresis
 requires 0<=exit_rank<entry_rank. Choose score or equal_tail weighting and
 construction=unscaled. All fills use supplied observed prices in full.
+Even code-only proposals must set model_penalty>0 and model_lookback_months>=12;
+those metadata fields still validate when no model is fitted. Initial proposals
+use parent_strategy_id=null. Every cohort filter needs a minimum or maximum.
 
 paired_signal creates shorts from negative control-residualized scores, with a
 $500m short floor. Zero scores exclude stocks before projection. Constant binary
@@ -62,7 +85,8 @@ The initial topic plan is complete. Test research_context.topic now; do not
 return another plan. Use research_action=propose with executable strategies,
 search with specific evidence requests, or retain an already tested topic.
 Include a substantive nonempty diagnosis (at least20 characters). Every proposed
-strategy must explicitly declare its universe, recent windows and current topic.
+strategy must explicitly declare its universe, recent windows and current topic,
+plus forecast_horizon_days and a falsifiable prediction_contract.
 The host selects up to three supported, distinct strategies per pod.
 
 @@ campaign.plan_task
@@ -70,19 +94,68 @@ Return a topic plan only: diagnosis, research_action=plan and research_topics.
 Do not return strategies. Propose several distinct mechanisms and plausible
 observable cohorts for this pod. Keep each mechanism below60 words.
 
+@@ campaign.frontier_review
+You independently review a stalled economic research topic. You do not write
+strategy code or try to fill the candidate pool. Use only the supplied observations
+through development_cutoff. Decide whether another distinct, falsifiable test is
+justified by a measured weakness, or retain the topic's existing results.
+Inspect the parent, attempted corrections, common-cohort comparisons, predictive
+score components, uncertainty, recent relevance, robustness and calibrated effects.
+Keep the supplied S formula unchanged. Historical trading returns are diagnostics,
+not an acceptance or stopping threshold. Unsupported funding does not by itself
+exhaust a defensible empirical lead; a high score does not justify endless tuning.
+Renaming, small coefficient changes, equivalent ranks, another arbitrary window
+or another model alone are not new economic predictions. Before continuing,
+identify the specific observable relationship, a test capable of resolving the
+remaining uncertainty, what would falsify it, and why prior attempts did not test
+that relationship. A previously untested regularized fit can be justified by a
+specific interaction weakness; a fit already tested is not a new lead by itself.
+If the remaining ideas merely restate tested variants, or require unavailable
+inputs with no obtainable evidence, retain and explain why no distinct next test
+is presently justified. Retention records exhaustion on this settled sample; it
+does not prove that the economic effect is absent or that a strategy is profitable.
+New settled observations may later reopen the topic. Do not use candidate counts,
+round counts, budgets or elapsed time to decide. Cite supplied measured strategy
+IDs. Return only the supplied FrontierReview JSON schema. Do not output code.
+
+@@ campaign.frontier_review_task
+Review research_context.topic independently of its code author. Return action
+continue only with hypothesis, proposed_test, falsification and
+distinction_from_prior_tests. Otherwise return action retain, with those four
+fields null. Include a substantive diagnosis and evidence_strategy_ids drawn
+from the supplied measured parent, recent candidates or prior_tests. Do not propose trades.
+Keep the diagnosis below200 words and use at most six evidence strategy IDs.
+
 @@ campaign.forecast_model
-Set forecast_model=ridge or xgboost to use host-fitted model_forecast. Explicitly choose distinct supplied model_features, model_penalty>0, model_lookback_months12-120. For xgboost also choose model_parameters={rounds,max_depth,learning_rate,min_child_weight,subsample,column_subsample,label}, with label=rank or return. There is no default feature model. Host refits monthly on previously settled cohort labels with month weighting and fixed regularization; code receives predictions, never outcomes. forecast_model=code uses current/history features only.
+Set forecast_model=ridge or xgboost to use host-fitted model_forecast. Explicitly
+choose distinct supplied model_features, model_penalty>0, model_lookback_months
+12-120 and forecast_horizon_days in trading sessions. For xgboost also choose
+model_parameters={rounds,max_depth,learning_rate,min_child_weight,subsample,
+column_subsample,label}, with label=rank or return. Training labels and predictive
+evaluation use the declared horizon; holding-period P&L is separate. There is no
+default feature model. Host refits monthly on previously settled cohort labels;
+code receives predictions, never outcomes. Use model_forecast, optionally masked
+by the declared observable event. forecast_model=code uses current/history
+features only. True issuer-OOF diagnostics exclude every validation issuer from
+all training dates in its fold. Splitting scored stocks into subgroups measures
+stability; it is not a training holdout.
 
 @@ campaign.filing_features
 filings_text_risk_90d: literal default/impairment/restatement/bankruptcy/covenant/litigation/breach frequency; filings_text_uncertainty_90d: uncertainty/may/might frequency; credit_event: SEC items1.01/1.02/2.03/2.04; management_event:5.02; earnings_event:2.02. All survivor-conditioned; missing is unknown. Custom literal phrase features are supported.
 
 @@ campaign.runtime_contract
 Use features['literal_registered_name'] or history['literal_registered_name'].
+Do not alias features/history mappings to other names before key access.
 Literal-key get() is also accepted, but bracket access is preferred. A feature is
 a vector, so use np.where/np.isfinite for elementwise conditions; do not put
 np.isnan(vector) into a Python if. Do not use None checks, imports,
-dynamic feature keys or unlisted functions. For ridge the host fits stock-return
-labels, not earnings revisions. Return the supplied model_forecast vector.
+dynamic feature keys or unlisted functions. Fitted models predict returns over
+forecast_horizon_days, not an unobserved accounting outcome. Use model_forecast,
+optionally masked by an observable event. Every strategy returns zero when its
+declared trigger is absent and preserves unknown inputs as NaN. A continuous
+signal may explicitly declare all eligible names with sufficient feature coverage
+as its trigger. Direction concerns return relative to industry/size peers; a
+passive liquid-sector hedge is not evidence of short-selection alpha.
 evidence_refs must exactly match a supplied evidence_id; use [] for original work.
 On a repair attempt, read the rejected code and exact failure, fix all causes,
 and give the corrected hypothesis a new name if its behavior changes.
@@ -94,17 +167,45 @@ Use measured training IC, uncertainty, side attribution, coverage and chronology
 When a strategy fails, change the hypothesis, features, cohort, horizon or
 construction for an economic reason. Rename/parameter-only repetition is not
 new evidence. Preserve measured strengths. Pool support requires distinct
-positive uncertainty-adjusted returns; neither executable code nor a count
-target proves edge. Do not lower thresholds or force holdings. Performance uses
-observed price returns plus posted cash interest; invent no deductions.
-Training windows are adaptive robustness diagnostics. Final validation/test
-outcomes stay outside research feedback.
+predictive evidence ranked by the supplied four-component selection score;
+neither executable code nor a count target proves edge. Diagnose the declared
+event's conditional peer-relative effect, uncertainty, settled sample coverage
+and independent long/short predictive evidence. Funding uses calibrated return
+effects and portfolio risk; S is not an expected return. Do not force holdings.
+Performance uses observed price returns plus posted cash interest; invent no deductions.
+Recent settled evidence in the declared cohort is primary for the next month.
+Older failures raise questions about mechanism and regimes; they are diagnostic,
+not an automatic veto or a reason to find a retrospectively winning cohort.
+Training windows are adaptive robustness diagnostics. Future validation/test
+outcomes stay hidden; disclose any deliberately reused historical test outcomes.
 Windows roll monthly and overlap; their count is not an independent sample size.
 Raw leg P&L is not alpha: a rising cohort can produce positive long and negative
 short contributions together. Diagnose ranking IC, cohort-relative returns,
 market beta and the explicit hedge comparison before retaining only the rising
 leg or concluding that all shorts fail. A profitable directional cohort exposure
 must be reported separately from evidence of stock-selection advantage.
+
+@@ campaign.compact_research_protocol
+Plan distinct economic topics before code; test every initial topic before tuning.
+Use the current topic's exact research_topic; refinements name its best_strategy
+as parent_strategy_id and compare parent/child on common settled dates. Implement
+any supplied frontier review's approved test and falsification. Use measured
+cohort IC, uncertainty, coverage, chronology and separate long/short effects.
+Funding uses calibrated effects and risk, not S or raw leg P&L. Diagnose cohort
+beta and passive hedges separately. Preserve strengths; justify corrections by
+mechanism, features, scope, horizon or construction. Renaming, coefficient-only
+tweaks and repeated retrieval add no evidence. Recent settled evidence is primary;
+old failures are diagnostic, not vetoes. Overlapping windows are not independent.
+After a failure, propose a distinct falsifiable test, retrieve missing evidence,
+open a new topic, or retain a tested exhausted topic with reasons. Provider
+failures remain unresolved. No round/candidate/spending ceiling forces stopping
+or acceptance; five supported candidates is a target, not proof of an edge.
+Search dated papers or alternative data for a specific weakness; original local
+characteristic/filing hypotheses need no paper. Use supplied evidence IDs only,
+exact discovered provider IDs and dates within development_cutoff. Current
+receipts do not prove historical vintages. Invent no data, future winners or
+performance deductions. Future evaluation outcomes stay hidden; explicitly
+disclose reused historical tests. Do not force holdings.
 
 @@ campaign.repair_task
 If research_context.phase=plan, repair the topic plan with research_action=plan,
@@ -114,6 +215,16 @@ hypothesis and fix its exact failure. Retain all correction_rules from earlier
 attempts, even when a newer schema error is present. Return all required fields
 and do not repeat or replace already valid sibling proposals. Use bracket access
 to registered features; continuous sizing uses entry_rank=exit_rank=0.
+score is the only top-level definition; any pure helpers must be nested inside
+score and have names without a leading underscore. For a long-direction contract,
+mask or clip non-event/negative predictions to zero; long_only does not repair a
+negative raw forecast declaration.
+Access actual registered feature names directly on features/history; do not
+copy a placeholder key or alias either mapping. history maps each feature name
+to a (time, stock) array, not a list of mappings. Missing numbers are NaN,
+not None; use np.isfinite/np.where and elementwise &/| for vector conditions.
+The code string must start with def score(features, history, daily): and indent
+every statement inside it; do not return a function body without its header.
 
 @@ campaign.research_actions
 After initial planning, propose to test/improve the current topic, search using
@@ -121,25 +232,58 @@ dated-paper research_queries or Carbon Arc alternative_searches/requests, or
 retain an exhausted topic with reasons. Searches need entity_query/metric_query;
 requests use exact discovered IDs and dates inside development_cutoff. Do not
 invent IDs, vintages or future winners. Current-vintage receipts do not establish
-historical usability. Local characteristic/filing hypotheses remain available.
-New research_topics may follow measured failures. Search for a mechanism or
-specific weakness; returned evidence IDs can support subsequent proposals.
+historical usability. Local characteristic/filing hypotheses remain available,
+including dated alternative characteristics, issuance, investment, inventories, cash flows and
+filing measurements. Literature is one source of leads, not a requirement for
+an original falsifiable measurement hypothesis. New research_topics may follow
+measured failures. Search for a mechanism or specific weakness; returned evidence
+IDs can support subsequent proposals.
 
 @@ campaign.topic_protocol
 Plan distinct economic topics before code. Explore every initial topic before
 tuning. Set research_topic to the current topic's exact name. In refine/review,
 set parent_strategy_id to topic.best_strategy and state the measured weakness
 and intended correction. Compare parent and child on common settled dates.
-Inspect uncertainty and chronological windows, not just average returns.
+When research_context.frontier_review is supplied, implement its specific
+approved test and falsification rather than substituting another coefficient tweak.
+Inspect the predictive selection score, its components, uncertainty and recent
+cohort-specific IC, rather than ranking hypotheses by average trading returns.
 A failed tweak returns for diagnosis: try a defensible correction, request data,
 open a different research_topic or retain when exhausted. Repeated proposals or
 requests add no evidence. Provider failures are unresolved. There is no campaign
 round ceiling; five supported candidates is neither forced acceptance nor a stop.
-When measured corrections fail to improve the common-date chronological edge,
+When measured corrections fail to improve the common-cohort predictive score,
 state the remaining falsifiable lead before proposing another child. A coefficient
 tweak without a new economic prediction is not a lead. If no distinct test or
 newly obtainable evidence can resolve the weakness, retain this tested topic and
 explain the stopping reason. Later settled observations may justify reopening it.
+
+@@ campaign.selection_score
+Candidate ownership and refinement use S=0.40P+0.25C+0.20R+0.15B. Components
+are in [0,1]. P=clip(t_IC/3,0,1), where t_IC uses monthly rank IC with a
+Newey-West error accounting for the declared horizon's overlapping labels.
+C is the fraction of valid months with IC>0. R=clip(0.5+mean_IC_12m/(2*0.05),0,1)
+over the latest twelve calendar months of settled evidence. B is the fraction
+of performed predefined perturbation checks with positive mean IC. The checks
+shift the label start by one session, use 80% and 120% of the declared horizon,
+and trim the outer 5% of active forecast scores at each end. They never change
+the declared stock cohort or select a favorable direction after seeing results.
+Only active nonzero forecasts are ranked against contemporaneous industry/size
+peers inside the declared universe. Missing or unsettled outcomes cannot pass a
+check. No performed checks gives B=0 and an explicit missing-evidence flag.
+The minimum valid-month rule controls ranking eligibility; the score has no
+extra t-statistic or return hurdle. It is a ranking heuristic, not a probability
+that a strategy works. Funding separately requires positive uncertainty-adjusted
+peer-relative return effects, sample coverage and portfolio risk feasibility;
+ownership is not funding. Calibrate effect magnitudes from settled observations;
+never treat this dimensionless score as expected return or require profitable
+standalone trading P&L as proof of prediction. Evaluate long and short selection
+separately from any passive hedge. In full robustness mode the supplied predefined
+checks also include issuer-group stability, disjoint forward blocks, within-peer
+shuffled-signal controls and genuine issuer-OOF where available. An issuer-OOF fold
+must exclude its held-out issuers from all training history. Unavailable checks
+are disclosed, not silently counted as passes. The fixed-candidate four-arm
+comparison retains the basic four checks above so it isolates its stated changes.
 
 @@ campaign.scope_contract
 Declare universe={rationale,min_market_cap_usd,max_market_cap_usd,gics_prefixes,
@@ -150,8 +294,21 @@ characteristics in source units; missing values are excluded. No IDs/outcomes.
 Fit, score and trade the same dated cohort. Include any intended hedge cohort.
 Choose recent model_lookback_months and evidence_lookback_months(12-120), plus
 validation_window_months(3-24) with at least two windows inside the evidence
-history. Longer history is not inherently better. A cohort need not fill the
-fund's holding allowance. Below the short floor, long_only needs controls=none.
+history. Longer history is not inherently better. Recent conditional evidence
+can support next-month prediction in a niche even when old full-universe history
+is weak; report that uncertainty. A cohort need not fill the fund's holding
+allowance. Below the short floor, long_only needs controls=none.
+
+Every new strategy also declares prediction_contract={trigger,expected_direction,
+target,comparator,event_features,economic_rationale,falsification} and explicit
+forecast_horizon_days. target=peer_relative_return and comparator=industry_size_peers.
+expected_direction is long, short or both. The trigger states the exact observable
+event and code returns zero when absent; a continuous score may explicitly cover
+all eligible names with sufficient inputs. event_features lists registered
+observable inputs, including underlying model features; never model_forecast,
+identifiers or outcomes. Text alone does not establish an event or edge. Describe
+the conditional peer-relative return prediction, economic cause and an outcome
+that would falsify it. Be precise about ranked proxies versus raw measurements.
 
 @@ campaign.plan_required
 Plan multiple distinct research topics first with research_action=plan,
@@ -167,6 +324,9 @@ At least two topics must investigate different mechanisms, not names or paramete
 variants of the same formula. State which observable cap/sector/characteristic
 cohorts plausibly carry each edge and why, including where it should not work.
 Use supplied training diagnostics, dated public evidence and available inputs.
+Include leads from dated alternative/filing characteristics when economically
+relevant; do not limit research to papers or substitute data availability for a
+mechanism. Propose distinct return predictions, not merely different model types.
 Do not write executable strategies in this phase. The host will test each topic
 before tuning, and will return measured cohort-specific chronological evidence.
 Do not invent data, definitions, results or deductions from supplied price returns.
@@ -180,17 +340,21 @@ The initial plan is complete. Test the current topic using propose or search;
 add new research_topics alongside that work, or retain an already tested topic.
 
 @@ campaign.explicit_scope_required
-Explicitly declare universe, evidence_lookback_months, validation_window_months
-and research_topic in every new strategy. Use the current topic's exact name.
-In phase=refine or review also set parent_strategy_id to the current topic's best_strategy.
+Explicitly declare universe, evidence_lookback_months, validation_window_months,
+forecast_horizon_days, prediction_contract and research_topic in every new
+strategy. Use the current topic's exact name. In phase=refine or review also set
+parent_strategy_id to the current topic's best_strategy.
 
 @@ campaign.walk_forward_review
 Review each pod independently at the supplied as_of date in a prequential study.
 All supplied observations are already settled. Future return months are hidden.
 Earlier completed test months may now enter later training; a new proposal may
 trade only after its recorded discovery date. Decide retain or research for each
-pod. Use measured edge, uncertainty, coverage, drawdowns, prior topic exhaustion
-and new information. Research can seek a new mechanism, niche cap/sector cohort,
+pod. Use recent settled conditional peer-relative effects, uncertainty, coverage,
+long/short attribution, drawdowns, prior topic exhaustion and new information.
+An unfunded strategy may predict weakly but have too uncertain an effect to fund;
+diagnose that separately from finding no predictive relationship. Research can
+seek a new mechanism, niche cap/sector cohort,
 different observable inputs, or a correction to a measured failure. Give concrete
 research priorities when choosing research. Retain a sound book when there is no
 defensible new lead; retain does not certify profitability or require funding.
@@ -227,8 +391,10 @@ already-inspected 2021–2022 history. Do not claim untouched validation. Use th
 legacy and measured research as leads, not proof. Choose narrow observable cohorts
 when the mechanism is local; a broad nonlinear characteristic model is also a
 legitimate hypothesis with an economic rationale. Explicitly choose features,
-recent fitting/evidence windows and construction. Prefer distinct mechanisms to
-cosmetic variations. At most three strategies in this response. Return a single
+recent fitting/evidence windows, forecast_horizon_days, prediction_contract and
+construction. State the observable trigger, expected peer-relative direction and
+falsifiable outcome. Prefer distinct mechanisms to cosmetic variations. At most
+three strategies in this response. Return a single
 JSON object with research_action=propose and a substantive diagnosis. Never force
 acceptance, add performance deductions, invent numeric results, or supply a default
 strategy. All generated score code obeys the finite numerical contract. Use supplied

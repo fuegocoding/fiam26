@@ -60,6 +60,8 @@ def frequency_metrics(returns, cash, market, annual):
         "sharpe": float(np.mean(excess) / vol * np.sqrt(annual))
         if vol > 1e-12
         else None,
+        "sharpe_zero_risk_free": float(np.mean(returns) / np.std(returns, ddof=1) * np.sqrt(annual))
+        if np.std(returns, ddof=1) > 1e-12 else None,
         "net_information_ratio": float(
             np.mean(active) / tracking * np.sqrt(annual)
         )

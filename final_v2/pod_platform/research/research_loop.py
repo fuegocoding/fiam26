@@ -14,7 +14,8 @@ class TopicResearch:
     """
 
     def __init__(self, pods):
-        self.pods = {pod: {"planned": False, "topics": {}, "blocked": None} for pod in pods}
+        self.pods = {pod: {"planned": False, "topics": {}, "blocked": None,
+            "unresolved_topics": {}} for pod in pods}
 
     def current(self, pod):
         state = self.pods[pod]
@@ -27,6 +28,9 @@ class TopicResearch:
         candidates = sorted([t for t in topics if t["status"] == "unexplored"], key=lambda t: t["visits"])
         candidates += sorted([t for t in topics if t["status"] in {"refine", "review"}], key=lambda t: t["visits"])
         if not candidates:
+            if state.get("unresolved_topics"):
+                state["blocked"] = {"status": "unresolved_topics",
+                    "topics": state["unresolved_topics"]}
             return None
         topic = candidates[0]
         return {"phase": "explore" if topic["status"] == "unexplored" else topic["status"],
@@ -49,6 +53,12 @@ class TopicResearch:
             added += 1
         return added
 
+    def _unresolved_topic(self, state, topic, status, reason):
+        """Preserve failed evaluation work without cancelling independent topics."""
+        failure = {"status": status, "reason": reason}
+        state.setdefault("unresolved_topics", {})[topic["name"]] = failure
+        topic.update(status="unresolved", stop_reason=reason)
+
     def observe(self, pod, context, result, candidates, evidence_signature):
         state = self.pods[pod]
         status = result.get("status")
@@ -65,10 +75,12 @@ class TopicResearch:
         topic["visits"] += 1
         if status == "evidence_requested":
             request = result.get("research_request_signature", evidence_signature)
-            if request in topic["search_signatures"]:
-                topic.update(status="exhausted", stop_reason="research_request_added_no_new_evidence")
+            if request in topic["search_signatures"] and evidence_signature == "no_new_evidence":
+                self._unresolved_topic(state, topic, "repeated_retrieval_without_evidence",
+                    "Repeated retrieval added no evidence; the economic hypothesis remains untested or unresolved")
             else:
-                topic["search_signatures"].append(request)
+                if request not in topic["search_signatures"]:
+                    topic["search_signatures"].append(request)
                 if evidence_signature == "no_new_evidence":
                     topic.update(status="review", last_outcome="retrieval_added_no_new_evidence")
             return
@@ -79,18 +91,17 @@ class TopicResearch:
                 topic.update(status="exhausted", stop_reason=result.get("diagnosis", "agent_reports_no_further_measured_lead"))
             return
         if not candidates:
-            topic.update(status="exhausted", stop_reason="no_new_testable_proposal_after_feedback")
+            self._unresolved_topic(state, topic, status or "no_evaluated_proposal",
+                "No new proposal could be evaluated after feedback; this is not evidence of no economic edge")
             return
         previous = topic["best_score"]
         best = None
         for identity, review in candidates:
-            edge = review["expected_annual_unit_edge"]
-            worst = review["chronological"]["worst_annual_unit_mean"]
-            if edge is None or worst is None:
+            score = review.get("selection_score")
+            if score is None:
                 continue
-            # A refinement must improve its weakest chronological/uncertainty
-            # result. A prettier full-sample mean alone cannot advance it.
-            score = min(edge, worst)
+            # Compare the same predictive formula for parent and child, rather
+            # than rewarding a prettier realized portfolio return.
             comparison = review.get("parent_comparison")
             if comparison is not None:
                 score, baseline = comparison["candidate_score"], comparison["parent_score"]
@@ -103,8 +114,9 @@ class TopicResearch:
         if best is not None and (compared or previous is None or best[0] > previous + 1e-10):
             topic.update(best_score=best[0], best_strategy=best[1], status="refine")
         else:
-            topic.update(status="review", last_outcome="no_improvement_in_uncertainty_adjusted_chronological_edge")
+            topic.update(status="review", last_outcome="no_improvement_in_predictive_selection_score")
 
     def snapshot(self):
         return {"stopping_rule": "topic_frontier_convergence_or_explicit_unresolved_failure",
+            "selection_method": "predictive_score_v1",
             "pods": self.pods}

@@ -20,7 +20,9 @@ from pydantic import Field, ValidationError, model_validator
 from ..contracts.base import StrictModel
 from .filing_text import FilingMeasurement
 from .forecast_construction import construct_target
+from .forecast_labels import prediction_horizon
 from .pod_plans import construction_designs
+from .research_hypotheses import PredictionContract
 from .score_worker import ScoreWorker
 from .training_tactical import threshold_positions
 from .strategy_scope import StrategyUniverse, scoped_panel
@@ -93,6 +95,8 @@ class CodeStrategy(StrictModel):
     entry_rank: float = Field(default=0, ge=0, le=0.95)
     exit_rank: float = Field(default=0, ge=0, le=0.9)
     expected_holding_days: int = Field(ge=1, le=504)
+    forecast_horizon_days: int | None = Field(default=None, ge=1, le=504, exclude_if=lambda v: v is None)
+    prediction_contract: PredictionContract | None = Field(default=None, exclude_if=lambda v: v is None)
     weighting: Literal["score", "equal_tail"] = "score"
     hedge_policy: Literal["paired_signal", "liquid_sector", "long_only"] = "paired_signal"
     construction: Literal["unscaled"] = "unscaled"
@@ -647,7 +651,8 @@ def native_review_calendar(strategy, panel, market):
         yield execution, t, update
 
 
-def code_signals(strategy, panel, market, *, readiness=None, decision_feature_provider=None):
+def code_signals(strategy, panel, market, *, readiness=None, decision_feature_provider=None,
+    forecast_metadata=None, enforce_expiry=True):
     """Replay code at each review using strictly past data and stable columns."""
     panel = scoped_panel(panel, strategy.universe)
     if strategy.entry_rank and strategy.exit_rank >= strategy.entry_rank:
@@ -658,6 +663,9 @@ def code_signals(strategy, panel, market, *, readiness=None, decision_feature_pr
     previous = np.zeros(len(panel.securities))
     cached = None
     previous_scope = None
+    horizon = prediction_horizon(strategy)
+    origin = None
+    origins = []
     with ScoreWorker(function) as worker:
         for execution, t, update in native_review_calendar(
             strategy, panel, market
@@ -690,22 +698,63 @@ def code_signals(strategy, panel, market, *, readiness=None, decision_feature_pr
                     )
                 cached = np.full(len(panel.securities), np.nan)
                 cached[columns] = value
+                # A daily wrapper cannot renew a monthly fitted forecast's
+                # vintage merely by reading the same stored model vector.
+                vintage = (execution if strategy.forecast_model == "code" else
+                    int(market.dates.searchsorted(panel.dates[t])))
+                if origin != vintage:
+                    origin = vintage
+                    origins.append(vintage)
             value = cached.copy()
             value[~panel.mask[t]] = np.nan
+            expired = enforce_expiry and execution >= origin + horizon
+            if expired:
+                value[:] = np.nan
+                previous[:] = 0
             if readiness is not None:
                 readiness[execution] = bool(np.isfinite(value).any())
-            ranks = pd.Series(value).rank(pct=True).to_numpy() * 2 - 1
+            if forecast_metadata is not None:
+                forecast_metadata[execution] = {"origin_day": int(origin),
+                    "expiry_day": int(origin + horizon), "updated": bool(update),
+                    "expiry_only": bool(expired)}
+            if enforce_expiry:
+                finite = np.isfinite(value)
+                active = finite & (np.abs(value) > 1e-12)
+                ranks = pd.Series(np.where(active, value, np.nan)).rank(pct=True).to_numpy() * 2 - 1
+                ranks[finite & ~active] = 0
+                previous[~active] = 0
+            else:
+                ranks = pd.Series(value).rank(pct=True).to_numpy() * 2 - 1
             if strategy.entry_rank:
                 previous = threshold_positions(
                     ranks, previous, strategy.entry_rank, strategy.exit_rank
                 )
                 value = np.where(previous == 0, 0, ranks)
+                if enforce_expiry:
+                    value[~finite] = np.nan
             scores[t] = value
             scope_changed = previous_scope is None or not np.array_equal(previous_scope, panel.mask[t])
-            if update or strategy.review != "monthly" or strategy.entry_rank or scope_changed:
+            if update or strategy.review != "monthly" or strategy.entry_rank or scope_changed or expired:
                 schedules[execution] = (t, value)
                 previous_scope = panel.mask[t].copy()
-    return scores, schedules
+    if enforce_expiry:
+        # Expire at the close after the whole forecast interval, even when the
+        # next native review is later. A newer forecast can supersede it early.
+        for index, origin in enumerate(origins):
+            expiry = origin + horizon
+            superseded = index + 1 < len(origins) and origins[index + 1] <= expiry
+            if superseded or expiry >= len(market.dates):
+                continue
+            t = int(market.formation[expiry])
+            if t < 0:
+                continue
+            schedules[expiry] = (t, np.full(len(panel.securities), np.nan))
+            if readiness is not None:
+                readiness[expiry] = False
+            if forecast_metadata is not None:
+                forecast_metadata[expiry] = {"origin_day": int(origin),
+                    "expiry_day": int(expiry), "updated": False, "expiry_only": True}
+    return scores, dict(sorted(schedules.items()))
 
 
 def unit_schedule(strategy, decisions, panel, settings, name_limit):

@@ -28,7 +28,15 @@ from ..papers import PaperService, PaperStore
 from ..papers.transport import UrllibTransport
 from ..research.campaign_metrics import competition_report
 from ..research.causal_forecast import fit_ridge_forecast
+from ..research.forecast_labels import forecast_training_panel, prediction_horizon
 from ..research.candidate_review import candidate_history, compare_refinement, review_candidate, supported_candidates
+from ..research.predictive_selection import (
+    ROBUSTNESS_CHECKS,
+    SCORE_WEIGHTS,
+    forecast_ic_observations,
+    monthly_ic_observations,
+)
+from ..research.predictive_calibration import monthly_calibration_observations, expected_target_edge
 from ..research.research_loop import TopicResearch
 from ..research.strategy_scope import scope_diagnostics, scoped_panel
 from ..research.decision_filings import DecisionFilingFeatures
@@ -82,6 +90,8 @@ from .common import atomic_write_json, file_sha256, now_utc
 from .configuration import config_path
 from .common import source_digest
 from .live_models import create_live_models
+from .trial_cache import restore_evaluated_trials
+from .topic_review import FrontierReview
 from .memory_control import (
     collect_research_memory,
     memory_sample,
@@ -93,10 +103,10 @@ from .memory_control import (
 from .research_access import additional_input_hashes, write_access_audit
 
 
-def select_roster(trials, pod, known, minimum=24, *, uncertainty_haircut=1.0):
+def select_roster(trials, pod, known, minimum=24, *, uncertainty_haircut=1.0, maximum=3):
     """Own up to three supported, distinct hypotheses; an empty book is valid."""
     return supported_candidates(trials, pod, known, minimum,
-        uncertainty_haircut=uncertainty_haircut, maximum=3, maximum_correlation=.85)
+        uncertainty_haircut=uncertainty_haircut, maximum=maximum, maximum_correlation=.85)
 
 
 def compact_response_schema(value):
@@ -118,6 +128,31 @@ class ResearchCampaign:
             if key in self.settings:
                 self.settings[key] = str(config_path(self.settings[key]))
         self.policy = config["research_campaign"]
+        self.align_forecast_horizons = self.policy.get("align_forecast_horizons", True)
+        self.funding_method = self.policy.get("funding_method", "predictive")
+        self.robustness_suite = self.policy.get("robustness_suite", "expanded")
+        self.issuer_validation_folds = self.policy.get("issuer_validation_folds", 2)
+        if type(self.align_forecast_horizons) is not bool:
+            raise ValueError("align_forecast_horizons must be boolean")
+        if self.funding_method not in {"predictive", "legacy_returns"}:
+            raise ValueError("funding_method must be predictive or legacy_returns")
+        if self.robustness_suite not in {"basic", "expanded"}:
+            raise ValueError("robustness_suite must be basic or expanded")
+        if self.issuer_validation_folds not in (0, 2):
+            raise ValueError("issuer_validation_folds must be zero or two")
+        comparisons = self.policy.get("allocation_comparisons", [])
+        if (not isinstance(comparisons, list) or len(set(comparisons)) != len(comparisons)
+            or not set(comparisons) <= {"predictive", "legacy_returns"}):
+            raise ValueError("allocation_comparisons must list distinct funding methods")
+        cache_sources = self.policy.get("evaluated_trial_sources", [])
+        if (not isinstance(cache_sources, list) or any(not isinstance(path, str) or not path for path in cache_sources)
+            or len(set(cache_sources)) != len(cache_sources)):
+            raise ValueError("evaluated_trial_sources must list distinct campaign directories")
+        if self.settings.get("tree_device", "auto") not in ("auto", "cpu", "cuda"):
+            raise ValueError("tree_device must be auto, cpu or cuda")
+        maximum_owned = self.policy.get("maximum_owned_strategies_per_pod", 3)
+        if type(maximum_owned) is not int or not 1 <= maximum_owned <= 3:
+            raise ValueError("maximum_owned_strategies_per_pod must be an integer from one to three")
         self.evaluation_period = self.policy.get("evaluation_period")
         self.portfolio_evidence_scope = self.policy.get("portfolio_evidence_scope", "prior_settled")
         if self.portfolio_evidence_scope not in {"prior_settled", "retrospective_evaluation_period"}:
@@ -198,6 +233,11 @@ class ResearchCampaign:
                 dependencies.update(
                     strategy.model_features
                 )
+            if strategy.prediction_contract is not None:
+                event_features = set(strategy.prediction_contract.event_features)
+                observable_inputs = dependencies | {condition.feature for condition in strategy.universe.filters}
+                if not event_features <= observable_inputs:
+                    raise ValueError("Every declared event feature must be used by the strategy or its fitted model")
             if dependencies & set(unavailable_features):
                 raise ValueError(
                     "Strategy requires a rejected text measurement definition"
@@ -213,7 +253,7 @@ class ResearchCampaign:
                 self._known_outcomes()[-strategy.evidence_lookback_months:])
             if scope_report["maximum_names"] == 0:
                 raise ValueError(json.dumps({"reason": "empty_declared_universe", **scope_report}))
-            model_state = None
+            model_state, issuer_forecasts = None, None
             if strategy.forecast_model != "code":
                 if "model_forecast" not in required_features(strategy.code):
                     raise ValueError(
@@ -225,16 +265,23 @@ class ResearchCampaign:
                 if strategy.forecast_model == "xgboost":
                     from ..research.causal_tree_forecast import fit_tree_forecast
                     fit = fit_tree_forecast
-                    extra = {"parameters": strategy.model_parameters}
+                    extra = {"parameters": strategy.model_parameters,
+                        "device": self.settings.get("tree_device", "auto")}
                 else:
                     extra = {"controls": strategy.controls}
+                training_panel = (forecast_training_panel(strategy_panel, self.market,
+                    prediction_horizon(strategy), target=(strategy.prediction_contract.target
+                        if strategy.prediction_contract is not None else "raw_return"),
+                    universe=strategy.universe) if self.align_forecast_horizons else strategy_panel)
                 predicted, model_state = fit(
-                    strategy_panel,
+                    training_panel,
                     model_inputs,
                     penalty=strategy.model_penalty,
                     lookback=strategy.model_lookback_months,
+                    validation_folds=self.issuer_validation_folds,
                     **extra,
                 )
+                issuer_forecasts = model_state.pop("_issuer_oof_forecasts", None)
                 strategy_panel = replace(
                     strategy_panel,
                     features={
@@ -243,16 +290,47 @@ class ResearchCampaign:
                     },
                 )
             compile_strategy(strategy.code, set(strategy_panel.features))
-            readiness = {}
+            readiness, forecast_metadata = {}, {}
             scores, decisions = code_signals(
                 strategy, strategy_panel, self.market, readiness=readiness,
                 decision_feature_provider=self.decision_filings,
+                forecast_metadata=forecast_metadata, enforce_expiry=self.align_forecast_horizons,
             )
             stem = identity.replace(":", "_")
-            spill_schedule(self.output / (stem + "_native_forecasts.npy"),
+            native_forecasts = spill_schedule(self.output / (stem + "_native_forecasts.npy"),
                 {day: value for day, (_, value) in decisions.items()})
             atomic_write_json(self.output / (stem + "_native_forecasts.json"),
                 {str(day): int(t) for day, (t, _) in decisions.items()})
+            issuer_decisions = None
+            if issuer_forecasts is not None:
+                _, issuer_decisions = code_signals(strategy, replace(strategy_panel,
+                    features={**strategy_panel.features, "model_forecast": issuer_forecasts}),
+                    self.market, decision_feature_provider=self.decision_filings,
+                    enforce_expiry=self.align_forecast_horizons)
+            predictive_decisions = {day: pair for day, pair in decisions.items()
+                if not forecast_metadata.get(day, {}).get("expiry_only", False)}
+            if strategy.prediction_contract is not None:
+                direction = strategy.prediction_contract.expected_direction
+                for _, values in predictive_decisions.values():
+                    finite = np.asarray(values)[np.isfinite(values)]
+                    if ((direction == "long" and np.any(finite < -1e-12))
+                        or (direction == "short" and np.any(finite > 1e-12))):
+                        raise ValueError("Executable forecast signs contradict the declared prediction direction")
+            if issuer_decisions is not None:
+                issuer_decisions = {day: pair for day, pair in issuer_decisions.items()
+                    if day in predictive_decisions}
+            calibration = []
+            predictive_native = forecast_ic_observations(strategy, strategy_panel, self.market, predictive_decisions,
+                calibration=calibration, issuer_oof=issuer_decisions,
+                forecast_metadata=forecast_metadata if self.align_forecast_horizons else None)
+            predictive_native.to_parquet(self.output / (stem + "_predictive_native.parquet"), index=False)
+            predictive_monthly = monthly_ic_observations(predictive_native)
+            predictive_monthly.to_parquet(self.output / (stem + "_predictive_monthly.parquet"), index=False)
+            calibration_native = pd.DataFrame(calibration)
+            calibration_native.to_parquet(self.output / (stem + "_calibration_native.parquet"), index=False)
+            predictive_calibration = monthly_calibration_observations(calibration_native)
+            predictive_calibration.to_parquet(self.output / (stem + "_predictive_calibration.parquet"), index=False)
+            atomic_write_json(self.output / (stem + "_forecast_metadata.json"), forecast_metadata)
             inception = min(
                 (day for day in decisions if readiness.get(day)),
                 default=len(self.market.dates),
@@ -462,7 +540,28 @@ class ResearchCampaign:
                 "monthly": unit_monthly,
                 "evidence_available": evidence_available,
                 "report": report,
+                "predictive_monthly": predictive_monthly,
+                "predictive_calibration": predictive_calibration,
+                "native_forecasts": native_forecasts,
+                "native_formations": {day: t for day, (t, _) in decisions.items()},
+                "robustness_suite": self.robustness_suite,
+                "funding_method": self.funding_method,
+                "outcome_dates": outcomes,
             }
+            diagnostic_days = [day for day in predictive_decisions if readiness.get(day)]
+            if diagnostic_days:
+                diagnostic_day = max(diagnostic_days)
+                diagnostic_formation, diagnostic_scores = predictive_decisions[diagnostic_day]
+                report["predictive_effects"] = expected_target_edge(self.trials[identity], self.settings["end"],
+                    schedule[diagnostic_day], diagnostic_scores,
+                    formation_frame=strategy_panel.frames[diagnostic_formation],
+                    entry_mask=self.market.tradable[diagnostic_day], minimum=self.policy["minimum_edge_months"],
+                    uncertainty_haircut=self.policy["edge_uncertainty_haircut"])
+                report["predictive_effects"].update(scope="latest_trigger_target_training_diagnostic",
+                    forecast_date=str(self.market.dates[diagnostic_day].date()))
+            report["predictive_selection"] = review_candidate(self.trials[identity],
+                self._known_outcomes(), self.policy["minimum_edge_months"],
+                self.policy["edge_uncertainty_haircut"])["predictive_selection"]
             record.update(status="evaluated", evidence=report)
             atomic_write_json(self.output / (stem + ".json"), record)
             (self.output / (stem + ".py")).write_text(strategy.code)
@@ -578,6 +677,7 @@ class ResearchCampaign:
                         "shortable_rank_ic", {}
                     ).get("mean"),
                     "unit_attribution": metrics.get("unit_attribution"),
+                    "predictive_effects": metrics.get("predictive_effects"),
                     "universe": metrics.get("universe"),
                     "cohort_coverage": metrics.get("cohort_coverage"),
                     "failure": {
@@ -622,24 +722,35 @@ class ResearchCampaign:
                     lessons.append(reason)
         recent = evaluated[-2:]
         evaluated.sort(key=lambda row: (row["id"] == parent,
-            row["review"]["expected_annual_unit_edge"]
-            if row["review"]["expected_annual_unit_edge"] is not None else -1e9), reverse=True)
+            row["review"]["selection_score"]
+            if row["review"]["selection_score"] is not None else -1e9), reverse=True)
         return {"best_measured": evaluated[:3], "recent_measured": recent, "recent_failures": failures[-3:],
                 "correction_rules": lessons[-6:]}
 
-    def _agent_round(self, number, pod, *, repair=0):
+    def _agent_round(self, number, pod, *, repair=0, judging=False):
         planning = self.research_context["phase"] == "plan"
-        system_prompt = load_prompt("campaign.planner" if planning else "campaign.programmer")
-        response_schema = compact_response_schema((TopicPlan if planning else ProposalBatch).model_json_schema())
+        system_prompt = load_prompt("campaign.frontier_review" if judging else (
+            "campaign.planner" if planning else "campaign.programmer"))
+        response_model = FrontierReview if judging else (TopicPlan if planning else ProposalBatch)
+        response_schema = compact_response_schema(response_model.model_json_schema())
         feedback = self._research_feedback(pod)
+        if judging:
+            parent = self.trials.get((self.research_context.get("topic") or {}).get("best_strategy"))
+            if parent is not None:
+                for item in [*feedback["best_measured"], *feedback["recent_measured"]]:
+                    if item["id"] in self.trials and self.trials[item["id"]] is not parent:
+                        item["review"]["parent_comparison"] = compare_refinement(
+                            self.trials[item["id"]], parent, self._known_outcomes(),
+                            self.policy["minimum_edge_months"], self.policy["edge_uncertainty_haircut"])
         papers = [
             p
             for p in self.evidence["papers"]
             if p["namespace"] in {"all", "pod_" + pod}
         ]
         packet = {
-            "task": load_prompt("campaign.repair_task" if repair else (
-                "campaign.plan_task" if planning else "campaign.task")),
+            "task": load_prompt("campaign.frontier_review_task" if judging else (
+                "campaign.repair_task" if repair else (
+                "campaign.plan_task" if planning else "campaign.task"))),
             "pod": pod,
             "mandate": pod_spec(pod).mission,
             "development_cutoff": self.settings["end"],
@@ -660,6 +771,7 @@ class ResearchCampaign:
             "research_actions": load_prompt("campaign.research_actions"),
             "topic_protocol": load_prompt("campaign.topic_protocol"),
             "scope_contract": load_prompt("campaign.scope_contract"),
+            "selection_contract": load_prompt("campaign.selection_score"),
             "research_context": self.research_context,
             "research_priorities": self.policy.get("research_priorities", {}).get(pod, []),
             "topic_catalog": [
@@ -670,6 +782,8 @@ class ResearchCampaign:
             "research_errors": [e for e in self.evidence.get("errors", []) if e.get("pod") == pod][-3:],
             "research_pool": self._pool_health(pod),
             "review_policy": {"minimum_settled_months": self.policy["minimum_edge_months"],
+                "selection_method": "predictive_score_v1", "score_weights": SCORE_WEIGHTS,
+                "predefined_robustness_checks": ROBUSTNESS_CHECKS,
                 "uncertainty_haircut": self.policy["edge_uncertainty_haircut"],
                 "ownership_maximum_correlation": .85, "pool_duplicate_correlation": .98},
             "feature_diagnostics": self._feature_feedback(pod),
@@ -717,13 +831,37 @@ class ResearchCampaign:
         params = GenerationParams.model_validate(
             {
                 **self.config["models"]["generation"],
-                "max_tokens": self.policy.get("code_max_tokens", 8192),
+                "max_tokens": min(1536, self.policy.get("code_max_tokens", 8192)) if judging
+                    else self.policy.get("code_max_tokens", 8192),
             }
         )
         # The system prompt and typed schema already carry these contracts.
         # Repeating them consumes provider context without adding evidence.
         for key in ("runtime_contract", "trusted_forecast_model", "required_strategy_fields"):
             packet.pop(key, None)
+        if judging:
+            for key in ("requested_candidates", "research_actions", "improvement_protocol"):
+                packet.pop(key, None)
+            topic_name = self.research_context["topic"]["name"]
+            packet["prior_tests"] = []
+            for row in self.attempts:
+                strategy = row.get("strategy") or {}
+                if (row.get("status") != "evaluated" or strategy.get("pod") != pod
+                        or strategy.get("research_topic") != topic_name):
+                    continue
+                evidence = row["evidence"]
+                prediction = evidence.get("predictive_selection") or {}
+                effects = evidence.get("predictive_effects") or {}
+                packet["prior_tests"].append({"id": row["strategy_id"],
+                    "mechanism": strategy.get("mechanism", "")[:240],
+                    "forecast_model": strategy.get("forecast_model", "code"),
+                    "model_features": strategy.get("model_features", []),
+                    "universe": strategy.get("universe"),
+                    "horizon": strategy.get("forecast_horizon_days", strategy.get("expected_holding_days")),
+                    "lookback": strategy.get("evidence_lookback_months"),
+                    "score": prediction.get("score"), "ic": prediction.get("ic"),
+                    "calibrated_effect_supported": effects.get("funding_supported"),
+                    "funding_reason": effects.get("reason")})
         if planning:
             for key in ("runtime_contract", "trusted_forecast_model", "required_strategy_fields", "filing_features"):
                 packet.pop(key, None)
@@ -748,7 +886,8 @@ class ResearchCampaign:
             "request_hash": request.request_hash,
         }
         path = cache / (canonical_digest(backend_identity) + ".json")
-        tag = f"round_{number}_{pod}" + (f"_repair_{repair}" if repair else "")
+        tag = f"round_{number}_{pod}" + ("_frontier_review" if judging else "")
+        tag += f"_repair_{repair}" if repair else ""
         atomic_write_json(
             self.output / (tag + "_request.json"),
             {
@@ -782,6 +921,7 @@ class ResearchCampaign:
                     "reason": str(exc)[:600],
                     "diagnostic": getattr(exc, "diagnostic", {}),
                     "request_hash": request.request_hash,
+                    "response_hash": getattr(exc, "response_hash", None),
                 }
             finally:
                 if before_calls is not None:
@@ -817,6 +957,26 @@ class ResearchCampaign:
                 **{k: v for k, v in result.items() if k != "diagnostic"},
             }
         try:
+            if judging:
+                text = result["text"].strip()
+                if text.startswith("```") and text.endswith("```"):
+                    text = text.split("\n", 1)[1].rsplit("\n", 1)[0]
+                verdict = FrontierReview.model_validate_json(text)
+                visible = {item["id"] for item in [*packet["feedback"]["best_measured"],
+                    *packet["feedback"].get("recent_measured", []), *packet.get("prior_tests", [])]}
+                if not set(verdict.evidence_strategy_ids) <= visible:
+                    raise ValueError("The frontier reviewer must cite supplied measured strategies")
+                lead = {key: " ".join((value or "").lower().split()) for key, value in
+                    verdict.model_dump().items() if key in {
+                        "hypothesis", "proposed_test", "falsification"}}
+                signature = canonical_digest(lead) if verdict.action == "continue" else None
+                previous = (self.research_context.get("topic") or {}).get("frontier_reviews", [])
+                if signature and any(row.get("lead_signature") == signature for row in previous):
+                    raise ValueError("An already reviewed lead is not a distinct next test")
+                return {"status": "frontier_continue" if verdict.action == "continue" else "retained",
+                    **verdict.model_dump(mode="json"), "lead_signature": signature,
+                    **{key: result[key] for key in ("provider", "model", "request_hash", "response_hash")},
+                    "response_path": str(self.output / (tag + "_response.json"))}
             batch, invalid = CodeBatch.validate_partial(result["text"])
             for rejected in invalid:
                 self.attempts.append({"pod": pod, "round": number,
@@ -839,6 +999,9 @@ class ResearchCampaign:
                     "topics_added": added, "diagnosis": batch.diagnosis}
             if batch.research_action == "plan":
                 raise ValueError(load_prompt("campaign.proposal_after_plan"))
+            if context.get("frontier_review") and batch.research_action == "retain":
+                raise ValueError("Test the independently reviewed lead or request its missing evidence; "
+                    "retention requires an independent frontier review")
             self.research_loop.add_topics(pod, batch.research_topics)
         except ValueError as exc:
             summary = str(exc)[:250]
@@ -896,12 +1059,14 @@ class ResearchCampaign:
                     "strategy": strategy.model_dump(mode="json"),
                     "failure": {"type": "ValueError", "reason": "A pod may propose only its own strategies"}})
                 continue
-            required = {"universe", "evidence_lookback_months", "validation_window_months", "research_topic"}
+            required = {"universe", "evidence_lookback_months", "validation_window_months", "research_topic",
+                "forecast_horizon_days", "prediction_contract"}
             if strategy.forecast_model != "code":
                 required.update({"model_features", "model_penalty", "model_lookback_months"})
                 if strategy.forecast_model == "xgboost":
                     required.add("model_parameters")
-            if (not required <= strategy.model_fields_set or strategy.research_topic != context["topic"]["name"]
+            if (not required <= strategy.model_fields_set or strategy.forecast_horizon_days is None
+                or strategy.prediction_contract is None or strategy.research_topic != context["topic"]["name"]
                 or (context["phase"] in {"refine", "review"} and strategy.parent_strategy_id != context["topic"]["best_strategy"])):
                 self.attempts.append({"pod": pod, "round": number,
                     "status": "rejected_missing_scope_or_topic", "strategy": strategy.model_dump(mode="json"),
@@ -1056,6 +1221,16 @@ class ResearchCampaign:
                 chronological["windows"] = [{k: window[k] for k in
                     ("start_offset", "end_offset", "months", "mean", "hac_se", "return")}
                     for _, window in sorted(chosen.items())]
+        parent_id = (packet.get("research_context", {}).get("topic") or {}).get("best_strategy")
+        parent = next((row for row in [*packet["feedback"]["best_measured"],
+            *packet["feedback"].get("recent_measured", [])] if row.get("id") == parent_id), None)
+        if parent is not None:
+            # Keep the measured parent in the first protected best slot. It
+            # must survive deduplication followed by trimming recent siblings.
+            packet["feedback"]["recent_measured"] = [row for row in
+                packet["feedback"].get("recent_measured", []) if row.get("id") != parent_id]
+            packet["feedback"]["best_measured"] = [parent, *[row for row in
+                packet["feedback"]["best_measured"] if row.get("id") != parent_id]]
         recent_ids = {row.get("id") for row in packet["feedback"].get("recent_measured", [])}
         packet["feedback"]["best_measured"] = [row for row in packet["feedback"]["best_measured"]
             if row.get("id") not in recent_ids]
@@ -1126,6 +1301,13 @@ class ResearchCampaign:
             elif any(p["excerpt"] for p in packet["papers"]):
                 for paper in packet["papers"]:
                     paper["excerpt"] = ""
+            elif "compact_research_protocol" not in packet:
+                # Keep the schema, scope, selection rule and exact repair
+                # evidence. These three overlapping instructions have an
+                # equivalent short form for constrained provider requests.
+                for key in ("improvement_protocol", "research_actions", "topic_protocol"):
+                    packet.pop(key, None)
+                packet["compact_research_protocol"] = load_prompt("campaign.compact_research_protocol")
             else:
                 # This is context compaction, not an application spending quota.
                 # Preserve the contract and repair evidence; the provider owns
@@ -1198,6 +1380,15 @@ class ResearchCampaign:
                 "review_text_digest": continuation["review_text_digest"],
                 "provider": receipt["provider"], "model": receipt["model"],
             }
+        # Restored frontiers may contain scores from an older selector or cutoff.
+        # Regrade their measured parents before comparing new refinements.
+        for state in self.research_loop.pods.values():
+            for topic in state["topics"].values():
+                identity = topic.get("best_strategy")
+                if identity in self.trials:
+                    topic["best_score"] = review_candidate(self.trials[identity],
+                        self._known_outcomes(), self.policy["minimum_edge_months"],
+                        self.policy["edge_uncertainty_haircut"])["selection_score"]
         repairs = min(3, max(0, int(self.config["models"].get("repair_attempts", 2))))
         number = 0
         while any(self.research_loop.current(p) is not None for p in active_pods):
@@ -1210,6 +1401,28 @@ class ResearchCampaign:
                 before = self._pool_health(pod)
                 trial_ids = set(self.trials)
                 evidence_before = self._evidence_signature()
+                if context["phase"] == "review" and context["topic"]["evaluations"] > 0:
+                    for repair in range(repairs + 1):
+                        print(f"Frontier evidence review {number}, pod {pod}, repair {repair}", flush=True)
+                        verdict = self._agent_round(number, pod, repair=repair, judging=True)
+                        rounds.append({"round": number, "pod": pod, "repair": repair,
+                            "stage": "frontier_review", **verdict})
+                        atomic_write_json(self.output / "rounds.json", rounds)
+                        if verdict.get("status") != "invalid_batch":
+                            break
+                    self.research_loop.pods[pod]["topics"][context["topic"]["name"]].setdefault(
+                        "frontier_reviews", []).append(verdict)
+                    if verdict.get("status") != "frontier_continue":
+                        self.research_loop.observe(pod, context, verdict, [], "no_new_evidence")
+                        rounds[-1]["topic_result"] = copy.deepcopy(self.research_loop.pods[pod])
+                        atomic_write_json(self.output / "rounds.json", rounds)
+                        atomic_write_json(self.output / "research_progress.json", self.research_loop.snapshot())
+                        atomic_write_json(self.output / "research_pool.json",
+                            {p: self._pool_health(p) for p in POD_FEATURES})
+                        continue
+                    self.research_context["frontier_review"] = {
+                        key: verdict.get(key) for key in ("diagnosis", "evidence_strategy_ids",
+                            "hypothesis", "proposed_test", "falsification", "distinction_from_prior_tests")}
                 for repair in range(repairs + 1):
                     print(f"Agent research round {number}, pod {pod}, repair {repair}", flush=True)
                     result = self._agent_round(number, pod, repair=repair)
@@ -1272,6 +1485,8 @@ class ResearchCampaign:
                     {
                         "file": file_sha256(self.settings["filings_path"]),
                         "specs": definitions,
+                        "start": self.settings["start"],
+                        "end": self.settings["end"],
                     }
                 )[:24]
                 + ".parquet"
@@ -1332,6 +1547,8 @@ class ResearchCampaign:
                 {
                     "definitions": definitions,
                     "data_sha256": file_sha256(registry),
+                    "research_start": self.settings["start"],
+                    "research_end": self.settings["end"],
                     "cloud_text_transmission": False,
                 },
             )
@@ -1344,6 +1561,29 @@ class ResearchCampaign:
         days = np.flatnonzero(eligible)
         first = ~self.market.dates[days].to_period("M").duplicated()
         return {int(d): int(self.market.formation[d]) for d in days[first]}
+
+    def _target_at(self, trial, day):
+        if day in trial["schedule"]:
+            return trial["schedule"][day].copy()
+        if day in trial["edge"].get("prior_holdings", {}):
+            return trial["edge"]["prior_holdings"][day].copy()
+        return trial["edge"]["holdings"][day - 1].copy()
+
+    def _predictive_funding_at(self, trial, day, formation):
+        target = self._target_at(trial, day)
+        target[~self.market.tradable[day]] = 0
+        days = [d for d in trial.get("native_forecasts", {}) if d <= day]
+        native_day = max(days) if days else None
+        scores = (trial["native_forecasts"][native_day] if native_day is not None
+            else np.full(len(target), np.nan))
+        native_formation = trial.get("native_formations", {}).get(native_day, formation)
+        frame = scoped_panel(self.panel, trial["strategy"].universe).frames[native_formation]
+        result = expected_target_edge(trial, self.panel.dates[formation], target, scores,
+            formation_frame=frame, entry_mask=self.market.tradable[native_day if native_day is not None else day],
+            minimum=self.policy["minimum_edge_months"], uncertainty_haircut=self.policy["edge_uncertainty_haircut"])
+        result.update(forecast_context_date=str(self.panel.dates[native_formation].date()),
+            forecast_review_date=str(self.market.dates[native_day].date()) if native_day is not None else None)
+        return result
 
     def _construct(self):
         decisions, allocation_log = {}, []
@@ -1380,11 +1620,24 @@ class ResearchCampaign:
                 outcomes = unit_return_month_ends(self.panel)
                 known = np.flatnonzero((outcomes >= pd.Timestamp(self.evaluation_period["start"]))
                     & (outcomes <= pd.Timestamp(self.evaluation_period["end"])))
+            funding_previews = {}
+            candidates = self.trials
+            if self.funding_method == "predictive" and day in review_days:
+                # Test economic predictions before filling scarce roster slots.
+                # An unfundable high S must not crowd out supported lower S.
+                for identity, trial in self.trials.items():
+                    review = review_candidate(trial, known, min_months,
+                        self.policy["edge_uncertainty_haircut"])
+                    if review["supported"]:
+                        funding_previews[identity] = self._predictive_funding_at(trial, day, formation)
+                candidates = {i: trial for i, trial in self.trials.items()
+                    if funding_previews.get(i, {}).get("funding_supported", False)}
             ownership = {
-                p: select_roster(self.trials, p, known, min_months,
-                    uncertainty_haircut=self.policy["edge_uncertainty_haircut"])
+                p: select_roster(candidates, p, known, min_months,
+                    uncertainty_haircut=self.policy["edge_uncertainty_haircut"],
+                    maximum=self.policy.get("maximum_owned_strategies_per_pod", 3))
                 for p in POD_FEATURES
-            }
+            } if day in review_days else {}
 
             def decide(
                 nav,
@@ -1394,6 +1647,7 @@ class ResearchCampaign:
                 formation=formation,
                 known=known.copy(),
                 ownership=ownership,
+                funding_previews=funding_previews,
                 cio_review=day in review_days,
             ):
                 if not cio_review:
@@ -1408,28 +1662,31 @@ class ResearchCampaign:
                         return None
                     return book.set_targets(day, changes)
                 identities, targets, edges, caps, pods = [], [], [], [], []
+                funding_reviews = dict(funding_previews)
                 for pod, owned in ownership.items():
                     for identity in owned:
                         trial = self.trials[identity]
                         eligible = candidate_history(trial, known)
                         history = trial["monthly"][eligible]
-                        if len(history) < min_months:
+                        if len(history) < (min_months if self.funding_method == "legacy_returns" else 2):
+                            funding_reviews[identity] = {"funding_supported": False,
+                                "reason": "insufficient_prior_covariance_history"}
                             continue
-                        # Funding shrinks the unit evidence and pays its
-                        # uncertainty before any capital is allocated.
-                        review = review_candidate(trial, known, min_months,
+                        review = review_candidate({**trial, "funding_method": self.funding_method}, known, min_months,
                             self.policy["edge_uncertainty_haircut"])
                         if not review["supported"]:
                             continue
-                        expected = review["expected_annual_unit_edge"]
-                        if day in trial["schedule"]:
-                            target = trial["schedule"][day].copy()
-                        elif day in trial["edge"].get("prior_holdings", {}):
-                            target = trial["edge"]["prior_holdings"][day].copy()
+                        target = self._target_at(trial, day)
+                        if self.funding_method == "predictive":
+                            target[~self.market.tradable[day]] = 0
+                            funding = funding_previews[identity]
                         else:
-                            # Legacy compatible measurement caches may retain
-                            # their complete daily holdings matrix.
-                            target = trial["edge"]["holdings"][day - 1].copy()
+                            funding = {"method": "legacy_returns", **{k: review[k] for k in
+                                ("funding_supported", "expected_annual_unit_edge")}}
+                        funding_reviews[identity] = funding
+                        if not funding["funding_supported"]:
+                            continue
+                        expected = funding["expected_annual_unit_edge"]
                         bound = nav * self.settings["max_pod_capital"]
                         identities.append(identity)
                         targets.append(target)
@@ -1501,12 +1758,22 @@ class ResearchCampaign:
                         "execution_date": str(self.market.dates[day].date()),
                         "nav_usd": nav,
                         "portfolio_evidence_scope": self.portfolio_evidence_scope,
+                        "funding_method": self.funding_method,
+                        "funding_reviews": funding_reviews,
                         "owned": ownership,
+                        "owned_selection_scores": {
+                            i: review_candidate(self.trials[i], known, min_months,
+                                self.policy["edge_uncertainty_haircut"])["predictive_selection"]
+                            for ids in ownership.values() for i in ids
+                        },
                         "funded": [
                             {
                                 "strategy_id": i,
                                 "capital_usd": float(a),
                                 "expected_unit_edge": e,
+                                "predictive_funding": funding_reviews[i],
+                                "predictive_selection": review_candidate(self.trials[i], known, min_months,
+                                    self.policy["edge_uncertainty_haircut"])["predictive_selection"],
                                 "capital_limit_usd": c,
                             }
                             for i, a, e, c in zip(
@@ -1553,6 +1820,50 @@ class ResearchCampaign:
         fund["execution"]["fund_compression_events"] = book.compression_events
         return fund, allocation_log, difference
 
+    def _compare_allocations(self, active):
+        """Replay requested funding policies on identical causal candidate artifacts."""
+        output, original = self.output, self.funding_method
+        comparisons = {}
+        try:
+            for method in self.policy.get("allocation_comparisons", []):
+                if method == original:
+                    continue
+                self.funding_method = method
+                self.output = output / "allocation_comparisons" / method
+                self.output.mkdir(parents=True, exist_ok=True)
+                fund, allocations, difference = self._construct()
+                dates = self.market.dates[active]
+                metrics, daily, monthly = competition_report(dates, fund["net"][active],
+                    self.reporting_benchmark.reindex(dates), turnover=fund["turnover"][active],
+                    returns_include_cash=True)
+                for name, values in fund["attribution"].items():
+                    daily[name] = values[active]
+                if not np.allclose(daily.long_return + daily.short_return + daily.cash_return,
+                    daily.net, atol=1e-12):
+                    raise ValueError("Comparison attribution failed to reconcile")
+                daily.to_csv(self.output / "daily_ledger.csv", index_label="date")
+                monthly.to_csv(self.output / "monthly_returns.csv", index_label="date")
+                atomic_write_json(self.output / "capital_allocations.json", allocations)
+                held = fund["holdings"][active]
+                counts = (np.abs(held) > 1e-10).sum(axis=1)
+                constraints = {"minimum_positions_observed": int(counts.min()),
+                    "maximum_positions_observed": int(counts.max()),
+                    "maximum_gross": float(np.abs(held).sum(axis=1).max()),
+                    "maximum_absolute_net": float(np.abs(held.sum(axis=1)).max()),
+                    "maximum_absolute_name": float(np.abs(held).max()),
+                    "minimum_position_failures": int((counts < self.settings["min_positions"]).sum())}
+                comparison = {"funding_method": method, "fund": metrics,
+                    "constraints": constraints, "static_target_replay_max_return_difference": difference,
+                    "candidate_pool": sorted(self.trials),
+                    "scope": "Identical native forecasts, targets, score weights, causal evidence and risk limits"}
+                atomic_write_json(self.output / "comparison_report.json", comparison)
+                comparisons[method] = comparison
+                del held, fund
+                collect_research_memory(self.panel.features.values())
+        finally:
+            self.output, self.funding_method = output, original
+        return comparisons
+
     def run(self):
         pa.set_cpu_count(1)
         pa.set_io_thread_count(1)
@@ -1569,6 +1880,11 @@ class ResearchCampaign:
             "recorded_code_proposal_hashes": {
                 str(config_path(path)): file_sha256(config_path(path))
                 for path in self.policy.get("recorded_code_proposals", [])
+            },
+            "evaluated_trial_source_hashes": {
+                str(config_path(path)): {name: file_sha256(config_path(path) / name)
+                    for name in ("experiment.json", "attempt_ledger.json")}
+                for path in self.policy.get("evaluated_trial_sources", [])
             },
             "evidence_configuration": {
                 k: self.config["application"].get(k)
@@ -1701,6 +2017,17 @@ class ResearchCampaign:
             )
         self.panel.daily = None
         collect_research_memory(self.panel.features.values())
+        atomic_write_json(self.output / "security_order.json", [int(p) for p in self.panel.securities])
+        fingerprint["security_order_sha256"] = file_sha256(self.output / "security_order.json")
+        atomic_write_json(self.output / "experiment.json", fingerprint)
+        for source in self.policy.get("evaluated_trial_sources", []):
+            receipt = restore_evaluated_trials(self, config_path(source))
+            print(f"Restored {len(receipt['imported_strategy_ids'])} evaluated agent strategies; "
+                f"{len(receipt['rejected_trials'])} require fresh evaluation", flush=True)
+        if getattr(self, "cache_imports", None):
+            atomic_write_json(self.output / "cache_imports.json", self.cache_imports)
+            fingerprint["cache_imports_sha256"] = file_sha256(self.output / "cache_imports.json")
+            atomic_write_json(self.output / "experiment.json", fingerprint)
         for proposal_path in self.policy.get("recorded_code_proposals", []):
             path = config_path(proposal_path)
             self._adopt_recorded_evidence(path)
@@ -1787,7 +2114,8 @@ class ResearchCampaign:
         owned = {
             p: select_roster(
                 self.trials, p, known, self.policy["minimum_edge_months"],
-                uncertainty_haircut=self.policy["edge_uncertainty_haircut"]
+                uncertainty_haircut=self.policy["edge_uncertainty_haircut"],
+                maximum=self.policy.get("maximum_owned_strategies_per_pod", 3)
             )
             for p in POD_FEATURES
         }
@@ -1904,6 +2232,10 @@ class ResearchCampaign:
             "output_dir": str(self.output),
             "data": self.panel.metadata,
             "new_model_call_attempts": self.calls,
+            "evaluated_cache_imports": [{k: receipt[k] for k in
+                ("source", "experiment_sha256", "imported_strategy_ids", "rejected_trials")}
+                for receipt in getattr(self, "cache_imports", [])],
+            "declared_candidate_pool_freeze": self.policy.get("candidate_pool_freeze"),
             "rounds": rounds,
             "research_progress": self.research_loop.snapshot(),
             "attempts": len(self.attempts),
@@ -1913,6 +2245,11 @@ class ResearchCampaign:
             "capital_grid_used": False,
             "evaluation_period": self.evaluation_period,
             "portfolio_evidence_scope": self.portfolio_evidence_scope,
+            "forecast_horizon_alignment": self.align_forecast_horizons,
+            "funding_method": self.funding_method,
+            "funding_roster_policy": "Supported conditional effects, then S ranking and diversification" if self.funding_method == "predictive" else "S ranking, then legacy return-economics funding",
+            "robustness_suite": self.robustness_suite,
+            "issuer_validation_folds": self.issuer_validation_folds,
             "evaluation_is_in_sample": self.portfolio_evidence_scope == "retrospective_evaluation_period",
             "fund": metrics,
             "execution": fund["execution"],
@@ -1953,6 +2290,7 @@ class ResearchCampaign:
             "constraints_pass": constraints_pass,
         }
         write_access_audit(self.config, self.output, self.panel.metadata)
+        report["allocation_comparisons"] = self._compare_allocations(active)
         atomic_write_json(self.output / "campaign_report.json", report)
         atomic_write_json(
             self.output / "frozen_research_book.json",
