@@ -12,6 +12,7 @@ import pandas as pd
 
 from .campaign_metrics import frequency_metrics
 from .mandate import POSITION_EPS, audit_holdings, volatility_check
+from .submission_charts import write_charts
 
 ARCANA_EXHIBITS = [
     'Summary table', 'Idiosyncratic vs Factor', 'Decomposition',
@@ -85,7 +86,7 @@ def standard_table(daily, monthly, held, nav, turnover, rebalances, caps, execut
         ('Net exposure', 'average / min / max, % NAV', f'{net.mean()*100:.3f} / {net.min()*100:.3f} / {net.max()*100:.3f}', 'n/a'),
         ('One-way turnover', '% per rebalance / annualised (observed frequency)', f'{one_way[rebalances].mean()*100 if rebalance_count else 0:.3f} / {one_way.sum()*252/len(daily)*100:.3f}', 'n/a'),
         ('Average holding period', 'closed-notional-weighted trading days; open positions excluded', execution.get('average_closed_notional_holding_trading_days'), 'n/a'),
-        ('Average position size', 'US$ million; daily position observations', float((np.abs(held)*nav[:,None]).sum()/max(1,counts.sum())/1e6), 'n/a'),
+        ('Average position size', 'average absolute position, US$ million; daily observations', float(np.dot(gross,nav)/max(1,counts.sum())/1e6), 'n/a'),
         ('Short book median market cap', 'US$ million; daily position observations', float(np.nanmedian(short_caps)) if len(short_caps) else None, 'n/a'),
         ('Trading cost', '% NAV per year', 'Not modelled', 'n/a'),
         ('Borrow cost', '% NAV per year', 'Not modelled', 'n/a'),
@@ -134,7 +135,8 @@ def _write_json(path, value):
 
 
 def write_bundle(output, dates, held, market, active_indices, securities, daily, monthly,
-                 turnover, execution_targets, settings, policy, execution):
+                 turnover, execution_targets, settings, policy, execution,
+                 *, opening_weights=None, opening_nav=None):
     """Write local evidence and a draft deck; external verification stays deferred."""
     output = Path(output)
     dates = pd.DatetimeIndex(dates)
@@ -148,9 +150,9 @@ def write_bundle(output, dates, held, market, active_indices, securities, daily,
     calendar_path = policy.get('submission',{}).get('expected_sessions_path')
     expected_sessions = pd.read_csv(calendar_path)['date'] if calendar_path else None
     coverage = coverage_check(dates,policy.get('portfolio_evidence_scope','prior_settled'),expected_sessions)
-    initial_nav = float(settings.get('fund_capital_usd',1e9))
+    initial_nav = float(opening_nav if opening_nav is not None else settings.get('fund_capital_usd',1e9))
     nav = initial_nav*np.cumprod(1+daily.total.to_numpy())
-    caps, volume = np.full(held.shape,np.nan), np.full(held.shape,np.nan)
+    caps, volume = np.full(held.shape,np.nan,dtype=np.float32), np.full(held.shape,np.nan,dtype=np.float32)
     tickers, companies = {}, {}
     for local, day in enumerate(active_indices):
         formation = int(market.formation[day])
@@ -177,9 +179,15 @@ def write_bundle(output, dates, held, market, active_indices, securities, daily,
     positions.to_csv(output/'holdings_history.csv',index=False)
     # Canonical history is intentionally not advertised as an Arcana upload schema.
     average = pd.DataFrame({'permno':securities,'average_weight':held.mean(axis=0)})
-    pd.concat([average.nlargest(10,'average_weight').assign(group='top'),
-               average.nsmallest(10,'average_weight').assign(group='bottom')]).to_csv(output/'average_weight_extremes.csv',index=False)
-    prior = np.zeros_like(held,dtype=float)
+    average_extremes = pd.concat([average.nlargest(10,'average_weight').assign(group='top'),
+                                 average.nsmallest(10,'average_weight').assign(group='bottom')])
+    average_extremes.to_csv(output/'average_weight_extremes.csv',index=False)
+    prior = np.zeros_like(held,dtype=np.float32)
+    if opening_weights is not None:
+        prior[0] = opening_weights
+    elif int(active_indices[0]) > 0:
+        # A window may open with carried positions: no silent cash assumption.
+        raise ValueError('Opening carried holdings are required for a truncated reporting window')
     # Holdings before the OOS boundary are included when the run has earlier trading.
     for local, day in enumerate(active_indices):
         if local and int(active_indices[local-1]) == int(day)-1: prior[local]=held[local-1]
@@ -191,8 +199,9 @@ def write_bundle(output, dates, held, market, active_indices, securities, daily,
     earnings = earnings_attribution(dates,securities,linked,events)
     _write_json(output/'earnings_attribution.json',earnings)
     contributors = pd.DataFrame({'permno':securities,'linked_return_contribution':linked.sum(axis=0)})
-    pd.concat([contributors.nlargest(10,'linked_return_contribution').assign(group='positive'),
-               contributors.nsmallest(10,'linked_return_contribution').assign(group='negative')]).to_csv(output/'return_contributors.csv',index=False)
+    contributor_extremes = pd.concat([contributors.nlargest(10,'linked_return_contribution').assign(group='positive'),
+                                     contributors.nsmallest(10,'linked_return_contribution').assign(group='negative')])
+    contributor_extremes.to_csv(output/'return_contributors.csv',index=False)
     years = pd.DataFrame({'strategy':daily.total,'benchmark':daily.cash+.04/252,'sp500':daily.market}).groupby(dates.year).agg(lambda x:np.prod(1+x)-1)
     years['cost_status']='No trading or borrow costs modelled; before/after identical by assumption'
     years.to_csv(output/'calendar_year_returns.csv',index_label='year')
@@ -222,9 +231,11 @@ def write_bundle(output, dates, held, market, active_indices, securities, daily,
     if not constraints_pass: result['pending_requirements'].append('Mandate failures: see sector and volatility audits')
     _write_json(output/'submission_status.json',result)
     _write_json(output/'arcana_requirements.json',arcana)
-    _write_deck(output,table,exposures,sector_history,monthly,result)
+    charts = write_charts(output,daily,monthly,exposures,sector_history,positions,average_extremes,contributor_extremes)
+    _write_deck(output,table,exposures,sector_history,monthly,result,charts)
     paths = ['config.json','experiment.json','daily_ledger.csv','actual_holdings.parquet',
              'source_snapshot/prompts.txt']
+    paths += charts + ['rolling_beta.csv']
     paths += [p.name for p in output.iterdir() if p.is_file() and p.name in {
         'sector_exposures.csv','sector_exposures_rebalances.csv','performance_table.csv',
         'portfolio_history.csv','holdings_history.csv','average_weight_extremes.csv',
@@ -237,7 +248,7 @@ def write_bundle(output, dates, held, market, active_indices, securities, daily,
     return result
 
 
-def _write_deck(output, table, exposures, sectors, monthly, status):
+def _write_deck(output, table, exposures, sectors, monthly, status, charts):
     """Portable, printable local review slides with linked evidence; no fake screenshots."""
     def slide(title, body): return f'<section><h1>{html.escape(title)}</h1>{body}</section>'
     def text(value): return '<p>'+html.escape(value)+'</p>'
@@ -253,6 +264,9 @@ def _write_deck(output, table, exposures, sectors, monthly, status):
     body+=slide('Investment process and methodology',text('Agent proposals are evaluated with recorded provenance. Supported strategies receive capital from prior-settled evidence; orders fill in full at supplied observed prices.')+text('Complete the investment thesis, selected signal rationale, split dates and the four data-screening answers from this campaign’s evidence and decision logs.'))
     body+=slide('Portfolio construction and risk',text(status['sector_compliance']['neutrality_definition'])+text('200–500 names; gross ≤200%; net ±50%; single name ≤5%; shorts ≥$500m at formation. Full-period daily realised volatility ceiling: 12%.')+text('No volatility targeting, trading cost or borrow cost model is applied.')+text(f"Daily realised volatility: {status['volatility']['annualized_realized_volatility']}; constraints pass: {status['constraints_pass']}"))
     body+=slide('Standardised performance table',table.to_html(escape=True,na_rep='Unavailable',border=0)+text('Monthly arithmetic moments use ×12 and √12. Daily beta and volatility audit use ×252 and √252. CAGR is separate.'))
+    for path in charts:
+        body+=slide(path.removeprefix('exhibit_').removesuffix('.svg').replace('_',' ').title(),
+                    '<img style="width:100%" src="'+html.escape(path,quote=True)+'" alt="Local portfolio exhibit">')
     body+=slide('Portfolio history',chart(exposures.gross,'Gross weight / NAV')+chart(exposures.net,'Net weight / NAV')+chart(exposures.positions,'Position count'))
     sector_chart=''
     for code,rows in sectors.loc[sectors.sector!='unknown'].groupby('sector',sort=True):

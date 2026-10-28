@@ -1,0 +1,131 @@
+{
+  "application": {
+    "mode": "research_campaign",
+    "state_dir": "${project_root}/final_v2/.pod_state/competition_part2",
+    "output_dir": "${project_root}/final_v2/.pod_state/competition_part2",
+    "run_id": "competition_part2_v1",
+    "online_papers": false,
+    "paper_queries": [
+      {
+        "namespace": "pod_fundamentals",
+        "query": "stock prices accruals cash flows future earnings"
+      },
+      {
+        "namespace": "pod_events",
+        "query": "post earnings announcement drift equity stock returns"
+      },
+      {
+        "namespace": "pod_valuation",
+        "query": "value profitability equity stock returns"
+      },
+      {
+        "namespace": "pod_dynamics",
+        "query": "stock returns momentum buying winners selling losers"
+      }
+    ],
+    "papers_per_query": 2,
+    "paper_ids": [
+      "doi:10.1111/j.1540-6261.1993.tb04702.x"
+    ],
+    "dataset_id": "comp_chars_training",
+    "papers_db": "${project_root}/final_v2/.pod_state/year_trial_2025/papers.sqlite",
+    "research_asof": "2026-10-25T20:00:00+00:00"
+  },
+  "models": {
+    "online": false,
+    "roles": {
+      "lead": {
+        "provider": "openai",
+        "model": "openai/gpt-oss-120b",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+        "structured_outputs": false,
+        "reasoning_effort": "low"
+      },
+      "challenger": {
+        "provider": "openai",
+        "model": "openai/gpt-oss-20b",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+        "structured_outputs": false,
+        "reasoning_effort": "low"
+      },
+      "extractor": {
+        "provider": "openai",
+        "model": "openai/gpt-oss-20b",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+        "structured_outputs": true,
+        "reasoning_effort": "low"
+      }
+    },
+    "env_file": "${project_root}/local/groq-api.env",
+    "min_interval_seconds": 60,
+    "generation": {
+      "max_tokens": 4096,
+      "temperature": 0.0,
+      "timeout_s": 120.0
+    },
+    "repair_attempts": 2,
+    "retry_attempts": 2,
+    "retry_delay_seconds": 30
+  },
+  "carbon": {
+    "allow_remote": false,
+    "max_rows": 5000,
+    "max_days": 366,
+    "max_response_bytes": 2000000,
+    "capabilities": [],
+    "requests": []
+  },
+  "training_lab": {
+    "start": "2011-01-01",
+    "end": "2026-08-31",
+    "panel_path": "${project_root}/data/raw/chars_final_with_names.parquet",
+    "daily_path": "${project_root}/data/dsf_mini_from_2014.csv",
+    "universe_size": 500,
+    "min_positions": 200,
+    "min_market_cap_millions": 0,
+    "min_price": 0,
+    "min_daily_dollar_volume": 0,
+    "gross_limit": 2.0,
+    "single_name_limit": 0.05,
+    "max_pod_capital": 0.5,
+    "daily_warmup_start": "2014-01-01",
+    "research_universe_size": null,
+    "strategy_capital_usd": 250000000,
+    "fund_capital_usd": 1000000000,
+    "liquid_hedge_min_market_cap_usd": 10000000000,
+    "neutralize_size": false,
+    "filings_research_enabled": true,
+    "filings_path": "${project_root}/data/raw/8k_20150101_20260831_identified.parquet",
+    "min_sectors": 5,
+    "sector_net_limit": 0.2,
+    "volatility_limit": 0.12
+  },
+  "research_campaign": {
+    "code_max_tokens": 2560,
+    "max_request_estimated_tokens": 7600,
+    "candidates_per_request": 3,
+    "target_supported_candidates_per_pod": 5,
+    "minimum_edge_months": 12,
+    "edge_uncertainty_haircut": 1.0,
+    "benchmark_fred_path": "${project_root}/external_data/external.parquet",
+    "alternative_bindings": [],
+    "alt_discovery": [],
+    "max_rss_mib": 1600,
+    "feature_documentation_path": "${project_root}/final_v2/.pod_state/training_through_2020/jkp_factor_details.xlsx",
+    "frozen_training_campaign": "${project_root}/final_v2/.pod_state/training_through_2020/latest_campaign.json",
+    "research_pods": [],
+    "portfolio_evidence_scope": "prior_settled",
+    "evaluation_period": {
+      "start": "2021-01-01",
+      "end": "2026-08-31"
+    },
+    "submission": {
+      "arcana_status": "deferred",
+      "earnings_calendar_path": null,
+      "expected_sessions_path": null
+    }
+  }
+}

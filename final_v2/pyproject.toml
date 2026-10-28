@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["pydantic>=2.12,<3"]
 
 [project.optional-dependencies]
-research = ["numpy>=1.26", "pandas>=2", "pyarrow>=14", "pypdf>=5", "scipy>=1.11", "xgboost>=2", "httpx", "mcp", "jsonschema"]
+research = ["numpy>=1.26", "pandas>=2", "pyarrow>=14", "pypdf>=5", "scipy>=1.11", "xgboost>=2", "matplotlib>=3.8", "httpx", "mcp", "jsonschema"]
 
 [tool.setuptools.packages.find]
 where = ["."]

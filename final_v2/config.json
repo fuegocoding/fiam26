@@ -98,7 +98,10 @@
     "liquid_hedge_min_market_cap_usd": 10000000000,
     "neutralize_size": false,
     "filings_research_enabled": true,
-    "filings_path": "${project_root}/data/8k_20150101_20260831_identified.parquet"
+    "filings_path": "${project_root}/data/8k_20150101_20260831_identified.parquet",
+    "min_sectors": 5,
+    "sector_net_limit": 0.2,
+    "volatility_limit": 0.12
   },
   "research_campaign": {
     "code_max_tokens": 2560,

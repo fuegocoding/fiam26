@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from datetime import date
 
 from .configuration import config_path
 
@@ -25,9 +26,12 @@ def frozen_training_config(config):
         report = json.loads(path.read_text(encoding='utf-8'))
     source_config = json.loads((path.parent/'config.json').read_text(encoding='utf-8'))
     end = source_config['training_lab']['end']
-    if end > '2020-12-31' or report.get('data',{}).get('development_end', '9999') > '2020-12-31':
+    if (date.fromisoformat(end) >= date(2021,1,1)
+        or date.fromisoformat(report['data']['development_end']) >= date(2021,1,1)):
         raise ValueError('Frozen training must end before 2021; OOS-selected recipes cannot be imported')
-    if report.get('evaluation_is_in_sample') or not report.get('successful_strategies'):
+    if (report.get('evaluation_is_in_sample') is not False
+        or report.get('portfolio_evidence_scope') != 'prior_settled'
+        or not report.get('successful_strategies')):
         raise ValueError('Frozen training needs evaluated agent strategies and no retrospective selection')
     ledger = json.loads((path.parent/'attempt_ledger.json').read_text(encoding='utf-8'))
     hashes = {(r.get('model_provenance') or {}).get('response_hash') for r in ledger if r.get('status') == 'evaluated'} - {None}

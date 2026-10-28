@@ -37,7 +37,7 @@ def load_config(section: str | None = None) -> dict[str, Any]:
         )
     return json.loads(
         json.dumps(copy.deepcopy(value)).replace(
-            "${project_root}", str(PROJECT_ROOT)
+            "${project_root}", PROJECT_ROOT.as_posix()
         )
     )
 

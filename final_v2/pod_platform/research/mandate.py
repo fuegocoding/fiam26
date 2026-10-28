@@ -12,6 +12,17 @@ DEFAULTS = {'min_sectors': 5, 'sector_net_limit': .20, 'volatility_limit': .12}
 NEUTRALITY = 'Hard GICS sector net bounds of +/-20% of NAV; exact dollar neutrality is not guaranteed'
 
 
+def validate_part2_settings(settings):
+    """Allow stricter policies, never a silent relaxation of the chosen mandate."""
+    breadth = settings.get('min_sectors', 5)
+    sector = settings.get('sector_net_limit', .2)
+    volatility = settings.get('volatility_limit', .12)
+    if (not isinstance(breadth, int) or isinstance(breadth, bool) or not 5 <= breadth <= 11
+        or not np.isfinite(sector) or not 0 < sector <= .2
+        or not np.isfinite(volatility) or not 0 < volatility <= .12):
+        raise ValueError('Part 2 requires 5-11 sectors, sector net limit <=20%, and volatility limit <=12%')
+
+
 def sector_codes(values):
     """Recognize current GICS sectors from sector or full classification codes."""
     codes = pd.Series(values, dtype='string').str.replace(r'\.0$', '', regex=True).str[:2]

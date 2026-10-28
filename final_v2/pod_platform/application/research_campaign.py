@@ -52,7 +52,7 @@ from ..research.filing_text import (
 from ..research.forecast_construction import monthly_concentration
 from ..research.input_permissions import FILING_RESEARCH_FEATURES
 from ..research.joint_allocation import allocate_jointly
-from ..research.mandate import DEFAULTS
+from ..research.mandate import DEFAULTS, validate_part2_settings
 from ..research.submission import write_bundle
 from ..research.sleeve_execution import SleeveExecutionBook
 from ..research.strategy_code import (
@@ -120,6 +120,7 @@ class ResearchCampaign:
         for key in ("panel_path", "daily_path", "filings_path"):
             if key in self.settings:
                 self.settings[key] = str(config_path(self.settings[key]))
+        validate_part2_settings(self.settings)
         self.policy = config["research_campaign"]
         for key in ('earnings_calendar_path', 'expected_sessions_path'):
             if self.policy.get('submission', {}).get(key):
@@ -1891,6 +1892,10 @@ class ResearchCampaign:
             self.output, dates, held, self.market, np.flatnonzero(active),
             self.panel.securities, daily, monthly, fund['turnover'][active],
             fund['execution_targets'], self.settings, self.policy, fund['execution'],
+            opening_weights=(fund['holdings'][np.flatnonzero(active)[0]-1]
+                             if np.flatnonzero(active)[0] > 0 else None),
+            opening_nav=float(self.settings['fund_capital_usd'] * np.prod(
+                1 + fund['net'][:np.flatnonzero(active)[0]])),
         )
         constraint_report['part2'] = submission['sector_compliance']
         constraint_report['volatility'] = submission['volatility']
