@@ -8,6 +8,8 @@ from pathlib import Path
 SOURCE = 'Causal S&P 500 excess-return regressions: 252 daily sessions and 36 months; explicit formation-sector median priors for short histories'
 LEGACY_SOURCE = 'Unclipped formation-date panel beta_60m; missing estimates use beta 1.0'
 COLUMNS = ('beta_sp500_daily', 'beta_sp500_monthly')
+ARCANA_COLUMN = 'beta_arcana_spy'
+HYBRID_COLUMN = 'beta_spy_guardrail'
 DAILY_WINDOW, DAILY_MIN = 252, 126
 MONTHLY_WINDOW, MONTHLY_MIN = 36, 12
 
@@ -127,8 +129,10 @@ def matrix(frame, ids):
     if not meta.index.is_unique or not pd.Index(ids).isin(meta.index).all():
         raise ValueError('Beta constraint requires unique formation metadata for every holding')
     if all(c in meta for c in COLUMNS):
-        result = meta.loc[:,list(COLUMNS)].reindex(ids).astype(float)
-        if not np.isfinite(result.to_numpy()).all(): raise ValueError('Nonfinite causal S&P 500 beta')
+        columns = list(COLUMNS) + ([HYBRID_COLUMN] if HYBRID_COLUMN in meta else [])
+        result = meta.loc[:,columns].reindex(ids).astype(float)
+        if not np.isfinite(result.to_numpy()).all():
+            raise ValueError('Missing or nonfinite beta for a selected security')
         return result
     # Archived allocations retain their historical estimator when replayed.
     return coefficients(frame,ids).to_frame('beta_60m')
@@ -166,3 +170,67 @@ def enforce(weights, frame, limit):
         if values.abs().gt(limit+1e-9).any():
             raise ValueError(f'Final formation beta {values.to_dict()} exceeds +/-{limit:.4f}')
     return beta
+
+
+def attach_arcana(frame, path):
+    """Attach available Arcana-US stock betas vs SPY, with local daily-beta fallback.
+
+    The guardrail column records which source was used for each security/month.
+    This supports partial vendor exports without mislabeling fallback estimates.
+    """
+    data = pd.read_csv(Path(path), dtype={'return_month':str, 'holding_month':str, 'permno':str, 'asset_id':str,
+                                    'arcana_asset_id':str,
+                                    'risk_model_id':str, 'benchmark_asset_id':str,
+                                    'as_of_date':str, 'available_at':str})
+    # Normalize the fetched workbook export (which reflects the user-supplied
+    # Arcana-US / SPY metric) to the explicit input schema used by this workflow.
+    if {'holding_month','arcana_asset_id','observation_timestamp','arcana_spy_beta'}.issubset(data.columns):
+        data = data.rename(columns={'holding_month':'return_month','arcana_asset_id':'asset_id',
+                                    'observation_timestamp':'available_at','arcana_spy_beta':ARCANA_COLUMN})
+        data['return_month'] = pd.to_datetime(data.return_month,errors='raise').dt.to_period('M').astype(str)
+        data['as_of_date'] = (pd.to_datetime(data.available_at,errors='coerce',utc=True)
+            .dt.tz_convert('America/New_York').dt.date.astype('string'))
+        data['risk_model_id'] = '3'
+        data['benchmark_asset_id'] = '21'
+    required = {'return_month','permno','asset_id','risk_model_id','benchmark_asset_id',
+                'as_of_date','available_at',ARCANA_COLUMN}
+    if not required.issubset(data.columns):
+        raise ValueError(f'Arcana beta input missing columns: {sorted(required-set(data.columns))}')
+    # Drop incomplete observations; they will use the disclosed local fallback.
+    data = data.dropna(subset=list(required)).copy()
+    if not data.risk_model_id.eq('3').all() or not data.benchmark_asset_id.eq('21').all():
+        raise ValueError('Arcana beta input must use Arcana-US model 3 and SPY asset 21')
+    if not data.permno.str.fullmatch(r'[1-9]\d*').all() or not data.asset_id.str.fullmatch(r'[1-9]\d*').all():
+        raise ValueError('Arcana beta identifiers must be positive integer strings')
+    if not data.return_month.str.fullmatch(r'\d{4}-\d{2}').all():
+        raise ValueError('Arcana beta return_month must be YYYY-MM')
+    if not data.as_of_date.str.fullmatch(r'\d{4}-\d{2}-\d{2}').all():
+        raise ValueError('Arcana beta as_of_date must be YYYY-MM-DD')
+    if not data.available_at.str.contains(r'(?:Z|[+-]\d\d:\d\d)$', regex=True).all():
+        raise ValueError('Arcana beta available_at requires an explicit UTC offset')
+    data['return_month'] = pd.PeriodIndex(data.return_month, freq='M')
+    data['permno'] = data.permno.astype(int)
+    data[ARCANA_COLUMN] = pd.to_numeric(data[ARCANA_COLUMN],errors='raise')
+    data['as_of_date'] = pd.to_datetime(data.as_of_date,errors='raise')
+    available = pd.to_datetime(data.available_at,utc=True,errors='raise')
+    cutoff = data.return_month.dt.to_timestamp().dt.tz_localize('America/New_York').dt.tz_convert('UTC')
+    earliest = (data.return_month - 1).dt.to_timestamp()
+    available_date = available.dt.tz_convert('America/New_York').dt.tz_localize(None).dt.normalize()
+    if ((data.as_of_date < earliest) | (data.as_of_date >= data.return_month.dt.to_timestamp())
+        | (available_date < data.as_of_date) | (available >= cutoff)).any():
+        raise ValueError('Arcana beta must be observed and available before the holding month')
+    if not np.isfinite(data[ARCANA_COLUMN]).all():
+        raise ValueError('Arcana beta contains nonfinite values')
+    if data.duplicated(['return_month','permno']).any() or data.duplicated(['return_month','asset_id']).any():
+        raise ValueError('Arcana beta has duplicate month/security or month/asset mappings')
+    frame = frame.copy()
+    if not isinstance(frame.return_month.dtype, pd.PeriodDtype):
+        frame['return_month'] = pd.to_datetime(frame.return_month).dt.to_period('M')
+    frame = frame.merge(data[['return_month','permno',ARCANA_COLUMN,'asset_id','as_of_date','available_at']],
+                        on=['return_month','permno'],how='left',validate='one_to_one')
+    frame[HYBRID_COLUMN] = frame[ARCANA_COLUMN].where(frame[ARCANA_COLUMN].notna(),frame['beta_sp500_daily'])
+    frame['beta_spy_guardrail_source'] = np.where(frame[ARCANA_COLUMN].notna(),
+        'arcana_us_model3_spy21','local_252d_regression_fallback')
+    if not np.isfinite(frame[HYBRID_COLUMN]).all():
+        raise ValueError('Hybrid SPY beta guardrail has missing or nonfinite exposures')
+    return frame

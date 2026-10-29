@@ -55,7 +55,7 @@ SHORT_ME_FLOOR = 500.0
 # Long and short notionals are scaled so their 60-month betas offset; each
 # side stays within BETA_TILT of half the gross, keeping net exposure small.
 BETA_NEUTRAL = True
-MAX_ABS_BETA = 0.05  # Hard daily AND monthly S&P 500 forecast-beta bands after turnover.
+MAX_ABS_BETA = 0.025  # Daily, monthly, and Arcana/local hybrid formation-beta bands.
 BETA_TILT = 0.25
 BETA_BOUNDS = (0.2, 3.0)
 
@@ -136,8 +136,12 @@ def optimize(
         Target positions per month, and per-month exposures and coverage.
     """
     timing.validate_predictions(predictions)
+    if config.ARCANA_BETA_FILE is not None and not BETA_NEUTRAL:
+        raise ValueError('Arcana beta input requires the final beta guardrail to be enabled')
     frame = scored_for_nav(predictions, nav)
     frame = neutrality.attach(frame,panel_path,config.DATA_DIR,config.WORK_DIR)
+    if config.ARCANA_BETA_FILE is not None:
+        frame = neutrality.attach_arcana(frame, config.ARCANA_BETA_FILE)
     if not isinstance(frame.return_month.dtype,pd.PeriodDtype):
         frame["return_month"] = pd.to_datetime(frame.return_month).dt.to_period("M")
     if short_interest is not None:
@@ -279,7 +283,12 @@ def optimize(
                      final_beta_daily_prior_names=int(current.set_index('permno').beta_sp500_daily_source.reindex(list(weights)).ne('stock_regression').sum()),
                      final_beta_monthly_prior_names=int(current.set_index('permno').beta_sp500_monthly_source.reindex(list(weights)).ne('stock_regression').sum()),
                      beta_exposure_monthly=float(neutrality.exposures(weights,current)['beta_sp500_monthly']))
-        attributes = current.set_index("permno")[_ATTRIBUTES]
+        if neutrality.HYBRID_COLUMN in current:
+            rules['beta_exposure_spy_guardrail'] = float(neutrality.exposures(weights,current)[neutrality.HYBRID_COLUMN])
+        arcana_fields = ([neutrality.ARCANA_COLUMN, neutrality.HYBRID_COLUMN,
+                          'beta_spy_guardrail_source', 'asset_id', 'as_of_date', 'available_at']
+                         if neutrality.HYBRID_COLUMN in current else [])
+        attributes = current.set_index("permno")[[*_ATTRIBUTES, *arcana_fields]]
         for permno, weight in weights.items():
             row = attributes.loc[permno]
             positions.append(
@@ -298,7 +307,8 @@ def optimize(
                     "beta_60m": float(row.beta_60m),
                     **{name:row[name] for name in [*neutrality.COLUMNS,
                        'beta_sp500_daily_observations','beta_sp500_monthly_observations',
-                       'beta_sp500_daily_source','beta_sp500_monthly_source','beta_information_cutoff']},
+                       'beta_sp500_daily_source','beta_sp500_monthly_source','beta_information_cutoff',
+                       *arcana_fields]},
                     "dolvol_126d": float(row.dolvol_126d),
                     "final_score": float(row.final_score),
                     "target_weight": weight,
@@ -409,6 +419,20 @@ def write(
         "average_net_exposure": float(diagnostics.net_exposure.mean()),
         "max_abs_net_exposure": float(diagnostics.net_exposure.abs().max()),
     }
+    if neutrality.HYBRID_COLUMN in portfolio:
+        import config as run_config
+        with run_config.ARCANA_BETA_FILE.open('rb') as source:
+            digest = hashlib.file_digest(source, 'sha256').hexdigest()
+        config['arcana_beta_guardrail'] = {
+            'risk_model_id': 3, 'benchmark_asset_id': 21,
+            'max_abs_beta': MAX_ABS_BETA, 'input_file': str(run_config.ARCANA_BETA_FILE),
+            'input_sha256': digest, 'availability': 'input-supplied; independently verify provenance',
+            'scope': 'formation only; no intramonth monitoring or trades',
+            'fallback': 'local trailing 252-session stock beta for names/months absent from the Arcana export',
+            'arcana_observation_count': int(portfolio.beta_spy_guardrail_source.eq('arcana_us_model3_spy21').sum()),
+            'local_fallback_count': int(portfolio.beta_spy_guardrail_source.eq('local_252d_regression_fallback').sum()),
+            'guardrail_column': neutrality.HYBRID_COLUMN,
+        }
     (output_dir / "optimizer_config.json").write_text(
         json.dumps(config, indent=2) + "\n"
     )

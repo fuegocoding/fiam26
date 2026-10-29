@@ -342,7 +342,7 @@ def compliance_positions(p: pd.DataFrame, beta_limit=None) -> dict:
         "largest_position_pct_of_capital": float(p.target_weight.abs().max()),
     }
     if beta_limit is not None:
-        features = ['permno','beta_60m',*[c for c in neutrality.COLUMNS if c in p]]
+        features = ['permno','beta_60m',*[c for c in (*neutrality.COLUMNS, neutrality.HYBRID_COLUMN) if c in p]]
         exposures = pd.DataFrame({month:neutrality.exposures(
             dict(zip(g.permno,g.target_weight,strict=True)),g[features])
             for month,g in p.groupby('return_month')}).T

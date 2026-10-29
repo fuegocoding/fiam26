@@ -1,6 +1,43 @@
 # Final formation-beta bound and CPU replay
 
+## Arcana-US / SPY formation guardrail with partial-export fallback
+
+Construction can include Arcana stock-level predicted beta versus SPY as a
+third hard final-beta constraint, in addition to the two local regressions.
+Supply `--arcana-beta-file PATH` on a construction run or frozen-prediction
+replay. Where the export has a valid same-month Arcana estimate, the third
+constraint uses it; otherwise it uses the local 252-session estimate and
+marks the source on each holding. The final sizing and turnover solver
+constrain this hybrid exposure. This is not an all-Arcana portfolio-beta
+guarantee. Saved-weight replays cannot imply that old positions were
+reconstructed.
+
+The CSV must contain `return_month` (YYYY-MM), `permno`, `asset_id`,
+`risk_model_id` (3), `benchmark_asset_id` (21), `as_of_date` (YYYY-MM-DD),
+`available_at` (ISO timestamp with UTC offset), and `beta_arcana_spy` (numeric
+coefficient, not percent). One row per month and security is required. The
+observation date must be in the previous calendar month and the availability
+timestamp must fall between the observation date and the start of the holding
+month in New York. Duplicate month/PERMNO and month/asset records, wrong model,
+wrong benchmark, and nonfinite estimates fail. The fetched Arcana export
+(`holding_month`, `permno`, `arcana_asset_id`, `observation_timestamp`,
+`arcana_spy_beta`) is accepted directly; incomplete or absent rows use the
+disclosed local fallback. The input file must be outside the output
+directory. Its path and SHA-256 are recorded in optimizer settings, and used
+betas, source labels and identity metadata are saved with positions.
+
+The data's stated `available_at` is an input assertion, not proof that the
+vendor data was actually available then or has not been restated. Independently
+verify historical availability and security mapping before representing a
+backtest as point-in-time. This is a formation constraint, not continuous
+monitoring: estimates and weights may drift during the month. The guardrail
+does not implement intramonth trades.
+
 ## Current construction: causal daily and monthly S&P 500 regressions
+
+The construction-only `--max-abs-beta` option can tighten both local
+formation-beta limits below the default 0.05. This is a buffer against
+estimation changes, not an Arcana model or an intramonth beta guarantee.
 
 The active implementation supersedes the earlier panel-beta band described
 below. It fits stock excess returns against the S&P 500 benchmark used by

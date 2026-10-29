@@ -25,6 +25,14 @@ dollar neutrality or a guarantee about future realized beta or Arcana's
 different predicted-beta model. Infeasibility rejects the book rather than relaxing the beta band,
 annual turnover, sector, liquidity or short-safety bounds. This definition is exported.
 
+The designated no-agent main strategy additionally applies the supplied
+Arcana-US model 3 / SPY stock-beta export as a third formation constraint where
+an observation is available, with the local daily beta as the missing-data
+fallback. It uses a 2.5% limit and retains the local daily and monthly 2.5%
+limits. The input coverage and exact replay command are documented in
+[CURRENT_STRATEGY.md](CURRENT_STRATEGY.md). These are now the `main.py`
+defaults; `--no-arcana-beta` explicitly selects the local-only configuration.
+
 Reporting exports `sector_exposures.csv`, `sector_exposures.png`, the
 `standardised_performance.csv` table and a `part2_review.html` draft. Daily
 returns, 252-session beta and daily/monthly reconciliation are also exported.

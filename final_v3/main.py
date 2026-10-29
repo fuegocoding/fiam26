@@ -113,12 +113,21 @@ def configure_run(argv=None):
         action="store_true",
         help="keep the models and data already in output/ instead of rebuilding",
     )
-    parser.add_argument('--no-discovery', action='store_true', help='Disable all LLM research/scouting; run existing sleeves only')
+    discovery = parser.add_mutually_exclusive_group()
+    discovery.add_argument('--no-discovery', action='store_true', help='Disable all LLM research/scouting; run existing sleeves only (default)')
+    discovery.add_argument('--with-discovery', action='store_true', help='Enable the agent research/scouting path on top of the same baseline strategy')
     parser.add_argument('--device', choices=('cpu','cuda'), default=config.DEVICE)
     parser.add_argument('--official-only', action='store_true', help='Explicitly exclude the licensed I/B/E/S analyst-revision sleeve')
     parser.add_argument('--data-dir', type=pathlib.Path, help='Competition input directory')
     parser.add_argument('--external-file', type=pathlib.Path, help='Licensed external input container')
     parser.add_argument('--reporting-file', type=pathlib.Path, help='Treasury/S&P 500 reporting parquet')
+    arcana_beta = parser.add_mutually_exclusive_group()
+    arcana_beta.add_argument('--arcana-beta-file', type=pathlib.Path,
+        help='Override the default Arcana-US stock beta to SPY CSV')
+    arcana_beta.add_argument('--no-arcana-beta', action='store_true',
+        help='Disable the default Arcana beta input and use local beta constraints only')
+    parser.add_argument('--max-abs-beta', type=float,
+        help='Override the final bound applied to each enabled formation-beta constraint (positive, at most 0.05)')
     parser.add_argument('--replay-with-local-reporting', action='store_true',
         help='Explicit frozen replay: verify competition inputs, retain archived I/B/E/S forecasts without reopening training inputs, and record the supplied local reporting source')
     parser.add_argument('--output-dir', type=pathlib.Path, help='Separate destination for this run')
@@ -127,10 +136,29 @@ def configure_run(argv=None):
     mode.add_argument('--from-predictions', type=pathlib.Path, help='Rebuild portfolio/report from a verified checkpoint; no model or graph rebuild')
     mode.add_argument('--from-weights', type=pathlib.Path, help='Replay a verified checkpoint portfolio and generate its report; no training or optimization')
     args = parser.parse_args(argv)
+    if args.max_abs_beta is not None:
+        import math
+        if not math.isfinite(args.max_abs_beta) or not 0 < args.max_abs_beta <= .05:
+            parser.error('--max-abs-beta must be positive and at most 0.05')
+        if args.from_weights or args.save_checkpoint:
+            parser.error('--max-abs-beta requires portfolio construction')
+        optimizer.MAX_ABS_BETA = args.max_abs_beta
+    if args.arcana_beta_file and (args.from_weights or args.save_checkpoint):
+        parser.error('--arcana-beta-file requires portfolio construction, not saved-weight replay or checkpoint export')
+    if args.arcana_beta_file:
+        config.ARCANA_BETA_FILE = args.arcana_beta_file.resolve()
+    elif args.no_arcana_beta:
+        config.ARCANA_BETA_FILE = None
+    elif config.ARCANA_BETA_FILE is not None:
+        config.ARCANA_BETA_FILE = pathlib.Path(config.ARCANA_BETA_FILE).resolve()
+    if config.ARCANA_BETA_FILE and not config.ARCANA_BETA_FILE.is_file():
+        parser.error('Arcana beta input file does not exist')
     if args.replay_with_local_reporting and not (args.from_predictions or args.from_weights):
         parser.error('--replay-with-local-reporting requires --from-predictions or --from-weights')
     if args.no_discovery:
         config.DISCOVERY = False
+    elif args.with_discovery:
+        config.DISCOVERY = True
     config.DEVICE = args.device
     if args.official_only:
         config.USE_IBES = False
@@ -151,6 +179,8 @@ def configure_run(argv=None):
         saved = checkpoints.metadata(replay)
         if args.no_discovery and saved['discovery_enabled']:
             raise ValueError('Cannot label agent-enabled archived forecasts as no-discovery')
+        if args.with_discovery and not saved['discovery_enabled']:
+            raise ValueError('Cannot add discovery proposals to frozen forecasts; rebuild predictions without --from-predictions')
         if args.official_only and saved['ibes_enabled']:
             raise ValueError('Cannot remove I/B/E/S effects from already archived forecasts')
         config.DISCOVERY = saved['discovery_enabled']
@@ -161,6 +191,8 @@ def configure_run(argv=None):
         config.WORK_DIR = config.FINAL / 'replay_output'
     if replay:
         checkpoints.require_separate_paths(config.WORK_DIR, replay)
+    if config.ARCANA_BETA_FILE and config.ARCANA_BETA_FILE.is_relative_to(config.WORK_DIR):
+        raise ValueError('Arcana beta input must be outside the output directory')
     work = config.WORK_DIR.resolve()
     protected = [config.FINAL.resolve(), config.DATA_DIR.resolve(),
                  config.IBES_FILE.resolve(), config.REPORTING_FILE.resolve()]
@@ -180,7 +212,7 @@ def main() -> None:
                           'neural_checkpoints':saved['neural_checkpoints'],
                           'holding_months':saved['holding_months']}, indent=2))
         return
-    print(f'Run mode: discovery={config.DISCOVERY}, device={config.DEVICE}, I/B/E/S={config.USE_IBES}, Arcana=deferred', flush=True)
+    print(f'Run mode: discovery={config.DISCOVERY}, device={config.DEVICE}, I/B/E/S={config.USE_IBES}, Arcana beta={config.ARCANA_BETA_FILE or "disabled"}', flush=True)
     check_inputs(frozen_local_reporting=args.replay_with_local_reporting)
     replay = args.from_predictions or args.from_weights
     loaded = None

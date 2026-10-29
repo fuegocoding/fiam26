@@ -1,5 +1,18 @@
 # final_v3 — four research desks on official data
 
+## Designated main strategy
+
+The current main strategy is the **no-agent Arcana-beta hybrid** documented in
+[CURRENT_STRATEGY.md](docs/CURRENT_STRATEGY.md). It retains the established
+signal stack and portfolio rules, and uses Arcana stock betas as an additional
+formation sizing constraint where the input has a valid observation. The
+agent-enabled variant uses the same baseline strategy and adds the research
+discovery implementation; it is not a separate portfolio construction recipe.
+The exact replay parameters and the Arcana/local beta coverage are recorded in
+that document. `main.py` now defaults to the designated no-agent hybrid
+settings; reproducing the saved run also requires its frozen-prediction
+checkpoint.
+
 A monthly long/short U.S. equity book for the McGill-FIAM 2026 finals
 (US$1bn endowed at 01/2021 and compounding, 100 longs / 100 shorts, short leg
 ≥ US$500m market cap, test window 01/2021–08/2026).
@@ -38,7 +51,9 @@ A full rebuild uses the GPU for the graph model and XGBoost. The measured
 headroom and run one heavy job at a time on a 16 GB machine.
 
 `--no-discovery` retains the established sleeves and graph training. It makes
-no LLM or Carbon scouting calls. Arcana is already deferred. The I/B/E/S
+no LLM or Carbon scouting calls. The standard workflow makes no live Arcana
+calls; the designated Arcana-beta hybrid uses the saved beta export described
+in [CURRENT_STRATEGY.md](docs/CURRENT_STRATEGY.md). The I/B/E/S
 analyst-revision sleeve still needs its disclosed input; disabling agents does
 not silently remove that investment signal. Discovery mode is fingerprinted
 in the cache, so enabled and disabled runs cannot reuse each other's results.
