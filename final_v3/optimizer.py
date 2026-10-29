@@ -115,6 +115,7 @@ def optimize(
     nav: float | pd.Series = NAV,
     short_interest: pd.DataFrame | None = None,
     risk_cache: dict | None = None,
+    short_volatility_sizing: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Builds each month's book from the final score, then applies risk rules.
 
@@ -199,6 +200,12 @@ def optimize(
                 beta_limit=MAX_ABS_BETA if BETA_NEUTRAL else None)
             before_risk = pd.Series(weights, dtype=float)
         weights, squeeze, rules = risk.protect(weights, month, panel, scores, cache=cached_features)
+        if short_volatility_sizing:
+            weights, vol_audit, vol_rules = risk.size_shorts_by_volatility(
+                weights, month, panel
+            )
+            squeeze = squeeze.join(vol_audit, how="left")
+            rules.update(vol_rules)
         if MAX_TREASURY_WEIGHT is not None:
             # A hard cash ceiling supersedes global ES/edge cash scaling.
             # Individual peer and run-up protections still bound every short.
@@ -413,6 +420,13 @@ def write(
             "edge_tail": risk.EDGE_TAIL,
             "edge_floor": risk.EDGE_FLOOR,
             "edge_step": risk.EDGE_STEP,
+        },
+        "short_volatility_sizing": {
+            "enabled": bool(diagnostics.get("short_vol_sizing_names", pd.Series(dtype=float)).gt(0).any()),
+            "window_months": risk.SHORT_VOL_WINDOW_MONTHS,
+            "minimum_months": risk.SHORT_VOL_MIN_MONTHS,
+            "multiplier_bounds": list(risk.SHORT_VOL_MULTIPLIER_BOUNDS),
+            "method": "inverse trailing monthly excess-return volatility; sector short notional preserved",
         },
         "months": int(portfolio.return_month.nunique()),
         "average_turnover_nav": float(diagnostics.turnover_nav.mean()),

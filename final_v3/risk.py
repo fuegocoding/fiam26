@@ -51,6 +51,11 @@ MIN_PRICE = 5.0
 GEV_WINDOW_MONTHS = 60
 GEV_MIN_MONTHS = 24
 JUMP_CLIP = 3.0
+# Optional short sizing experiment. Volatility is estimated from completed
+# monthly excess returns available by the formation month-end.
+SHORT_VOL_WINDOW_MONTHS = 36
+SHORT_VOL_MIN_MONTHS = 24
+SHORT_VOL_MULTIPLIER_BOUNDS = (0.5, 1.5)
 
 
 def feature_cache_signature() -> tuple:
@@ -135,6 +140,76 @@ def protect(
         "short_weight_in_flagged": float(-adjusted[flagged[flagged].index].sum()),
     }
     return adjusted.to_dict(), table, summary
+
+
+def size_shorts_by_volatility(
+    weights: dict[int, float], month: pd.Period, panel: pd.DataFrame
+) -> tuple[dict[int, float], pd.DataFrame, dict]:
+    """Reallocate each sector's short notional inversely to trailing volatility.
+
+    Uses only monthly returns available through the month before `month`.
+    Sector short notional and the set of names are held fixed. Multipliers are
+    bounded and normalized within sector, so this is a sizing change rather
+    than a short-gross or sector-allocation change.
+    """
+    book = pd.Series(weights, dtype=float)
+    shorts = book[book < 0]
+    empty = pd.DataFrame(index=book.index)
+    if shorts.empty:
+        return weights, empty, {"short_vol_sizing_names": 0}
+
+    formation = month - 1
+    history = panel.loc[
+        (panel.eom <= formation)
+        & (panel.eom > formation - SHORT_VOL_WINDOW_MONTHS)
+        & panel.permno.isin(shorts.index),
+        ["permno", "eom", "ret_exc", "gics"],
+    ].drop_duplicates(["permno", "eom"])
+    stats = history.groupby("permno").ret_exc.agg(["std", "count"])
+    stats.loc[stats["count"] < SHORT_VOL_MIN_MONTHS, "std"] = np.nan
+    now = (panel.loc[panel.eom.eq(formation), ["permno", "gics"]]
+           .drop_duplicates("permno").set_index("permno"))
+    sector = now.gics.astype("string").str[:2].reindex(shorts.index).fillna("na")
+    volatility = stats["std"].reindex(shorts.index)
+    usable = volatility.where(np.isfinite(volatility) & volatility.gt(0))
+    fallback = float(usable.median()) if usable.notna().any() else np.nan
+    volatility = usable.fillna(fallback)
+    raw = (volatility.groupby(sector).transform("median") / volatility).replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(1.0)
+    lower, upper = SHORT_VOL_MULTIPLIER_BOUNDS
+
+    # Find a sector-specific scale so clipped multipliers preserve that
+    # sector's short notional exactly.
+    multiplier = pd.Series(1.0, index=shorts.index)
+    for group, ids in sector.groupby(sector).groups.items():
+        target = shorts.loc[ids].abs()
+        factors = raw.loc[ids]
+        lo, hi = 0.0, 1e6
+        for _ in range(64):
+            mid = (lo + hi) / 2
+            total = float((target * (factors * mid).clip(lower, upper)).sum())
+            if total < float(target.sum()):
+                lo = mid
+            else:
+                hi = mid
+        multiplier.loc[ids] = (factors * ((lo + hi) / 2)).clip(lower, upper)
+
+    adjusted = book.copy()
+    adjusted.loc[shorts.index] *= multiplier
+    audit = pd.DataFrame(index=book.index)
+    audit["short_volatility_36m"] = volatility.reindex(book.index)
+    audit["short_volatility_multiplier"] = multiplier.reindex(book.index)
+    summary = {
+        "short_vol_sizing_names": int(len(shorts)),
+        "short_vol_missing_estimates": int(usable.isna().sum()),
+        "short_vol_min_multiplier": float(multiplier.min()),
+        "short_vol_max_multiplier": float(multiplier.max()),
+        "short_vol_window_months": SHORT_VOL_WINDOW_MONTHS,
+        "short_vol_min_months": SHORT_VOL_MIN_MONTHS,
+        "short_vol_multiplier_bounds": list(SHORT_VOL_MULTIPLIER_BOUNDS),
+    }
+    return adjusted.to_dict(), audit, summary
 
 
 def _edge_throttle(

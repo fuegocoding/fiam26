@@ -128,6 +128,8 @@ def configure_run(argv=None):
         help='Disable the default Arcana beta input and use local beta constraints only')
     parser.add_argument('--max-abs-beta', type=float,
         help='Override the final bound applied to each enabled formation-beta constraint (positive, at most 0.05)')
+    parser.add_argument('--short-volatility-sizing', action='store_true',
+        help='Experimental replay: size selected shorts inversely to trailing 36-month volatility')
     parser.add_argument('--replay-with-local-reporting', action='store_true',
         help='Explicit frozen replay: verify competition inputs, retain archived I/B/E/S forecasts without reopening training inputs, and record the supplied local reporting source')
     parser.add_argument('--output-dir', type=pathlib.Path, help='Separate destination for this run')
@@ -255,7 +257,8 @@ def main() -> None:
     else:
         capital = evaluate.CausalCapital(universe, market, config.NAV)
         portfolio, diagnostics = optimizer.optimize(
-            predictions, panel, nav=capital, short_interest=crowded, risk_cache={})
+            predictions, panel, nav=capital, short_interest=crowded, risk_cache={},
+            short_volatility_sizing=args.short_volatility_sizing)
         nav = capital.schedule
         recomputed = nav_schedule(portfolio, universe, market, config.NAV)
         if not (nav/recomputed-1).abs().le(1e-12).all():
