@@ -9,9 +9,9 @@ formation sizing constraint where the input has a valid observation. The
 agent-enabled variant uses the same baseline strategy and adds the research
 discovery implementation; it is not a separate portfolio construction recipe.
 The exact replay parameters and the Arcana/local beta coverage are recorded in
-that document. `main.py` now defaults to the designated no-agent hybrid
-settings; reproducing the saved run also requires its frozen-prediction
-checkpoint.
+that document. The designated strategy runs with `--no-discovery`; the
+application's original default remains agent-enabled. Reproducing the saved
+run also requires its frozen-prediction checkpoint.
 
 A monthly long/short U.S. equity book for the McGill-FIAM 2026 finals
 (US$1bn endowed at 01/2021 and compounding, 100 longs / 100 shorts, short leg

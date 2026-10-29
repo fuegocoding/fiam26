@@ -32,9 +32,9 @@ REPORTING_FILE = FINAL.parent / 'external_data' / 'fred_reporting.parquet'
 if not REPORTING_FILE.exists():
     REPORTING_FILE = FINAL.parent / 'external_data' / 'external.parquet'
 
-# The designated main strategy runs the established signals without research
-# agents. Use --with-discovery to enable the separate proposal/scouting path.
-DISCOVERY = False
+# Discovery uses expanding pre-year evidence and never purchases data.
+# The designated no-agent strategy is selected explicitly with --no-discovery.
+DISCOVERY = True
 USE_IBES = True
 # Saved Arcana-US / SPY stock betas constrain final formation sizing where
 # available; missing observations use the disclosed local beta fallback.

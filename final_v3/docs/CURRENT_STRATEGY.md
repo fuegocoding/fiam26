@@ -9,11 +9,12 @@ record admitted no proposals, so discovery did not alter that historical
 baseline.
 
 This label describes the saved **frozen-prediction replay** in
-`arcana_beta_hybrid_rebuild/`. `main.py` now defaults to this no-agent mode,
-Arcana input, and 2.5% beta limit; the command below repeats those values
-explicitly for auditability. The Arcana upload CSV is a draft handoff; this
-document describes the construction recipe, not Arcana upload readiness or a
-full compliance certificate.
+`arcana_beta_hybrid_rebuild/`. The application's original default remains
+agent-enabled. Use `--no-discovery` to select this designated no-agent
+strategy; the Arcana input and 2.5% beta limit are the configured defaults and
+are repeated in the command for auditability. The Arcana upload CSV is a draft
+handoff; this document describes the construction recipe, not Arcana upload
+readiness or a full compliance certificate.
 
 ## Reproduce the saved no-agent construction
 
