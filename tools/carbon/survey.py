@@ -20,7 +20,7 @@ from client import CarbonClient
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
 WORKBOOK = (
-    HERE.parent
+    HERE.parents[1]
     / "data"
     / "raw"
     / "final"

@@ -1,5 +1,13 @@
 # External data
 
+This is the **historical multi-table container** specification. The final v3
+strategy uses the disclosed I/B/E/S revision input for `conf_lm_gated` and FRED
+for reporting; other former external inputs use the documented competition
+proxies. See [the current data guide](../docs/data.md) and
+[the final input map](../final_v3/docs/OFFICIAL_DATA_MAP.md).
+References to the earlier standalone pipeline below now correspond to
+`archive/initial_strategy/`. Source exports remain local and excluded from Git.
+
 Every input that does not come from the competition toolkit is in one file,
 `external.parquet` (zstd, 150 MB). Its tables are stacked, and the `table`
 column says which one a row belongs to. The pipeline reads it only through

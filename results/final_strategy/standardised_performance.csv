@@ -1,0 +1,34 @@
+Metric,Units,Strategy,Benchmark
+Ending endowment,US$ billion,2.2789370460616674,1.5087139667529772
+Cumulative return,fraction,1.2789370460616674,0.5087139667529772
+Annualised return,monthly arithmetic,0.1506258371052254,0.07281029411764707
+CAGR,annual compound,0.15645632141519505,0.07527331137541382
+Volatility,monthly std x sqrt(12),0.0954126268030424,0.005626693531034556
+Maximum drawdown,fraction,0.1095925794065562,0.0
+Worst month,signed return,-0.03205171847416497,0.00335
+Alpha vs S&P 500,as labelled; returns are fractions,0.12363245963917413,n/a
+Alpha standard error,as labelled; returns are fractions,0.04163444845299172,n/a
+Monthly beta,as labelled; returns are fractions,-0.05515965298197504,n/a
+Monthly beta standard error,as labelled; returns are fractions,0.07885662344819269,n/a
+Daily beta,as labelled; returns are fractions,-0.023440627922333725,n/a
+Daily beta standard error,as labelled; returns are fractions,0.015652653568628615,n/a
+Sharpe,as labelled; returns are fractions,1.2178337917110187,n/a
+Information ratio vs T-bill+4%,as labelled; returns are fractions,0.804362441215467,n/a
+Tracking error,as labelled; returns are fractions,0.09674189022300912,n/a
+Worst day,as labelled; returns are fractions,-0.029877741531953533,n/a
+Average positions,as labelled; returns are fractions,200.0,n/a
+Minimum positions,as labelled; returns are fractions,200.0,n/a
+Maximum positions,as labelled; returns are fractions,200.0,n/a
+Average gross (% NAV),as labelled; returns are fractions,174.9304694791015,n/a
+Maximum gross (% NAV),as labelled; returns are fractions,193.93234780753616,n/a
+Average net (% NAV),as labelled; returns are fractions,15.069532520898518,n/a
+Minimum net (% NAV),as labelled; returns are fractions,-3.93234580753615,n/a
+Maximum net (% NAV),as labelled; returns are fractions,43.903905269010004,n/a
+One-way turnover / rebalance,as labelled; returns are fractions,0.32619403151953286,n/a
+Annualised one-way turnover,as labelled; returns are fractions,3.9143283782343943,n/a
+Holding period (estimated trading days),as labelled; returns are fractions,126.23332350248744,n/a
+Average position (US$ million),as labelled; returns are fractions,14.096497687734407,n/a
+Short median market cap (US$ million),as labelled; returns are fractions,15532.54898,n/a
+Annual trading cost,as labelled; returns are fractions,0.007556383071880805,n/a
+Annual borrow cost,as labelled; returns are fractions,0.004400802637208439,n/a
+Information ratio net of costs,as labelled; returns are fractions,0.804362441215467,n/a

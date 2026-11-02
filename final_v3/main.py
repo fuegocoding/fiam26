@@ -114,7 +114,7 @@ def configure_run(argv=None):
         help="keep the models and data already in output/ instead of rebuilding",
     )
     discovery = parser.add_mutually_exclusive_group()
-    discovery.add_argument('--no-discovery', action='store_true', help='Disable all LLM research/scouting; run existing sleeves only (default)')
+    discovery.add_argument('--no-discovery', action='store_true', help='Disable all LLM research/scouting; run existing sleeves only (final fixed baseline)')
     discovery.add_argument('--with-discovery', action='store_true', help='Enable the agent research/scouting path on top of the same baseline strategy')
     parser.add_argument('--device', choices=('cpu','cuda'), default=config.DEVICE)
     parser.add_argument('--official-only', action='store_true', help='Explicitly exclude the licensed I/B/E/S analyst-revision sleeve')

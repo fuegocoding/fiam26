@@ -5,11 +5,11 @@ see data/carbon/MANIFEST.md). A pull is a framework query: entities x
 insight x filters. Quotes are free; purchases spend account credits.
 
 Quote only (default, safe):
-    python carbon/pull_framework.py --insight 236293 --representation ticker \\
+    python tools/carbon/pull_framework.py --insight 236293 --representation ticker \\
         --name job_count --start 2015-01-01 --end 2026-08-31
 
 Buy and download (spends credits):
-    python carbon/pull_framework.py --insight 236293 --representation ticker \\
+    python tools/carbon/pull_framework.py --insight 236293 --representation ticker \\
         --name job_count --start 2015-01-01 --end 2026-08-31 --buy
 
 Output: data/carbon/raw/framework/<name>.parquet plus a MANIFEST.md entry.
@@ -24,8 +24,8 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "carbon"))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from client import load_key  # noqa: E402
 

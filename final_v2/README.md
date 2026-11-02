@@ -1,3 +1,5 @@
+> Earlier research platform and shared transport. The completed hackathon strategy and results are documented in [the main README](../README.md); the original two-year report is preserved locally under `local/archive/research/results/`.
+
 # Strategy research campaign
 
 Install the runtime with `pip install -e './final_v2[research]'`, then run
@@ -106,7 +108,7 @@ then use each month's first available session. `portfolio_evidence_scope` defaul
 to `prior_settled`; the optional `retrospective_evaluation_period` uses the complete
 declared window for selection and funding and marks the report as in-sample.
 The disclosed 2021–2022 comparison and its recorded-response reproduction
-configuration are in [the saved results](../results/2021_2022/RESULTS.md).
+configuration are in [the saved results](../archive/README.md).
 
 Reports and regenerable caches are written under the configured `.pod_state`
 directory. API spending quotas and spending ledgers are not used. Provider rate

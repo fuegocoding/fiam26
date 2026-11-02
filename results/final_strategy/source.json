@@ -1,0 +1,105 @@
+{
+  "description": "Aggregate evidence matching the final Stochastic Pirates McGill-FIAM 2026 presentation",
+  "competition_finish": {
+    "place": 4,
+    "source": "Team report supplied for publication cleanup"
+  },
+  "presentation": {
+    "path": "docs/presentation/StochasticPirates.pdf",
+    "sha256": "1f1e1728f935f9317db3aad568ed5fa77b3e607dd5312cd088262a48326b86ad",
+    "pages": 22
+  },
+  "original_report_workspace": "final_v3/arcana_beta_hybrid_rebuild/report",
+  "local_preserved_workspace": "local/artifacts/final_v3/arcana_beta_hybrid_rebuild/report",
+  "source_commit_before_cleanup": "f32cdc8662ef1ed2cdb4f5a63b3e063dc43ea8ff",
+  "replay_created_utc": "2026-10-29T03:06:27.865697+00:00",
+  "period": {
+    "start": "2021-01",
+    "end": "2026-08",
+    "monthly_observations": 68
+  },
+  "mode": "frozen_predictions; no discovery; hybrid Arcana/local beta sizing",
+  "checkpoint_name": "annual_turnover_400pct_20261028_v2",
+  "models_retrained": false,
+  "checkpoint_payloads_verified": true,
+  "original_training_inputs_reopened": false,
+  "source_inputs_distributed": false,
+  "return_basis": "Local monthly NAV, net of modeled trading and borrow costs; distinct from Arcana platform attribution",
+  "limitations": [
+    "Daily held-return coverage incomplete",
+    "Daily and monthly NAV do not reconcile",
+    "Daily volatility not certified",
+    "Historical security mappings and beta availability need verification",
+    "No fresh model training or independent backtest audit during publication cleanup"
+  ],
+  "files": {
+    "calendar_year_turnover.csv": {
+      "bytes": 548,
+      "sha256": "d57b8068b13c6beeb60d2f688303797ebe8f71d8a55b627965310462ee2d5341"
+    },
+    "calendar_years.csv": {
+      "bytes": 581,
+      "sha256": "c665ed43b7e093fbdfacbf579c2d890af51a17a80807948014c973630819d447"
+    },
+    "charts/contributors.png": {
+      "bytes": 97511,
+      "sha256": "6c63889db8617818f0b78f3cd6f535fc73c473761d18297f6d008629bcfad5b4"
+    },
+    "charts/cumulative.png": {
+      "bytes": 84373,
+      "sha256": "a565735cc0cc50156dcedb24879997ab3ee681faa9b33fdaf08871d86bd1ec9f"
+    },
+    "charts/histogram.png": {
+      "bytes": 32103,
+      "sha256": "990d6ef327e1f0ea4987f007a201108a6a9633aa815753c8e44fa7b8f94808fc"
+    },
+    "charts/rolling_active_ir.png": {
+      "bytes": 91941,
+      "sha256": "6aa00f24a8eb94584fa90f6569ed1b9944966477ec784ab6f3e852021ffe0054"
+    },
+    "charts/underwater.png": {
+      "bytes": 56572,
+      "sha256": "c946fd62b92a0238747fa2dce5adf81dc991214c0603ad097642aad1b13e4c1a"
+    },
+    "comparison_metrics.csv": {
+      "bytes": 1058,
+      "sha256": "4956a4156cb6d7737f2de313e9944603dc30f359ebb2dca83115e895371ebba2"
+    },
+    "compliance.json": {
+      "bytes": 1169,
+      "sha256": "320064d5c83ae699f602e019efca37247dcf4ea800c163817c3e52efdadf68df"
+    },
+    "contributors.csv": {
+      "bytes": 3016,
+      "sha256": "320b54042ee283b5ceeb29a858806998168ee041f0310450ba42ad3c3b93f36b"
+    },
+    "daily_monthly_reconciliation.csv": {
+      "bytes": 5068,
+      "sha256": "5f3c4dd3cf276a0466144e08556d18e1f107750ce40a1033afa7571c085f0e30"
+    },
+    "monthly_detail.csv": {
+      "bytes": 42231,
+      "sha256": "d5983296f5f721f5b4143a5645a2fb816ebc6a9aef67d87da893dc4a9e0d40f5"
+    },
+    "part2_status.json": {
+      "bytes": 1488,
+      "sha256": "368e670b28313a90f49f02a3e12f2218a954a529c53ddde4ed8dcd29697e9ff1"
+    },
+    "performance.json": {
+      "bytes": 7330,
+      "sha256": "128f533b7fa506757a10e3f9b8ad7514640be64dc552fb33a7ad3efe3a94e213"
+    },
+    "returns.csv": {
+      "bytes": 2260,
+      "sha256": "f3547d7df282ac43a3666b7750298551b0f32e01b6299fa2efbaf33841b8cee8"
+    },
+    "standardised_performance.csv": {
+      "bytes": 2563,
+      "sha256": "22a2a45bcbcc01838e17168f77de3d65dee8328d846560c89f4615b21d1ccf60"
+    },
+    "top_average_holdings.csv": {
+      "bytes": 2736,
+      "sha256": "af66bb21ef1176c784894d789315403bb6b8ff62c37056c7db7b051632e3360b"
+    }
+  }
+}

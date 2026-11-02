@@ -1,60 +1,75 @@
-# Input data are provided separately.
-data/*
-!data/README.md
-external_data/*.parquet
-external_data/raw/
-final/
+# Source inputs and licensed/vendor exports stay on the local machine.
+/data/**
+!/data/README.md
+/external_data/*.parquet
+/external_data/*.csv
+/external_data/*.csv.gz
+/external_data/*.xlsx
+/external_data/raw/
+/arcana_upload/
+/final/
+/fiam2025/
 
-# Generated models, reports and local caches.
-output/
-output_500M/
-submission/output_500M/
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.ipynb_checkpoints/
-.venv/
-.env
-
-# Local research archive, environments and agent tooling.
-/stuff_tried/
+# Personal files, historical local artifacts and agent state.
 /local/
-/.deps/
+/stuff_tried/
+**/cvs/
+.pod_state/
 /.agents/
 /.codex/
 /.aws/
 /.claude/
 /.autohand/
-/skills-lock.json
 /.runpod/
 /.playwright-mcp/
+/skills-lock.json
+/opencode.json
 
-# Local opencode tooling config and Carbon Arc API token
-opencode.json
-carbon/.carbontoken
-carbon/out/
+# Credentials. Only the empty, documented example is publishable.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.carbontoken
+credentials.json
+token.json
 
-# rebuildable training caches (regenerate via scripts/train_*.py)
-final_v2/artifacts/graph_work/
-final_v2/artifacts/valuation_work/
-final_v2/artifacts/demand_card.parquet
-final_v2/artifacts/timesfm_daily/dsf_liquid.parquet
-final_v2/artifacts/timesfm_daily/tfm_bundle.zip
-final_v2/artifacts/*/predictions.parquet
-final_v2/artifacts/*/portfolio.parquet
-final_v2/artifacts/*/research_registry.db
-final_v2/artifacts/sweep_gross_*/
-final_v2/artifacts/tfm_daily_sleeve_150/
-final_v2/artifacts/tfm_daily_squeeze_100/
-final_v2/artifacts/tfm_daily_tilt_100/
-fiam2025/
-
-# Private pod research state and local package builds.
-.pod_state/
-/.pod_state
-*.egg-info/
+# Rebuildable models, predictions, run outputs and environments.
+*.parquet
+*.pt
+*.pth
+*.onnx
+*.pkl
+*.pickle
+*.joblib
+*.tar.gz
+*.zip
+model_*.json
+output/
+output_500M/
+final_v2/artifacts/
 final_v2/build/
 final_v2/dist/
+final_v3/*_output/
+final_v3/*_rebuild/
+final_v3/*_baseline/
+final_v3/arcana_reproduction_*/
+final_v3/checkpoints/
+final_v3/discovery_cache/
+tools/carbon/out/
+tools/carbon/data/
+
+# Interpreter, package-manager, notebook and editor caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.venv/
+.uv-cache/
+.deps/
+*.egg-info/
+.DS_Store
+Thumbs.db

@@ -38,6 +38,6 @@ DISCOVERY = True
 USE_IBES = True
 # Saved Arcana-US / SPY stock betas constrain final formation sizing where
 # available; missing observations use the disclosed local beta fallback.
-ARCANA_BETA_FILE = FINAL.parent / 'arcana_upload' / 'sp500_beta_005' / 'arcana_spy_beta_previous_holdings.csv'
+ARCANA_BETA_FILE = DATA_DIR / 'arcana' / 'arcana_spy_beta_previous_holdings.csv'
 DISCOVERY_ROUNDS = 2
 CARBON_PURCHASE_BUDGET_USD = 0

@@ -1,0 +1,28 @@
+{
+  "checks": {
+    "sector_breadth_at_least_five": true,
+    "sector_net_at_most_20pct": true,
+    "sector_classification_complete": true,
+    "volatility_within_12pct": false,
+    "full_oos_months": true,
+    "daily_returns_available": true,
+    "daily_held_returns_complete": false,
+    "sp500_coverage_complete": true,
+    "full_oos_daily_sessions": true,
+    "daily_monthly_nav_reconciles": false
+  },
+  "volatility_within_12pct": false,
+  "annualised_realised_volatility_daily": null,
+  "volatility_ceiling": 0.12,
+  "volatility_basis": "daily net returns; sample std x sqrt(252)",
+  "neutrality_definition": "Hard sector net bounds +/-20% NAV and >=5 sectors; final formation-beta limits, when configured in optimizer settings, are checked separately after risk and turnover sizing. Exact dollar neutrality is not enforced. Formation beta and Arcana predicted beta use different estimators.",
+  "submission_ready": false,
+  "arcana_status": "deferred_by_user",
+  "pending": [
+    "Arcana HISTORICAL full-history upload, summary and ten labelled exhibits",
+    "Arcana >50 scenarios and attribution reconciliation",
+    "Earnings versus ex-earnings analysis with verified event coverage",
+    "Final deck, data screening and agent counterfactual review"
+  ],
+  "daily_accounting_note": "Daily returns charge monthly trading cost at first session and spread borrow cost across sessions; monthly reconciliation is mandatory before submission readiness."
+}

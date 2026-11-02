@@ -5,15 +5,16 @@ import pathlib
 import pandas as pd
 
 FINAL = pathlib.Path(__file__).resolve().parent
+REPO_ROOT = FINAL.parents[1]
 
 # Competition files go in DATA_DIR (see data/README.md).
-DATA_DIR = FINAL / "data"
+DATA_DIR = REPO_ROOT / "data"
 PANEL_FILE = "chars_final_with_names.parquet"
 FACTOR_LIST_FILE = "factor_char_list.csv"
 FILINGS_FILE = "8k_20150101_20260831_identified.parquet"
 
 # I/B/E/S, FRED, FINRA and SEC EDGAR in one parquet file (see its README).
-EXTERNAL_DIR = FINAL / "external_data"
+EXTERNAL_DIR = REPO_ROOT / "external_data"
 
 # Models, predictions, the book and the report. main.py clears it first
 # unless run with --reuse.
