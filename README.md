@@ -115,7 +115,7 @@ final fixed baseline. `--with-discovery` can call external research services.
 
 ## Publication
 
-The current source tree excludes source data, credentials, internal instructions,
-draft documents, vendor exports and local run artifacts. The original commit
-history is retained; older commits still contain some excluded material.
+The source tree and development history exclude private inputs and internal
+artifacts. Development commits, author identities, dates and messages are
+retained; filtering private files changes affected commit hashes.
 See [the publication policy](docs/PUBLISHING.md).

@@ -2,7 +2,9 @@
 
 This repository publishes the team's strategy source, final presentation,
 selected aggregate backtest evidence and an earlier implementation for comparison.
-The original project history is retained alongside the current cleaned source tree.
+The development history is retained with private files selectively removed
+from historical trees. Original author identities, dates, messages and commit
+relationships are preserved; affected commit hashes change.
 
 ## Excluded from the current tree
 
@@ -11,10 +13,12 @@ The original project history is retained alongside the current cleaned source tr
 - Editable/draft presentations, private review material and superseded portfolio exports.
 - Trained models, forecast checkpoints, build caches and local run workspaces.
 
-Ignore rules protect these local files from new commits. Earlier commits still
-contain personal documents and vendor exports; the current file exclusions do
-not remove historical objects. Removing those historical files while preserving
-the development history would require a separate, selective history rewrite.
+Ignore rules protect these local files from new commits. Commits that only
+changed excluded files are retained even when they become empty. GitHub's
+contributors graph excludes empty and merge commits, so displayed contribution
+counts and line-change totals can differ after filtering even though the Git
+author records remain. Do not merge unfiltered private history back into the
+published branches.
 
 ## Evidence and checks
 
