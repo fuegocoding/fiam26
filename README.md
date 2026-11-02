@@ -76,7 +76,7 @@ admissions; that is a separate experiment, described in
 | [final_v2/](final_v2/README.md) | Earlier research platform and shared Carbon Arc MCP/OAuth transport; entrypoint `run.py` |
 | [docs/](docs/README.md) | Strategy, process, data requirements, reproduction, and presentation |
 | [results/final_strategy/](results/final_strategy/README.md) | Matching aggregate metrics, monthly returns, charts, and saved checks |
-| [archive/](archive/README.md) | Earlier implementation, regression tests, decks, and research notes |
+| [archive/](archive/README.md) | Earlier implementation and regression tests |
 | [tools/carbon/](tools/README.md) | Historical Carbon Arc exploration and acquisition helpers |
 | [data/](data/README.md), [external_data/](external_data/README.md) | Input specifications; source data are excluded |
 
@@ -115,11 +115,7 @@ final fixed baseline. `--with-discovery` can call external research services.
 
 ## Publication
 
-Personal documents, source data, vendor responses, credentials, models, and
-local caches are excluded from the public snapshot. They remain in ignored
-local locations where applicable.
-
-**Existing Git history still contains personal documents and vendor extracts.**
-Use a fresh-history source export for publication, or sanitize the history
-before making the existing repository public. [Publishing instructions](docs/PUBLISHING.md)
-describe the prepared snapshot and the checks performed.
+The current source tree excludes source data, credentials, internal instructions,
+draft documents, vendor exports and local run artifacts. The original commit
+history is retained; older commits still contain some excluded material.
+See [the publication policy](docs/PUBLISHING.md).

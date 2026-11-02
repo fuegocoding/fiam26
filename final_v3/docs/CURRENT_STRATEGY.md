@@ -26,6 +26,3 @@ daily/monthly NAV reconciliation. It cannot certify the 12% daily volatility
 ceiling. Historical security mappings and the point-in-time availability of
 exported Arcana betas also require verification. See
 [the published saved checks](../../results/final_strategy/README.md).
-
-[The original replay notes](../../archive/research/arcana_hybrid_replay_notes.md)
-are preserved as historical context, including their original paths.

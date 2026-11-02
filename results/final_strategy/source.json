@@ -10,8 +10,6 @@
     "pages": 22
   },
   "original_report_workspace": "final_v3/arcana_beta_hybrid_rebuild/report",
-  "local_preserved_workspace": "local/artifacts/final_v3/arcana_beta_hybrid_rebuild/report",
-  "source_commit_before_cleanup": "f32cdc8662ef1ed2cdb4f5a63b3e063dc43ea8ff",
   "replay_created_utc": "2026-10-29T03:06:27.865697+00:00",
   "period": {
     "start": "2021-01",
@@ -69,10 +67,6 @@
       "bytes": 1169,
       "sha256": "320064d5c83ae699f602e019efca37247dcf4ea800c163817c3e52efdadf68df"
     },
-    "contributors.csv": {
-      "bytes": 3016,
-      "sha256": "320b54042ee283b5ceeb29a858806998168ee041f0310450ba42ad3c3b93f36b"
-    },
     "daily_monthly_reconciliation.csv": {
       "bytes": 5068,
       "sha256": "5f3c4dd3cf276a0466144e08556d18e1f107750ce40a1033afa7571c085f0e30"
@@ -96,10 +90,6 @@
     "standardised_performance.csv": {
       "bytes": 2563,
       "sha256": "22a2a45bcbcc01838e17168f77de3d65dee8328d846560c89f4615b21d1ccf60"
-    },
-    "top_average_holdings.csv": {
-      "bytes": 2736,
-      "sha256": "af66bb21ef1176c784894d789315403bb6b8ff62c37056c7db7b051632e3360b"
     }
   }
 }

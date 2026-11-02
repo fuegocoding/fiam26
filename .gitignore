@@ -73,3 +73,14 @@ __pycache__/
 *.egg-info/
 .DS_Store
 Thumbs.db
+
+# Internal instructions, draft documents and nonpublic research exports.
+AGENTS.md
+/archive/research/
+/archive/presentations/
+/archive/initial_strategy/submission/
+/archive/initial_strategy/FIAM_v3_Arcana_History_with_AUM.csv
+/docs/presentation/*.pptx
+/docs/presentation/arcana/
+/results/final_strategy/contributors.csv
+/results/final_strategy/top_average_holdings.csv

@@ -12,10 +12,9 @@ and the earlier implementations that led to it.
 | [Research process](research-process.md) | Hypotheses, walk-forward testing and agent experiments |
 | [Data guide](data.md) | Required inputs and what is excluded |
 | [Reproduction](reproducibility.md) | Training, frozen replay and verification scope |
-| [Publishing](PUBLISHING.md) | The clean source export and existing-history caveat |
+| [Publishing](PUBLISHING.md) | What the repository publishes and excludes |
 
-The [editable presentation](presentation/presentation_v5.pptx) is retained as
-a source deck; the final PDF is authoritative for the reported presentation.
-The [Arcana images](presentation/arcana/) preserve the supplied supporting
-screenshots. Their accounting and historical scope differ from the local net
-backtest, as described in the results guide.
+The final PDF is authoritative for the reported presentation. Its Arcana
+analytics use different accounting from the local net backtest, as described
+in the results guide. Editable drafts and original vendor screenshots are
+not distributed separately.

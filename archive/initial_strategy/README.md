@@ -17,6 +17,5 @@ python -m pytest archive/initial_strategy/tests
 ```
 
 The regression suite needs its research dependencies plus pytest. It checks
-this archived implementation, not the final hybrid portfolio. The saved
-`submission/` CSVs and `FIAM_v3_Arcana_History_with_AUM.csv` are historical
-exports; their filenames do not identify the final presentation's book.
+this archived implementation, not the final hybrid portfolio. Superseded
+submission CSVs and portfolio exports are excluded from the public snapshot.

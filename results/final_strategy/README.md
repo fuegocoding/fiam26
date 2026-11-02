@@ -16,7 +16,6 @@ The window is January 2021-August 2026.
 | [monthly_detail.csv](monthly_detail.csv) | Aggregate monthly P&L, costs, exposures and turnover |
 | [calendar_year_turnover.csv](calendar_year_turnover.csv) | One-way annual budget accounting, with initial funding separated |
 | [standardised_performance.csv](standardised_performance.csv) | Presentation-oriented measures and units |
-| [contributors.csv](contributors.csv), [top_average_holdings.csv](top_average_holdings.csv) | Team portfolio attribution and average holdings |
 | [compliance.json](compliance.json), [part2_status.json](part2_status.json) | Original saved runtime checks |
 | [daily_monthly_reconciliation.csv](daily_monthly_reconciliation.csv) | Aggregate evidence of the daily/monthly NAV disagreement |
 | [charts/](charts/) | Saved cumulative, drawdown, distribution, rolling IR and contributor charts |
@@ -33,7 +32,7 @@ NAV does not reconcile with the monthly ledger. Some pending-task strings
 describe the run's original reporting state, before the final presentation.
 They are not a statement that the hackathon is still ongoing.
 
-Raw stock-return panels, per-security prediction caches, model weights,
+Raw stock-return panels, per-security label histories, prediction caches, model weights,
 source beta exports and original machine-specific run receipts are excluded.
 This directory supports aggregate verification; it is not a complete replay
 checkpoint or a fresh independent performance audit.

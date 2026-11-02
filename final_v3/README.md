@@ -55,5 +55,5 @@ The documents in `docs/` retain detailed implementation and experiment history.
 [Current strategy](docs/CURRENT_STRATEGY.md), [checkpoints](docs/CHECKPOINTS.md),
 [Part 2 accounting](docs/PART2.md) and the [input map](docs/OFFICIAL_DATA_MAP.md)
 are the technical references. Older rerun reports describe their named
-experiments, not the final presentation. The earlier README is preserved in
-[the research archive](../archive/research/final_v3_historical_readme.md).
+experiments, not the final presentation. Internal research notes and draft
+reports are excluded from the public snapshot.

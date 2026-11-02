@@ -52,11 +52,9 @@ vendor payloads, manifests and acquisition responses remain local. The
 [legacy container guide](../external_data/README.md) documents the earlier
 I/B/E/S, FINRA, EDGAR and FRED tables and their build process.
 
-During cleanup, full replay directories/checkpoints were preserved under
-`local/artifacts/final_v3/` and earlier upload packages under
-`local/archive/arcana_upload/`. Personal CVs and feedback/reference PDFs are
-under `local/private/`. All of `local/` is ignored and excluded from the
-public export. Credentials were preserved in their existing ignored locations.
+Full replay checkpoints, earlier upload packages and private research
+records are held separately. Credentials remain in ignored local locations;
+none are required to inspect the published results.
 
 ## Alternate experiments
 
